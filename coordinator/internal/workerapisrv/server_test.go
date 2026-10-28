@@ -291,6 +291,30 @@ func TestServeMember(t *testing.T) {
 	}
 }
 
+// A claim through a member's listener of an attempt placed on another
+// member is refused, 401, before anything else is answered of it: before
+// the answer for a run of a plan the server doesn't read, which the
+// attempt's own member gets, and before its body is read.
+func TestServeMemberFirst(t *testing.T) {
+	r := newRig(t, rigOptions{configure: func(s *workerapisrv.Server) { workerapisrv.SetReads(s, 0) }})
+	member := newClient(t, serveMember(t, r.server, "ssh-aaaa"))
+	_, otherToken := r.newAttempt(r.newRun(nil), "build", placed{memberKey: "ssh-bbbb"})
+	_, token := r.newAttempt(r.newRun(nil), "build", placed{memberKey: "ssh-aaaa"})
+	for _, tc := range []struct {
+		token string
+		body  []byte
+		want  int
+	}{
+		{otherToken, claimRequest(t, coordtest.Credential(t), conformanceDigest), http.StatusUnauthorized},
+		{otherToken, []byte("not a claim"), http.StatusUnauthorized},
+		{token, claimRequest(t, coordtest.Credential(t), conformanceDigest), http.StatusServiceUnavailable},
+	} {
+		if status, body, err := member.send(http.MethodPost, workerapi.PathClaim, tc.body, tc.token); err != nil || status != tc.want {
+			t.Errorf("a claim was answered %d, %v: %s; want %d", status, err, body, tc.want)
+		}
+	}
+}
+
 // A member's connection that takes no deadlines, as an SSH channel's
 // doesn't, is held to the time a request's headers have to arrive in all
 // the same: one that sends them slowly is closed.

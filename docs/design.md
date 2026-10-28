@@ -2285,7 +2285,14 @@ a workflow (`uses_not_supported`).
   private, as a root's is, since what holds it is, which one elsewhere
   wouldn't be. The step fails when it runs, as its child would be created
   (`child_dir_outside`), never as the root is created, since an `if:` may
-  skip it; none of the 270 known calls sets `working-directory:`. A step's
+  skip it; none of the 270 known calls sets `working-directory:`. A
+  child's directory is on the coordinator's machine, under its caller's
+  run directory there, even where the step runs on a host, as format 1
+  prepares a subworkflow on the machine the run started on, resolving
+  the step's `working-directory:` there before it maps the run's
+  directory to the host's: a working directory a worker on a host gives
+  inside its run's directory there, as one `PW_JOB_DIR` gives, is the same
+  place in the run's directory on the coordinator's machine. A step's
   `clean-on-retry:` cleans it before the step's next try (below).
 - **Its variables** are its root's: the root's Start reads the variables
   every workflow in the tree reads (`Run.TreeVariables`, which the root's
@@ -2304,7 +2311,12 @@ a workflow (`uses_not_supported`).
   group is built: the child runs in the group its caller's attempt was
   placed in, or its caller's run's default group where that placement is
   private, which no caller format 1 runs has; its caller's member isn't
-  built yet, and its jobs are placed on any member of the group.
+  built yet, and its jobs are placed on any member of the group. A caller
+  on the host its format 1 `ssh:` names is in no group a name finds, so
+  its child runs in its run's default group: format 1 runs a
+  subworkflow's jobs where their own `ssh:` says, or else on the machine
+  the run started on, never on its caller's host because the caller ran
+  there.
 - **Its end is its step's**, as format 1 maps it, from the child's jobs
   and its stop, rather than from its outcome:
   - a child that was cancelled, or whose caller's step stopped it, ends

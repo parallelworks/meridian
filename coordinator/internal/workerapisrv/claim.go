@@ -91,6 +91,12 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, from peer) {
 	case from.member == "" && !s.peers.Allows(ctx, from.uid, run):
 		writeStatus(w, http.StatusUnauthorized)
 		return
+	case a.Placed() && !s.allows(ctx, from, run, a):
+		// Whom the claim came from is held to the member the attempt was
+		// placed on, once that is recorded, before anything else is
+		// answered of it, as below for one placed meanwhile.
+		writeStatus(w, http.StatusUnauthorized)
+		return
 	case run.PlanVersion > s.reads, a.APIVersion > s.speaks:
 		// A run of a plan this replica doesn't read, or an attempt claimed
 		// at a version of the API it doesn't speak, is another replica's,
