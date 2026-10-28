@@ -438,6 +438,22 @@ the SHA-256 hash of its content: 218 files.
   update-session steps name one of their run's own sessions, as
   `${{ sessions.<name> }}`. It is decided, and built with update-session
   ([Built-in actions](#built-in-actions)).
+- **`vars.*` and `org.*` read every variable of their context**, as
+  `inputs.*` reads every input's value: a list of the variables' values, in
+  the order of their names, with the rest of the path read from each, as in
+  `org.*.region`. ACTIVATE read a variable named `*`, which no variable's
+  name can be, and so gave `""` whatever the variables were. A secret
+  variable read so is one of the run's secrets, as one read by its name
+  is, and what an expression makes of it is masked
+  ([Variables and secrets](#variables-and-secrets)). ACTIVATE takes the
+  same fix by reading each variable for a `*`. It masks the text of every
+  secret variable the run has, however it was read, so one read so is
+  masked as one read by its name, and its form leaves `vars.*` to its
+  backend, which has the secret variables' values, when the user has one.
+  None of the 10,080 expressions of the 218 known workflows reads `vars.*`
+  or `org.*`, nor has a `*` in a reference to any context: 19, in 6
+  workflows, read an organization variable by its name, and none reads
+  `vars`.
 
 ## Phases
 
