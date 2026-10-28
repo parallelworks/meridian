@@ -505,7 +505,9 @@ func (c *client) events(ctx context.Context, events []workerapi.Event) (workerap
 }
 
 // upload uploads data, a log's bytes from offset, ending the log if end is
-// set.
+// set. It tries once: a request that fails for a while, as while the
+// coordinator is away, is a *temporaryError, and the spool tries again
+// with what the log holds then (spool.send).
 func (c *client) upload(ctx context.Context, key logKey, offset int64, data []byte, end bool) (workerapi.LogAck, error) {
 	var ack workerapi.LogAck
 	q := url.Values{
@@ -519,7 +521,7 @@ func (c *client) upload(ctx context.Context, key logKey, offset int64, data []by
 	if end {
 		q.Set(workerapi.QueryEnd, "true")
 	}
-	err := c.do(ctx, call{method: http.MethodPost, path: workerapi.PathLogs, query: q, body: data, octets: true, timeout: requestTimeout}, &ack)
+	err := c.do(ctx, call{method: http.MethodPost, path: workerapi.PathLogs, query: q, body: data, octets: true, timeout: requestTimeout, once: true}, &ack)
 	return ack, err
 }
 

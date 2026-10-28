@@ -429,25 +429,22 @@ func TestHeartbeatStalls(t *testing.T) {
 // TestFenceKeepsSending checks that a job that fences itself goes on
 // sending what it has until its lease lapses: its log reaches a
 // coordinator that comes back between the job stopping and the lease
-// lapsing.
+// lapsing. The coordinator answers no heartbeat, so the lease runs from
+// the claim: the worker stops the job 1.8 s after it, and the lease lapses
+// at 3 s. It answers an upload of a log only once the worker offers the
+// log's end, which the step's has only once the job has stopped: so it is
+// back once the job has stopped, whenever a loaded host gets there, and
+// the worker, which tries again with what it has then, sends the bytes it
+// had before the stop and the end in one upload.
 func TestFenceKeepsSending(t *testing.T) {
 	t.Parallel()
 	f := workerapitest.NewFake(t, newJob(command("echo hello; sleep 30")))
 	f.Claim.SelfFencing, f.Claim.LeaseSeconds, f.Claim.HeartbeatSeconds = true, 3, 1
-	var cutOff atomic.Int64
-	f.OnEvent = func(e workerapi.Event) { cutOff.CompareAndSwap(0, time.Now().UnixNano()) }
 	f.Fault = func(r *http.Request) workerapitest.Fault {
-		c := cutOff.Load()
-		if c == 0 {
-			return workerapitest.Answer
-		}
-		since := time.Since(time.Unix(0, c))
 		switch {
 		case r.URL.Path == workerapi.PathHeartbeat:
 			return workerapitest.Unavailable
-		case r.URL.Path == workerapi.PathLogs && since < 2200*time.Millisecond:
-			// Back after the job has stopped, at 1.8 s, and before the
-			// lease lapses, at 3 s.
+		case r.URL.Path == workerapi.PathLogs && r.URL.Query().Get(workerapi.QueryEnd) == "":
 			return workerapitest.Unavailable
 		}
 		return workerapitest.Answer

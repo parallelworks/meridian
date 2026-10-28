@@ -4008,12 +4008,16 @@ own runs.
 - **While the coordinator is unreachable**, a worker keeps running its steps,
   spools logs to disk up to a limit, keeps events in memory, and delivers
   them in order when it reconnects, unless its job fences itself
-  ([Leases and fencing](#leases-and-fencing)). Past the limit, or once the
-  disk is full, a log keeps nothing more until there is room, and the
-  step's event says how much it lost. A log's file holds what the
-  coordinator hasn't stored, and of what it has, less than the limit, and
-  at most four times as much, or 16 KiB, but while the worker copies what
-  is unsent to a new file, when it holds both.
+  ([Leases and fencing](#leases-and-fencing)). Each try of a log's upload
+  sends what the log has by then, and its end once it has ended, not what
+  the first try had: so once the coordinator is back, one upload sends
+  what the worker has, as a job that fences itself needs before its lease
+  lapses, rather than the rest, and the end, a round trip later. Past the
+  limit, or once the disk is full, a log keeps nothing more until there
+  is room, and the step's event says how much it lost. A log's file holds
+  what the coordinator hasn't stored, and of what it has, less than the
+  limit, and at most four times as much, or 16 KiB, but while the worker
+  copies what is unsent to a new file, when it holds both.
 - **What the worker keeps** of its own, its spooled logs, its steps' scripts
   and `$OUTPUTS` files, is in a directory only its user can use, which it
   holds open and makes every file in through that, whose name starts with a
