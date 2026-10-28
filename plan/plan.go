@@ -27,8 +27,9 @@ import (
 // A plan is written at the lowest version that holds what it uses
 // (MinVersion), so that a release that reads only an earlier one can run
 // it. Version 2 adds what child runs need: Plan.Calls, Run.Parent,
-// Run.TreeVariables, Source.Remote and Record.Inherited; and checkouts'
-// pins: Plan.Checkouts and Step.Checkout.
+// Run.TreeVariables, Source.Remote and Record.Inherited; checkouts' pins:
+// Plan.Checkouts and Step.Checkout; and what step runs need:
+// Record.StepRun.
 const Version = 2
 
 // modulePath is Meridian's module.

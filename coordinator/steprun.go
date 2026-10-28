@@ -1,11 +1,12 @@
 package coordinator
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -106,13 +107,16 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	if j == nil || !j.StepElsewhere(step) {
 		return "", nil, fmt.Errorf("%w: run %s's job %q's step %d", errNotStepRun, cl.run.ID, name, req.Step)
 	}
-	target, private, diags, err := c.stepTarget(ctx, cl.run, cl.attempt.Job, req.Step, req.Try)
+	if err := c.triedBefore(ctx, a.ID, req.Step, req.Try); err != nil {
+		return "", nil, err
+	}
+	target, onHost, private, diags, err := c.stepTarget(ctx, cl.run, cl.attempt.Job, req.Step, req.Try)
 	switch {
 	case err != nil:
 		return "", nil, err
 	case diags.HasErrors():
 		return "", diags, nil
-	case target == nil && j.SSH.IsZero():
+	case target == nil && !onHost:
 		return "", nil, fmt.Errorf("%w: a step whose ssh: names no host runs in its job, which has none", errNotStepRun)
 	case !sameTarget(req.SSH, target):
 		return "", nil, fmt.Errorf("%w: the host its worker gave isn't the one its ssh: names", errNotStepRun)
@@ -136,24 +140,62 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	return id, nil, err
 }
 
+// triedBefore checks that the try try of the step step, of the attempt
+// attempt, follows the one before it, which had a step run that has
+// ended, and not in success, as tries come one after another: so that a
+// worker can't choose a try, and with it a host, where the step's ssh:
+// reads its retry counter, whatever its retry: says.
+func (c *Coordinator) triedBefore(ctx context.Context, attempt string, step, try int) error {
+	if try == 0 {
+		return nil
+	}
+	return c.store.View(ctx, func(tx *store.Tx) error {
+		id, err := tx.Child(attempt, step, try-1)
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("%w: try %d without a step run of try %d", errNotStepRun, try, try-1)
+		}
+		if err != nil {
+			return err
+		}
+		r, err := tx.Run(id)
+		switch {
+		case err != nil:
+			return err
+		case r.State != store.RunEnded || r.Outcome == plan.OutcomeSuccess:
+			return fmt.Errorf("%w: try %d while the step run of try %d hasn't failed", errNotStepRun, try, try-1)
+		}
+		return nil
+	})
+}
+
 // stepTarget evaluates, as the coordinator, where the ssh: of the step at
 // index of the job key, of run, puts its try try: with what Ready readies
-// the job with, as a claim of it reads it (readyInputOf).
-func (c *Coordinator) stepTarget(ctx context.Context, run *store.Run, key string, index, try int) (*plan.Inline, bool, problems.Diagnostics, error) {
+// the job with, as a claim of it reads it (readyInputOf). It reports
+// whether the job, as Ready readies it, runs on a host, too.
+func (c *Coordinator) stepTarget(ctx context.Context, run *store.Run, key string, index, try int) (*plan.Inline, bool, bool, problems.Diagnostics, error) {
 	p, from, in, err := c.readyInputOf(ctx, run, key)
 	if err != nil {
-		return nil, false, nil, err
+		return nil, false, false, nil, err
 	}
-	return p.StepTarget(ctx, from.job.Name, index, try, in)
+	res, _, err := p.Ready(ctx, from.job.Name, in)
+	if err != nil {
+		return nil, false, false, nil, err
+	}
+	onHost := res != nil && res.Job != nil && res.Job.Target.Inline != nil
+	target, private, diags, err := p.StepTarget(ctx, from.job.Name, index, try, in)
+	return target, onHost, private, diags, err
 }
 
 // sameTarget reports whether a, the host a step's worker says its ssh:
-// gave the try, is b, the coordinator's: both none, or the same ssh:.
+// gave the try, is b, the coordinator's: both none, or the same ssh:, as
+// their encodings, which leave out how each decoded its numbers.
 func sameTarget(a, b *plan.Inline) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.Name == b.Name && a.Backend == b.Backend && a.Isolation == b.Isolation && reflect.DeepEqual(a.SSH.Get(), b.SSH.Get())
+	ea, err1 := jsonv2.Marshal(a, jsonv2.Deterministic(true))
+	eb, err2 := jsonv2.Marshal(b, jsonv2.Deterministic(true))
+	return err1 == nil && err2 == nil && bytes.Equal(ea, eb)
 }
 
 // insertStepRun stores, in tx, the step run id, of the job named name,

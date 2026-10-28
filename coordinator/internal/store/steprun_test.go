@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
@@ -83,6 +84,25 @@ func TestStepRun(t *testing.T) {
 		return err
 	}); !errors.Is(err, ErrMalformed) {
 		t.Errorf("a step run whose caller's plan isn't the one it names reads as %v", err)
+	}
+
+	// A caller that is gone, which the store's foreign keys keep from
+	// happening, reads as not found.
+	conn, err := s.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"PRAGMA foreign_keys = OFF", "UPDATE meridian_runs SET parent_run = 999999 WHERE id = " + strconv.FormatInt(mustNumber(t, id), 10), "PRAGMA foreign_keys = ON"} {
+		if _, err := conn.ExecContext(t.Context(), q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	_ = conn.Close()
+	if err := s.View(t.Context(), func(tx *Tx) error {
+		_, err := tx.Run(id)
+		return err
+	}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a step run whose caller is gone reads as %v", err)
 	}
 
 	// Without a link, there is no caller to name the plan of.

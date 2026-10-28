@@ -43,6 +43,16 @@ const stepRunRoot = `jobs:
         with: {jobs: [hosted]}
       - run: echo unknowable
         ssh: {remoteHost: "${{ env.HOST }}"}
+      - run: echo retried
+        retry: {max-retries: 2}
+        ssh: {remoteHost: "farm${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}"}
+      - run: echo once
+        ssh: {remoteHost: "farm${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}"}
+  blank:
+    ssh: {remoteHost: ""}
+    steps:
+      - run: echo null
+        ssh: null
   hosted:
     ssh: {remoteHost: farm}
     steps:
@@ -204,7 +214,7 @@ func TestStepRun(t *testing.T) {
 	}
 
 	// It reads its own step of the plan, and no other.
-	for i, ok := range []bool{false, false, true, false, false, false, false, false} {
+	for i, ok := range []bool{false, false, true, false, false, false, false, false, false, false} {
 		if _, step, err := c.planStep(run, a, i); err != nil || (step != nil) != ok {
 			t.Errorf("the step run's step %d is %+v, %v", i, step, err)
 		}
@@ -220,6 +230,33 @@ func TestStepRun(t *testing.T) {
 	// version 3 too, as the plan says it, its ssh: null among them.
 	if v, err := (claimReadier{c}).Needs(t.Context(), root, r.hosted); err != nil || v != workerapi.Version3 {
 		t.Errorf("an attempt of a job with a step whose ssh: is null needs version %d, %v", v, err)
+	}
+}
+
+// TestPlanCacheStepRun checks that a step run shares its caller's decoded
+// plan, which the cache keeps once.
+func TestPlanCacheStepRun(t *testing.T) {
+	created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(oneJob), nil, compile.Options{Source: plan.Source{Location: "workflow.yaml"}})
+	if err != nil || diags.HasErrors() {
+		t.Fatal(diags, err)
+	}
+	encoded, err := plan.Encode(created.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := plan.Digest(created.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := newPlanCache(4, 1<<20)
+	caller := &store.Run{ID: "1", PlanVersion: created.Plan.Version, PlanDigest: digest, Plan: encoded}
+	stepRun := &store.Run{ID: "2", StepRun: true, Parent: &store.Link{Run: "1"}, PlanVersion: created.Plan.Version, PlanDigest: digest, Plan: encoded}
+	p, err := cache.get(caller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q, err := cache.get(stepRun); err != nil || q != p || cache.runs.Len() != 1 {
+		t.Errorf("the step run's plan is %p, %v, its caller's %p, of %d kept", q, err, p, cache.runs.Len())
 	}
 }
 
@@ -275,6 +312,26 @@ func TestStepRunRefuses(t *testing.T) {
 		if id, err := r.ask(t, r.build, req); !errors.Is(err, errNotStepRun) {
 			t.Errorf("%s: %q, %v", name, id, err)
 		}
+	}
+	// A step's retry counter is the try's, for a step with a retry: alone,
+	// as its worker defines it; and its tries come in order, each after
+	// the one before has failed.
+	retried, err := r.ask(t, r.build, stepRunRequest{Step: 8, SSH: host(map[string]any{"remoteHost": "farm0"})})
+	if err != nil {
+		t.Errorf("a retried step's first try on farm0: %v", err)
+	}
+	if _, err := r.ask(t, r.build, stepRunRequest{Step: 9, SSH: farm}); err != nil {
+		t.Errorf("a step without a retry: on farm, its counter unset: %v", err)
+	}
+	if _, err := r.ask(t, r.build, stepRunRequest{Step: 8, Try: 2, SSH: host(map[string]any{"remoteHost": "farm2"})}); !errors.Is(err, errNotStepRun) {
+		t.Errorf("a try whose try before has no step run: %v", err)
+	}
+	if _, err := r.ask(t, r.build, stepRunRequest{Step: 8, Try: 1, SSH: host(map[string]any{"remoteHost": "farm1"})}); !errors.Is(err, errNotStepRun) || retried == "" {
+		t.Errorf("a try while the try before runs: %v", err)
+	}
+	// A null ssh: in a job whose ssh: names no host runs in its job.
+	if _, err := r.ask(t, r.placed(t, r.root, "blank"), stepRunRequest{Step: 0}); !errors.Is(err, errNotStepRun) {
+		t.Errorf("a null ssh: in a job on no host: %v", err)
 	}
 	// One whose host only the job's worker knows is a problem of the
 	// step's, which says what it reads.

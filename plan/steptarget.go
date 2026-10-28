@@ -20,20 +20,28 @@ var stepTargetContexts = map[string]bool{
 
 // stepTargetEnv is the variable of env a step's ssh: can read for the
 // coordinator to evaluate it: the try's retry counter, as format 1's
-// failover between hosts reads it.
+// failover between hosts reads it, which a step has only with a retry:.
 const stepTargetEnv = "PW_WORKFLOW_STEP_CURRENT_RETRY"
 
 // StepSSHReadsWorker returns, for a step of the job whose ssh: reads what
 // only the job's worker knows, which the coordinator can't evaluate it
 // with, the first such thing it reads, as context.path: the job's steps,
-// env but the retry counter, or the job's own outputs through needs; or
-// "" for one that reads none of them.
+// env but the retry counter, the job's own outputs through needs, or a job
+// of needs that only evaluating it names, which can be the job's own; and
+// job.status for one that calls success(), failure(), cancelled() or
+// always(), which read the job's status at the try; or "" for one that
+// reads none of them.
 func (j *Job) StepSSHReadsWorker(s *Step) string {
 	for _, e := range s.SSH.Exprs() {
+		if used, _ := e.StatusChecks(); used {
+			return "job.status"
+		}
 		for _, r := range e.Refs() {
 			switch {
 			case r.Context == "env" && len(r.Path) > 0 && r.Path[0] == stepTargetEnv:
-			case r.Context == "needs" && len(r.Path) > 0 && r.Path[0] == j.Name:
+			case r.Context == "needs" && (len(r.Path) == 0 || r.Path[0] == "[index]" || r.Path[0] == "*"):
+				return "needs[]"
+			case r.Context == "needs" && r.Path[0] == j.Name:
 				return "needs." + j.Name
 			case !stepTargetContexts[r.Context]:
 				return strings.Join(append([]string{r.Context}, r.Path...), ".")
@@ -69,7 +77,11 @@ func (p *Plan) StepTarget(ctx context.Context, job string, index, try int, in Re
 		return nil, false, nil, err
 	}
 	status, _ := in.status()
-	c := Contexts{Run: in.Run, Needs: in.Needs, Status: status, WorkerEnv: map[string]string{stepTargetEnv: strconv.Itoa(try)}}
+	c := Contexts{Run: in.Run, Needs: in.Needs, Status: status, WorkerEnv: map[string]string{}}
+	if s.Retry != nil {
+		// As the worker defines it, for a step with a retry: alone.
+		c.WorkerEnv[stepTargetEnv] = strconv.Itoa(try)
+	}
 	if i := in.Instance; i != nil {
 		c.Matrix = i.Matrix
 		if i.Private || i.Secret {

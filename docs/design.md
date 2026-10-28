@@ -2595,9 +2595,12 @@ built yet: such a step fails (`step_ssh_not_supported`), as one whose
   caller's worker's evaluation must agree, or the step run isn't made. So
   a host never chooses where the coordinator connects with the user's
   keys, and a host that a variable or a password names is placed
-  privately. A step whose `ssh:` reads what only the job's worker knows,
-  as its earlier steps' outputs, its own job's outputs through `needs`,
-  or `env` but the retry counter, fails
+  privately. Its tries come in order, each once the one before has
+  failed, so the retry counter is the try's. A step whose `ssh:` reads
+  what only the job's worker knows, as its earlier steps' outputs, its
+  own job's outputs through `needs`, a job of `needs` that only
+  evaluating it names, the job's status, or `env` but the retry counter,
+  which it has only with a `retry:`, fails
   (`step_ssh_reads_worker`); of the known workflows, only the 8 steps
   that reach a compute node do, which read their own job's steps'
   outputs, after actions only a platform provides.
@@ -2655,7 +2658,9 @@ Where format 1 does otherwise, none of it in the known workflows:
   host, where format 1 connects to the host first, and fails the try if
   it can't.
 - **A step whose `ssh:` reads what only its job's worker knows** fails
-  (`step_ssh_reads_worker`), where format 1 runs it there.
+  (`step_ssh_reads_worker`), where format 1 runs it there. The 8 known
+  steps that do never get that far: they come after actions only a
+  platform provides.
 - **A step whose `ssh:` is null, or gives no `remoteHost`, in a job on a
   host** runs in the run's default group, where format 1 runs it where
   the job would run without its `ssh:`, its `runs-on:` among them, which
