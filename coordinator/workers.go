@@ -38,14 +38,15 @@ func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Log
 
 // wakeWorkerJob wakes, in tx, the supervisor of the run's job, once the
 // worker API stores a change to its attempt that the supervisor acts on
-// (workerapisrv.Options.Wake), in the transaction that stores it, and
-// returns what wakes it again once that commits, if hopper runs it.
-func (c *Coordinator) wakeWorkerJob(ctx context.Context, tx *store.Tx, run, job string) (func(), error) {
+// (workerapisrv.Options.Wake), in the transaction that stores it, and has
+// it woken again once that commits, if hopper runs it (wakeAgainAfter).
+func (c *Coordinator) wakeWorkerJob(ctx context.Context, tx *store.Tx, run, job string) error {
 	w, err := c.wakeJobTx(ctx, tx, run, job)
-	if w == nil || err != nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return func() { c.wakeAgain(context.WithoutCancel(ctx), w) }, nil
+	c.wakeAgainAfter(tx, []*waking{w})
+	return nil
 }
 
 // claimReadier is the coordinator's workerapisrv.Readier: it readies the

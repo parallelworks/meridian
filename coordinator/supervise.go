@@ -324,9 +324,7 @@ func (c *Coordinator) endJob(ctx context.Context, runID, key string, end store.J
 // job's supervisor, when it has something to do (parentActs); and the
 // marker of a need on any instance of it.
 func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end store.JobEnd, before, done func(context.Context, *store.Tx) error) error {
-	var woken []*waking
-	err := c.store.Tx(ctx, func(tx *store.Tx) error {
-		woken = woken[:0]
+	return c.store.Tx(ctx, func(tx *store.Tx) error {
 		if before != nil {
 			if err := before(ctx, tx); err != nil {
 				return err
@@ -363,18 +361,13 @@ func (c *Coordinator) endJobWith(ctx context.Context, runID, key string, end sto
 				if err != nil {
 					return err
 				}
-				woken = append(woken, w)
+				c.wakeAgainAfter(tx, []*waking{w})
 			}
 		}
 		w, err := c.wakeAnyTx(ctx, tx, runID, name)
-		woken = append(woken, w)
+		c.wakeAgainAfter(tx, []*waking{w})
 		return err
 	})
-	if err == nil {
-		// The hopper job done completed is over, and its context with it.
-		c.wakeAgain(context.WithoutCancel(ctx), woken...)
-	}
-	return err
 }
 
 // parentActs reports, in tx, whether the supervisor of the run's matrix

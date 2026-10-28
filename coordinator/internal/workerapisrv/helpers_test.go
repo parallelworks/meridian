@@ -459,12 +459,13 @@ func (r *rig) serve(opts rigOptions) *workerapisrv.Server {
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Actions: r.actions, Children: r.children,
 		Peers: opts.peers, MaxConnections: opts.maxConns,
-		Wake: func(_ context.Context, _ *store.Tx, run, job string) (func(), error) {
-			return func() {
+		Wake: func(_ context.Context, tx *store.Tx, run, job string) error {
+			tx.AfterCommit(func(context.Context) {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				r.woken = append(r.woken, run+"/"+job)
-			}, nil
+			})
+			return nil
 		},
 	})
 	if err != nil {

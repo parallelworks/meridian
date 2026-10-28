@@ -160,22 +160,16 @@ func (c *Coordinator) cancelJobs(ctx context.Context, call *workerapisrv.ActionC
 		// A step of a run of the tree's, which names the root's jobs.
 		by = call.Run.ID + ":" + by
 	}
-	var woken []*waking
-	answer, err := call.Commit(ctx, step, func(tx *store.Tx) (workerapi.ActionAnswer, error) {
-		woken = woken[:0]
+	return call.Commit(ctx, step, func(tx *store.Tx) (workerapi.ActionAnswer, error) {
 		for _, key := range targets {
 			ws, err := c.cancelJobTx(ctx, tx, run.ID, key, by)
 			if err != nil {
 				return workerapi.ActionAnswer{}, err
 			}
-			woken = append(woken, ws...)
+			c.wakeAgainAfter(tx, ws)
 		}
 		return workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess, Diagnostics: warned}, nil
 	})
-	if err == nil {
-		c.wakeAgain(context.WithoutCancel(ctx), woken...)
-	}
-	return answer, err
 }
 
 // targetRun returns the run whose jobs the cancel-jobs step of a step of

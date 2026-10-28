@@ -201,16 +201,10 @@ func TestChildStoppedWithItsLostAttempt(t *testing.T) {
 	if err := c.lose(t.Context(), a, backend.Status{}, nil); err != nil && !errors.Is(err, errAgain) {
 		t.Fatal(err)
 	}
-	var again func()
 	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
-		var err error
-		again, err = c.wakeWorkerJob(t.Context(), tx, root, "build")
-		return err
+		return c.wakeWorkerJob(t.Context(), tx, root, "build")
 	}); err != nil {
 		t.Fatal(err)
-	}
-	if again != nil {
-		again()
 	}
 	if r := storedRun(t, c, child); r.StopReason != plan.ReasonCancelled {
 		t.Errorf("the child of a lost attempt's step is stopped for %q", r.StopReason)

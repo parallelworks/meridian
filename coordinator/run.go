@@ -201,9 +201,9 @@ type Coordinator struct {
 	// placed, if it is set, hears of each job a supervisor places, as it
 	// readied it, before the attempt's driver places it.
 	placed func(run *store.Run, attempt string, job *plan.ReadyJob)
-	// rewake, if it is set, is called with the supervisors a transaction
-	// that stopped children woke while hopper ran them, as it has them
-	// woken again once it commits (wakeAgainAfter).
+	// rewake, if it is set, is called with the supervisors and markers a
+	// transaction woke while hopper ran them, once it has committed, as
+	// they are woken again (wakeAgainAfter).
 	rewake func([]*waking)
 	// beforeChildStore, if it is set, is called as createChild stores a
 	// child, between its Create and its transaction, as when a test races

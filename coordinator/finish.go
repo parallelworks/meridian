@@ -141,6 +141,11 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 		return treeWait, nil
 	}
 	c.cancelPlacements(ctx, id, ws, withdrawn)
+	// The root's finisher is woken again only once the placements the run
+	// withdrew are cancelled, not as the transaction commits
+	// (wakeAgainAfter): woken first, it could end the root, and with it a
+	// meridian run that serves the connections those cancels need, before
+	// they are sent.
 	c.wakeAgain(ctx, woke)
 	return 0, nil
 }
