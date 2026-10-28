@@ -229,6 +229,14 @@ func (c *Coordinator) memberDirs(ctx context.Context, run, root *store.Run, a *s
 	if err != nil {
 		return memberDirs{}, err
 	}
+	// A member that gives the run's own directory took it as it was, as
+	// the local backend does. One that chose its own gives another path:
+	// a host's is in its state directory, named by the run's and the
+	// store's IDs, where the meridian command makes a run's in the
+	// system's temporary directory, or where its --run-dir says. Barring
+	// a --run-dir that names a host's very path, the two are one path only
+	// where they are one directory, on the machine the run started on,
+	// where format 1 cleans a child's.
 	if dir == "" || dir == run.RunDir {
 		return memberDirs{run: run.RunDir, root: root.RunDir}, nil
 	}

@@ -330,6 +330,60 @@ func TestSSHChild(t *testing.T) {
 	}
 }
 
+// sshLocalCaller is a workflow whose job submit, on the machine the run
+// started on, calls sshChild, its child's job on the cluster its input
+// names, which none of its own jobs ran on before, tried again once; and
+// whose job main, on that host, reads what the child wrote there, by a
+// path relative to the run's directory there, as format 1's workflows do.
+const sshLocalCaller = `on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+jobs:
+  submit:
+    steps:
+      - uses: github/acme/flows@main
+        with: {$yaml: flows/child.yaml, host: "${{ inputs.cluster.ip }}"}
+        retry: {max-retries: 1, interval: 1s}
+  main:
+    needs: [submit]
+    ssh:
+      remoteHost: ${{ inputs.cluster.ip }}
+    steps:
+      - run: |
+          . ./subworkflows/submit/step_0/made.env
+          echo "root $PWD"
+          echo "tries $TRIES"
+          if [ "$CHILD_DIR" = "$PWD/subworkflows/submit/step_0" ] && [ "$CHILD_JOB_DIR" = "$CHILD_DIR" ] && [ "$CHILD_PARENT" = "$PWD" ] && [ "$PW_PARENT_JOB_DIR" = "$PWD" ]; then
+            echo "the child ran in its directory"
+          fi
+`
+
+// TestSSHChildOfLocalCaller checks a step on the machine the run started
+// on that calls a workflow whose job runs on a host: the child's job runs
+// in the same place in its root's run directory on the host, which
+// meridian host makes, as none of the root's jobs ran there before; its
+// next try finds what its last left there, as the caller cleans only its
+// own machine's copy of the directory; and a job of the root on the host
+// reads what the child wrote by a path relative to its run's directory.
+func TestSSHChildOfLocalCaller(t *testing.T) {
+	flowsRepo(t, map[string]string{"flows/child.yaml": sshChild})
+	env := runEnv(t)
+	h := newSSHHost(t, env)
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshLocalCaller)))
+	if r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
+		t.Fatalf("meridian run of a call of a job on a host = %+v", r)
+	}
+	runs := filepath.Join(h.home, ".local", "state", "meridian", "runs")
+	log := stepLog(t, env, "1")
+	for _, want := range []string{"root " + runs + "/1-", "tries 2\n", "the child ran in its directory\n"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the host job's log has no %q:\n%s", want, log)
+		}
+	}
+}
+
 // TestSSHOutage checks a job on a host whose connection drops as its step
 // runs: meridian connects again, and forwards the socket again, at the same
 // path, through which the worker, which went on, sends what it held; and

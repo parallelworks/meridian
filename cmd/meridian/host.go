@@ -475,6 +475,33 @@ func ensureHostDir(dir string) error {
 	return nil
 }
 
+// ensureRootDir makes dir, the directory of a child run's root in the runs
+// directory, which place has checked (ensureHostDir), if none of the
+// root's jobs ran on the host, readable by the user alone, as a root's
+// worker makes its own; and checks one that is there, as it is, never
+// following a symbolic link: a directory of the user's that no other user
+// can change, though others may read it, as a workflow may have let them,
+// which ensureHostDir would refuse. A symbolic link there, which
+// makeDirIn's os.Root would follow, a file, or a directory another user
+// can change is ssh_host_dir_unusable.
+func ensureRootDir(dir string) error {
+	err := os.Mkdir(dir, 0o700)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return hostDirUnusable(dir, err)
+	}
+	info, err := os.Lstat(dir)
+	if err == nil {
+		err = safepath.CheckDirInfo(dir, info, safepath.Unchangeable)
+	}
+	if err != nil {
+		return hostDirUnusable(dir, err)
+	}
+	return nil
+}
+
 // hostDirUnusable is the ssh_host_dir_unusable of the directory dir, which
 // failed its check with err: at the directory that err's problem names,
 // dir or one on the way to it, as path_unsafe names the one another user
@@ -543,7 +570,8 @@ func (h *hostOp) probe(ctx context.Context, req *hostproto.Request) hostproto.Me
 // and hands the worker its bootstrap token before it returns. A child
 // run's is its root's, with the child's path in it, as format 1 lays a
 // tree out the same on each host: the root's is made here, if none of its
-// jobs ran on the host, and the worker makes the child's in it.
+// jobs ran on the host, or checked (ensureRootDir), and the worker makes
+// the child's in it.
 func (h *hostOp) place(ctx context.Context, req *hostproto.Request) hostproto.Message {
 	pl := req.Place
 	if pl == nil || pl.Run == "" || pl.Store == "" {
@@ -581,8 +609,8 @@ func (h *hostOp) place(ctx context.Context, req *hostproto.Request) hostproto.Me
 	r.RunDir = hostRunDir(paths.Runs, pl.Run, pl.Store)
 	if pl.Root != "" {
 		root := hostRunDir(paths.Runs, pl.Root, pl.Store)
-		if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-			return failed(hostDirUnusable(root, err))
+		if err := ensureRootDir(root); err != nil {
+			return failed(err)
 		}
 		r.RunDir = filepath.Join(root, pl.Path)
 	}

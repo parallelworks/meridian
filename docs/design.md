@@ -2175,7 +2175,8 @@ variables, and the root's finisher, which waits for every run of its tree;
 and the worker API's paths for a child, served, and what a child's
 attempt's claim has of its tree, which its worker reads; and the worker's
 run of a calling step: it makes the child's directory, and cleans it as
-`clean-on-retry:` says, never following a symbolic link, asks for the
+`clean-on-retry:` says on the machine the run started on, never on a
+host, never following a symbolic link, asks for the
 child, waits for it, stops it as the step is stopped, and ends the step as
 below; the coordinator's stop of a step's children, in the transaction
 that ends its attempt, however it ends, and in the one that stops its run,
@@ -2327,12 +2328,15 @@ known calls do.
   job's `steps:` as written, from 0, counting steps that are skipped. The
   job's `working-directory:` doesn't move it, as it doesn't in format 1:
   22 of the 270 known calls are in a job with one, and have none of their
-  own. A child's directory outside its root's run directory isn't built
-  yet: a child's directory isn't made private, as a root's is, since what
-  holds it is, which one elsewhere wouldn't be. The step fails when it
-  runs, as its child would be created (`child_dir_outside`), never as the
-  root is created, since an `if:` may skip it; none of the 270 known
-  calls sets `working-directory:`.
+  own. A step's `working-directory:` that puts the child outside its
+  root's run directory, an absolute one elsewhere or a relative one that
+  leaves it with `..`, isn't built yet, where format 1 runs the child
+  there: anywhere on the machine the run started on, and under the home
+  on a host. A child's directory isn't made private, as a root's is,
+  since what holds it is, which one elsewhere wouldn't be. The step fails
+  when it runs, as its child would be created (`child_dir_outside`), never
+  as the root is created, since an `if:` may skip it; none of the 270
+  known calls sets `working-directory:`.
 - **Its directory is in the same place on each machine**, as format 1
   lays a tree out. Format 1 prepares a subworkflow on the machine the run
   started on, even for a step on a host, resolving the step's
@@ -2749,11 +2753,14 @@ not assumed idempotent.
   `clean-on-retry:` is true unless the workflow says otherwise, as in
   format 1, or an expression, which Step reads as format 1 does: true or
   false, text or a number that reads as one, and true for anything else
-  (`plan.ReadyStepRetry.CleanOnRetry`). As in format 1, it cleans only a
-  `uses:` step's directory before its next try, only on the machine the
-  run started on, never its copy on a host, and never one that is the
-  root run's directory, or holds it: a run's logs aren't in a run's
-  directory, so format 1's log directory has nothing to match. It is
+  (`plan.ReadyStepRetry.CleanOnRetry`). It cleans only a `uses:` step's
+  directory before its next try, and only on the machine the run started
+  on, by a caller that runs there: never a host's copy, as in format 1,
+  nor, for a caller on a host, the copy where the run started, which
+  format 1 cleans ([Workflows a step calls](#workflows-a-step-calls)). As
+  in format 1, it never cleans one that is the root run's directory, or
+  holds it: a run's logs aren't in a run's directory, so format 1's log
+  directory has nothing to match. It is
   stricter than format 1 in one place: it never cleans the calling run's
   own directory, or one that holds it, where format 1 spares only the
   root's, and would clean, for a call in a child, a `working-directory:`
@@ -4063,7 +4070,8 @@ that a job's `ssh:` placed on a host; one that uses an action only a
 platform provides fails saying so (`action_needs_platform`, [Built-in
 actions](#built-in-actions)). A step that `uses:` a workflow runs it as a
 run of its own ([Workflows a step calls](#workflows-a-step-calls)), whose
-directory its `clean-on-retry:` cleans. Its events are kept in memory
+directory its `clean-on-retry:` cleans on the machine the run started
+on, never on a host. Its events are kept in memory
 while the coordinator is unreachable, since each is small but for a step's
 outputs, which are capped.
 

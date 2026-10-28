@@ -465,6 +465,10 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 		// working-directory: alone (ChildDir).
 		rs.WorkingDirectory = stepDir.dir
 	}
+	// The directory a step would run in is checked, its job's for one
+	// without its own, for a step that calls a workflow too: format 1
+	// checks it for every step's try before it runs it, or the workflow
+	// it calls.
 	e.checkDirectory(dir)
 	if !s.SSH.IsZero() {
 		pointer := at(s.Path, "ssh")

@@ -743,6 +743,42 @@ func TestHostPlace(t *testing.T) {
 			t.Errorf("meridian host place of a child with the root %q and the path %q = %+v, %d", bad.Root, bad.Path, m, code)
 		}
 	}
+
+	// A root's directory that is there is taken as it is only where it is
+	// a directory of the user's that no other user can change: one others
+	// may read is, and a symbolic link, which the worker would follow, a
+	// file, and one others can change are ssh_host_dir_unusable.
+	runs := filepath.Join(env[local.EnvStateDir], "runs")
+	if err := os.Symlink(t.TempDir(), filepath.Join(runs, "5-abc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runs, "6-abc"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for root, perm := range map[string]os.FileMode{"7-abc": 0o777, "8-abc": 0o755} {
+		if err := os.Mkdir(filepath.Join(runs, root), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(runs, root), perm); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, root := range []string{"5", "6", "7", "8"} {
+		in := child
+		in.Attempt, in.BootstrapToken, in.Run, in.Root = "run4-main-"+root, token+"-"+root, "4"+root, root
+		m, code := hostDo(t, env, sys, hostproto.OpPlace, hostproto.Request{Member: onHost, Place: &in})
+		if root == "8" {
+			if code != exitOK || m.Placement == nil || m.RunDir != filepath.Join(runs, "8-abc", "subworkflows", "build", "step_0") {
+				t.Errorf("meridian host place of a child whose root's directory others may read = %+v, %d", m, code)
+			} else if m, code := hostDo(t, env, sys, hostproto.OpCancel, hostproto.Request{Member: onHost, Placement: m.Placement}); code != exitOK || m.Problem != nil || m.Error != "" {
+				t.Errorf("meridian host cancel of a child = %+v, %d", m, code)
+			}
+			continue
+		}
+		if code != exitError || m.Problem == nil || m.Problem.Code != problems.SSHHostDirUnusable.Code() || m.Placement != nil {
+			t.Errorf("meridian host place of a child whose root's directory is case %d = %+v, %d", i, m, code)
+		}
+	}
 }
 
 // TestHostProcess checks meridian host as the ssh backend runs it: a

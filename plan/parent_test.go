@@ -307,3 +307,36 @@ jobs:
 		state.Steps = append(state.Steps, plan.StepResult{Outcome: plan.OutcomeSuccess})
 	}
 }
+
+// A step that calls a workflow in a job whose working-directory: keeps a
+// shell variable fails, as one that runs a command does, though its
+// child's directory doesn't read the job's: format 1 checks the directory
+// a step would run in, its job's for one without its own, for every step.
+func TestCallChecksJobDirectory(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    working-directory: $HOME/job
+    steps:
+      - uses: workflow/mine
+      - uses: workflow/mine
+        working-directory: /own
+`, nil)
+	steps := job(t, p, "main").Steps
+	for i := range steps {
+		steps[i].Source = &plan.Source{Location: "l", Revision: "r"}
+	}
+	run := runValues(t, p, nil)
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
+	if err != nil || ready.Job == nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: job(t, p, "main").Reads(run), Job: plan.JobContext{Name: "main", Key: "main", Attempt: 1}}
+	if _, diags, err := ready.Job.Step(t.Context(), 0, state); err != nil || !slices.Equal(codes(diags), []string{"working_directory_variable /jobs/main/working-directory"}) {
+		t.Errorf("a call in a job whose working directory keeps a variable: %v, %v", diags, err)
+	}
+	state.Steps = []plan.StepResult{{Outcome: plan.OutcomeSuccess}}
+	if rs, diags, err := ready.Job.Step(t.Context(), 1, state); err != nil || diags.HasErrors() || rs.WorkingDirectory != "/own" {
+		t.Errorf("a call with a working directory of its own: %+v, %v, %v", rs, diags, err)
+	}
+}
