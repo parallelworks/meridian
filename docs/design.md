@@ -2003,7 +2003,10 @@ transaction.
   woke it meanwhile, and looks again if so; hopper applies the snooze once
   it has returned, so a wake that commits in between finds it still
   running, and is tried again, briefly apart, until hopper no longer runs
-  it. Each instance of a matrix job
+  it: a few times as the waker waits, and then in the background, further
+  apart, for up to 30 seconds, since hopper records a snooze in batches,
+  and late on a loaded host. So is a wake of a marker of a need on any
+  instance ([Matrices](#matrices)). Each instance of a matrix job
   has a supervisor of its own, which the job's inserts
   ([Matrices](#matrices)).
 - **Meridian decides what a dependency's outcome means.** Its edges let a
@@ -3880,7 +3883,11 @@ own runs.
 - **A step ends when its output closes**, as in format 1, not when its
   shell exits: what it starts in the background and leaves writing to its
   output is still the step's. It runs in a process group of its own, which
-  is what SIGTERM and SIGKILL stop.
+  is what SIGTERM and SIGKILL stop. The group is sent SIGTERM once,
+  however many things stop it at once, as a halt stops a step both as a
+  step and as one of the attempt's groups: a second SIGTERM would run a
+  step's trap again, and stop what the first runs, as format 1's single
+  SIGTERM doesn't.
 - **Logs** are masked on the worker, before they leave the host, and so are
   outputs ([Outputs](#outputs)). Once an upload has sent all a log had,
   the worker starts the next no sooner than 100 ms after that one

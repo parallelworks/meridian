@@ -951,7 +951,7 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 		requests, unwatch := a.watch(s)
 		defer unwatch()
 		defer a.endedGroup(cmd)
-		return runProcess(cmd, w, requests, a.startedGroup)
+		return runProcess(cmd, w, requests, a.startedGroup, a.terminate)
 	}()
 	w.Close()
 	stream.Close()

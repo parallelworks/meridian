@@ -83,6 +83,12 @@ var testTiming = timing{
 // cfg.Environ gives it a home, and returns what Run returns.
 func runWorker(t *testing.T, f *workerapitest.Fake, ctx context.Context, cfg Config) error {
 	t.Helper()
+	return runWorkerTimed(t, f, ctx, cfg, testTiming)
+}
+
+// runWorkerTimed is runWorker, with the worker's timing tm.
+func runWorkerTimed(t *testing.T, f *workerapitest.Fake, ctx context.Context, cfg Config, tm timing) error {
+	t.Helper()
 	if !slices.ContainsFunc(cfg.Environ, func(kv string) bool { return strings.HasPrefix(kv, workerapi.EnvCoordinator+"=") }) {
 		cfg.Environ = append(cfg.Environ, workerapi.EnvCoordinator+"="+f.Serve())
 	}
@@ -107,7 +113,7 @@ func runWorker(t *testing.T, f *workerapitest.Fake, ctx context.Context, cfg Con
 	if cfg.Log == nil {
 		cfg.Log = testLogger(t)
 	}
-	return run(ctx, cfg, testTiming, func() error { return nil })
+	return run(ctx, cfg, tm, func() error { return nil })
 }
 
 // testLogger returns a logger that writes to a test's log.
