@@ -39,8 +39,22 @@ jobs:
         run: make vulncheck
       - name: Check that nothing uses cgo
         run: make cgo-check
-      # CI runs only Linux, so the code for macOS, the BSDs and Windows is
-      # compiled and vetted, tests included, without running.
+
+  # CI runs only Linux, so the code for macOS, the BSDs and Windows is
+  # compiled and vetted, tests included, without running. It's a job of its
+  # own, beside lint, because each of its eight platforms compiles all of the
+  # code again: on a busy runner that alone has taken eleven minutes.
+  vet-cross:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "**/go.sum"
       - name: Vet the code for macOS, the BSDs and Windows
         run: make vet-cross
 
