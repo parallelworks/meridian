@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/conformancetest"
@@ -18,11 +19,14 @@ import (
 )
 
 // testSessions is a session provider of a test's. It makes every session,
-// and records each update, but refuses one whose with: status is refuse, the
-// first time it is asked to, as a platform refuses a session it can't
-// reach.
+// and records each update. It authorizes one as format 1's platform does:
+// a run whose permissions: hold '*' may update any of the person's
+// sessions, whose names here end in -session, and any other only one its
+// tree's root made. It refuses one whose with: status is refuse, the first
+// time it is asked to, as a platform refuses a session it can't reach.
 type testSessions struct {
 	mu      sync.Mutex
+	made    map[string][]string // by run
 	updates []string
 	refused bool
 }
@@ -35,22 +39,39 @@ func (s *testSessions) Check(_ context.Context, sessions map[string]any) (map[st
 	return names, nil
 }
 
-func (s *testSessions) Make(context.Context, string, map[string]any, map[string]string, expr.Read) error {
+func (s *testSessions) Make(_ context.Context, runID string, _ map[string]any, names map[string]string, _ expr.Read) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.made == nil {
+		s.made = map[string][]string{}
+	}
+	for _, name := range names {
+		if !slices.Contains(s.made[runID], name) {
+			s.made[runID] = append(s.made[runID], name)
+		}
+	}
 	return nil
 }
 
-func (s *testSessions) Update(_ context.Context, runID, name string, with map[string]any, read expr.Read) error {
+func (s *testSessions) Update(_ context.Context, u compile.SessionUpdate) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if with["status"] == "refuse" && !s.refused {
+	may := slices.Contains(s.made[u.Root], u.Name)
+	if slices.Contains(u.Permissions, "*") {
+		may = strings.HasSuffix(u.Name, "-session")
+	}
+	if !may {
+		return problems.InputRejected.Problem(problems.Params{"input": "name", "reason": u.Name + " isn't the run's to update"})
+	}
+	if u.With["status"] == "refuse" && !s.refused {
 		s.refused = true
 		return problems.InputRejected.Problem(problems.Params{"input": "url", "reason": "not reachable"})
 	}
-	data, err := json.Marshal(with, json.Deterministic(true))
+	data, err := json.Marshal(u.With, json.Deterministic(true))
 	if err != nil {
 		return err
 	}
-	s.updates = append(s.updates, fmt.Sprintf("%s %s %s %+v", runID, name, data, read))
+	s.updates = append(s.updates, fmt.Sprintf("%s %s %v %s %s %+v", u.Run, u.Root, u.Permissions, u.Name, data, u.Read))
 	return nil
 }
 
@@ -83,15 +104,19 @@ func stepEventsOf(t *testing.T, c *Coordinator, id, key string) []string {
 
 // TestUpdateSession checks a step that uses parallelworks/update-session,
 // run end to end by meridian's worker against the coordinator, which does
-// it through its session provider: it updates one of its run's own
-// sessions, as sessions.<name> names it, with the rest of its with:; it
-// fails for a session that isn't the run's, which ignore-errors: lets it
-// survive; a refusal of the provider's fails a try, which its retry:
-// tries again; and a with: that read a secret is given the provider as
-// what it must mask, and keep private. Without a provider, as with meridian run, the step fails as
-// it runs, and only then, saying the Sessions interface is missing, as an
-// ordinary step failure: each try fails, and ignore-errors: lets the last
-// succeed.
+// it through its session provider: it asks it to update the session its
+// with:'s name names, whichever that is, with the rest of its with:, the
+// run, its root and its permissions:, and the provider decides. A run
+// without '*' updates one of its own sessions, as sessions.<name> names
+// it, and the provider refuses it another run's, which fails the step and
+// ignore-errors: lets survive; one with '*' updates another of the
+// person's, and the provider refuses it one that isn't theirs. A refusal
+// of the provider's fails a try, which its retry: tries again; and a
+// with: that read a secret is given the provider as what it must mask, and
+// keep private. Without a provider, as with meridian run, the step fails
+// as it runs, and only then, saying the Sessions interface is missing, as
+// an ordinary step failure: each try fails, and ignore-errors: lets the
+// last succeed.
 func TestUpdateSession(t *testing.T) {
 	parallel(t)
 	t.Run("with a provider", func(t *testing.T) {
@@ -136,7 +161,7 @@ jobs:
 		}
 		want := []string{
 			"0.0 success ",
-			"1.0 success session_not_of_run",
+			"1.0 success input_rejected",
 			"2.0 failure input_rejected",
 			"2.1 success ",
 			"3.0 success ",
@@ -147,11 +172,43 @@ jobs:
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		updated := []string{
-			id + ` desktop-session {"url":"http://localhost:8080"} {Marked:false Private:false}`,
-			id + ` desktop-session {"remotePort":22,"status":"refuse"} {Marked:false Private:false}`,
+			id + " " + id + ` [] desktop-session {"url":"http://localhost:8080"} {Marked:false Private:false}`,
+			id + " " + id + ` [] desktop-session {"remotePort":22,"status":"refuse"} {Marked:false Private:false}`,
 			// What a secret gave, which the provider is told to mask.
-			id + ` desktop-session {"apiKey":"s3cret-api-key","openAI":true} {Marked:true Private:true}`,
+			id + " " + id + ` [] desktop-session {"apiKey":"s3cret-api-key","openAI":true} {Marked:true Private:true}`,
 		}
+		if !slices.Equal(s.updates, updated) {
+			t.Errorf("the provider updated\n%s\nwant\n%s", strings.Join(s.updates, "\n"), strings.Join(updated, "\n"))
+		}
+	})
+	t.Run("with permissions: '*'", func(t *testing.T) {
+		s := &testSessions{}
+		r := newWorkerRigWith(t, Options{Sessions: s})
+		id := r.create(t, []byte(`
+permissions: ['*']
+jobs:
+  main:
+    steps:
+      - uses: parallelworks/update-session
+        with:
+          name: another-runs-session
+          url: http://localhost:8080
+      - uses: parallelworks/update-session
+        with:
+          name: another-persons
+        ignore-errors: true
+`), nil, nil)
+		serve(t, r.c)
+		if run := waitEnded(t, r.c, id); run.Outcome != plan.OutcomeSuccess {
+			t.Errorf("the run ended %s", run.Outcome)
+		}
+		want := []string{"0.0 success ", "1.0 success input_rejected"}
+		if got := stepEventsOf(t, r.c, id, "main"); !slices.Equal(got, want) {
+			t.Errorf("the steps' events are\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		updated := []string{id + " " + id + ` [*] another-runs-session {"url":"http://localhost:8080"} {Marked:false Private:false}`}
 		if !slices.Equal(s.updates, updated) {
 			t.Errorf("the provider updated\n%s\nwant\n%s", strings.Join(s.updates, "\n"), strings.Join(updated, "\n"))
 		}

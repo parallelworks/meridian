@@ -44,14 +44,15 @@ func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (worker
 }
 
 // updateSession performs step's parallelworks/update-session, as call asks:
-// it updates one of the run's own sessions, which with:'s name names,
-// through Options.Sessions (compile.UpdateSession). The provider isn't the
-// store's, so it asks it before Commit stores the answer, and asks it
-// nothing for a step that its job's cancel or its early-cancel: stops,
-// which Commit answers cancelled (ActionCall.Cancelled). A refusal of the
-// provider's, a session that isn't the run's, and no provider fail the
-// step; a provider that can't answer is an error, which the worker asks
-// again after.
+// it updates the session with:'s name names, through Options.Sessions,
+// which decides whether the run may, from who runs it and its
+// permissions:, as format 1's platform does (compile.UpdateSession). The
+// provider isn't the store's, so it asks it before Commit stores the
+// answer, and asks it nothing for a step that its job's cancel or its
+// early-cancel: stops, which Commit answers cancelled
+// (ActionCall.Cancelled). A refusal of the provider's, as of a session the
+// run may not update, and no provider fail the step; a provider that
+// can't answer is an error, which the worker asks again after.
 func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.ActionCall, step *plan.Step) (workerapi.ActionAnswer, error) {
 	answer := workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess}
 	cancelled, err := call.Cancelled(ctx, step)
@@ -64,8 +65,14 @@ func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.Acti
 			return workerapi.ActionAnswer{}, err
 		}
 		with, _ := call.Request.With.Get().(map[string]any)
-		read := expr.Read{Private: call.Request.Private, Marked: call.Request.Secret}
-		diags, err := compile.UpdateSession(ctx, c.opts.Sessions, call.Run.ID, p, step.Path, with, read)
+		u := compile.SessionUpdate{
+			Run: call.Run.ID, Root: call.Run.ID, Permissions: p.Run.Permissions,
+			Read: expr.Read{Private: call.Request.Private, Marked: call.Request.Secret},
+		}
+		if call.Run.Parent != nil {
+			u.Root = call.Run.Parent.Root
+		}
+		diags, err := compile.UpdateSession(ctx, c.opts.Sessions, u, step.Path, with)
 		if err != nil {
 			return workerapi.ActionAnswer{}, err
 		}

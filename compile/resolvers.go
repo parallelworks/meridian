@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"slices"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -136,37 +135,69 @@ type Sessions interface {
 	// starts the run again after another stopped does, makes nothing more;
 	// a rerun, whose sessions ended with the run, makes them again.
 	Make(ctx context.Context, runID string, sessions map[string]any, names map[string]string, read expr.Read) error
-	// Update updates the session name, one of the run runID's own, as
-	// Check named it, as a step that uses parallelworks/update-session
-	// asks: with is the rest of the step's with:, as it was evaluated, as
-	// where the session points, url, or remoteHost and remotePort. read
-	// says what evaluating with: read, as for Make: Update mustn't log or
-	// quote what it gives where read.Private is set, and masks it as one of
-	// the run's secrets where read.Marked is. A refusal, a problem of one
-	// of a workflow's kinds of error, fails the step; any other error says
-	// it couldn't answer, and the step asks again. Updating it again with
-	// the same, as a worker that repeats its request does, changes nothing
-	// more (UpdateSession).
-	Update(ctx context.Context, runID, name string, with map[string]any, read expr.Read) error
+	// Update updates the session u.Name with u.With, as a step of the run
+	// u.Run that uses parallelworks/update-session asks. Meridian doesn't
+	// restrict which session a step names: Update decides whether the run
+	// may update it, as format 1's platform decides whether the run's
+	// token may, from who runs it and its workflow's permissions:
+	// (u.Permissions).
+	//
+	//   - A run whose permissions: hold '*' acts as the person who runs it,
+	//     and may update any session they may: one of theirs, or one
+	//     shared with them.
+	//   - Any other may update only a session of its own tree, one that a
+	//     run of the tree whose root is u.Root made (Make), as format 1
+	//     makes a tree's sessions with its root's run, and only one of the
+	//     person who runs it.
+	//
+	// A session the run may not update, or that isn't there, is a refusal:
+	// a problem of one of a workflow's kinds of error, which fails the
+	// step. Update mustn't log or quote what u.With gives where
+	// u.Read.Private is set, and masks it as one of the run's secrets where
+	// u.Read.Marked is. Any other error says it couldn't answer, and the
+	// step asks again. Updating a session again with the same, as a worker
+	// that repeats its request does, changes nothing more (UpdateSession).
+	Update(ctx context.Context, u SessionUpdate) error
+}
+
+// A SessionUpdate is what a step that uses parallelworks/update-session
+// asks of a session provider (Sessions.Update).
+type SessionUpdate struct {
+	// Run is the ID of the run whose step asks, and Root the ID of the run
+	// at the top of its tree, which no step called: Run's own for a run no
+	// step called.
+	Run, Root string
+	// Permissions are the run's workflow's permissions:
+	// (plan.Run.Permissions), which say what its token may do: '*' all
+	// that the person who runs it may.
+	Permissions []string
+	// Name is the session's name, as the step's with: gives it, read as
+	// text: as sessions.<key> reads one of a run's sessions (Check), or
+	// any other.
+	Name string
+	// With is the rest of the step's with:, as it was evaluated: where the
+	// session points, as url, or remoteHost and remotePort.
+	With map[string]any
+	// Read says what evaluating with: read, as for Make.
+	Read expr.Read
 }
 
 // UpdateSession does what a step that uses parallelworks/update-session
-// asks of the run runID, whose plan is p, through s, which is nil where
-// nothing provides sessions: with is the step's with:, as it was
-// evaluated, which read says what evaluating read, and path the step's in
-// the workflow, at which its problems are. It returns them: none when the
-// session was updated; resolver_missing where s is nil, as a feature whose
-// interface is missing fails, but only as the step runs, which an if: may
-// skip; session_not_of_run where with:'s name, as text, isn't one of the
-// run's own sessions, as sessions.<name> reads them, which no step may
-// update; and a refusal of s's, as Update gives it, with its params
-// masked where with: is private: where it read a variable or a password
-// (read.Private), or a secret (read.Marked), which a secret variable is
-// too. It returns s's other errors, for the caller to ask again: where
-// with: is private, one that says only that s couldn't update the
-// session.
-func UpdateSession(ctx context.Context, s Sessions, runID string, p *plan.Plan, path string, with map[string]any, read expr.Read) (problems.Diagnostics, error) {
-	private := read.Private || read.Marked
+// asks, through s, which is nil where nothing provides sessions: u is
+// what it asks, but for its Name and With, which UpdateSession takes from
+// with, the step's with: as it was evaluated, its name, read as text, and
+// the rest; and path is the step's in the workflow, at which its problems
+// are. It returns them: none when the session was updated;
+// resolver_missing where s is nil, as a feature whose interface is
+// missing fails, but only as the step runs, which an if: may skip; and a
+// refusal of s's, as Update gives it, as of a session the run may not
+// update, with its params masked where with: is private: where it read a
+// variable or a password (u.Read.Private), or a secret (u.Read.Marked),
+// which a secret variable is too. It returns s's other errors, for the
+// caller to ask again: where with: is private, one that says only that s
+// couldn't update the session.
+func UpdateSession(ctx context.Context, s Sessions, u SessionUpdate, path string, with map[string]any) (problems.Diagnostics, error) {
+	private := u.Read.Private || u.Read.Marked
 	at := func(k *problems.Kind, pointer string, params problems.Params) problems.Diagnostics {
 		if private {
 			params = mask(params)
@@ -176,13 +207,10 @@ func UpdateSession(ctx context.Context, s Sessions, runID string, p *plan.Plan, 
 	if s == nil {
 		return problems.Diagnostics{problems.ResolverMissing.At("", problems.Position{}, path+"/uses", problems.Params{"key": "uses", "interface": "Sessions"})}, nil
 	}
-	name := expr.Text(with["name"])
-	if !slices.Contains(slices.Collect(maps.Values(p.Run.SessionNames)), name) {
-		return at(problems.SessionNotOfRun, path+"/with/name", problems.Params{"session": name}), nil
-	}
-	rest := maps.Clone(with)
-	delete(rest, "name")
-	err := s.Update(ctx, runID, name, rest, read)
+	u.Name = expr.Text(with["name"])
+	u.With = maps.Clone(with)
+	delete(u.With, "name")
+	err := s.Update(ctx, u)
 	switch {
 	case err == nil:
 		return nil, nil

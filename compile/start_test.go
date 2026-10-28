@@ -740,21 +740,27 @@ type testSessions struct {
 	err           error
 	checkErr      error
 	updateErr     error
+	// refuses, if it is set, is a session no run may update, which Update
+	// refuses, as a platform does one of another person's.
+	refuses string
 }
 
-func (s *testSessions) Update(_ context.Context, runID, name string, with map[string]any, read expr.Read) error {
+func (s *testSessions) Update(_ context.Context, u compile.SessionUpdate) error {
 	if s.updateErr != nil {
 		return s.updateErr
 	}
-	data, err := json.Marshal(with, json.Deterministic(true))
+	if u.Name == s.refuses && u.Name != "" {
+		return problems.InputRejected.Problem(problems.Params{"input": "name", "reason": u.Name + " isn't the person's"})
+	}
+	data, err := json.Marshal(u.With, json.Deterministic(true))
 	if err != nil {
 		return err
 	}
-	updated := runID + " " + name + " " + string(data)
-	if read.Private {
+	updated := u.Run + " " + u.Root + " " + strings.Join(u.Permissions, ",") + " " + u.Name + " " + string(data)
+	if u.Read.Private {
 		updated += " private"
 	}
-	if read.Marked {
+	if u.Read.Marked {
 		updated += " secret"
 	}
 	s.updated = append(s.updated, updated)

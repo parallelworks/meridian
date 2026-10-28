@@ -437,12 +437,6 @@ the SHA-256 hash of its content: 218 files.
   run, so that whether it had started was a race at most, which no
   workflow can rely on. ACTIVATE takes the same fix by ending a job marked
   as cancelling as it would start it, or as it waits for its turn.
-- **`parallelworks/update-session` updates only the run's own sessions**,
-  one of those the run's `sessions:` made, which `${{ sessions.<name> }}`
-  names, a fix for security that ACTIVATE takes too. A step that names
-  another fails (`session_not_of_run`), and updates nothing. All 15 known
-  update-session steps name one of their run's own sessions, as
-  `${{ sessions.<name> }}` ([Built-in actions](#built-in-actions)).
 - **`vars.*` and `org.*` read every variable of their context**, as
   `inputs.*` reads every input's value: a list of the variables' values, in
   the order of their names, with the rest of the path read from each, as in
@@ -2296,15 +2290,11 @@ a workflow (`uses_not_supported`).
   starts it, `resume` among them, its Start in the queue every coordinator
   works. The root's record is kept until every run in its tree has ended:
   the root's finisher waits for them, and the end of each wakes it.
-- **Its sessions** are its own. A child's `sessions:` makes its own
-  sessions, and its `parallelworks/update-session` updates only those, as
-  its run's own ([Built-in actions](#built-in-actions)), never its root's
-  or another run's in its tree. Format 1 makes a child's sessions with its
-  root's run, so there a step of a child that names one of its root's
-  sessions would count it as its run's own: a difference. No known
-  workflow has one: each of the 15 known update-session steps names a
-  session its own workflow's `sessions:` makes, and none of the 14
-  workflows that hold them is one a step calls.
+- **Its sessions.** A child's `sessions:` makes its own sessions, as its
+  run's. Its `parallelworks/update-session` asks the provider as any
+  run's does, which is told the child's tree's root, so that it can
+  authorize the step as format 1 does a tree's, whose sessions it makes
+  with the root's run ([Built-in actions](#built-in-actions)).
 - **Its groups.** A job of a child, and a job that calls one, may name
   groups with `runs-on:`, which format 1 refuses in both as not supported
   yet, so no workflow format 1 runs has either: a difference that takes
@@ -2410,7 +2400,7 @@ session Sessions', and the run's jobs the coordinator's own.
 | --- | --- | --- | --- |
 | `parallelworks/checkout` | A Git repository | The coordinator, which pins it through Sources as the run is created, and sends its tree to the worker, which writes it | Works, with Git on the coordinator's host, as Sources needs |
 | `parallelworks/cancel-jobs` | Jobs of the step's run | The coordinator, asked by the worker | Works |
-| `parallelworks/update-session` | One of the run's sessions | The coordinator, through Sessions | The step fails (`resolver_missing`), as there is no local Sessions |
+| `parallelworks/update-session` | A session the run may update, as the provider decides | The coordinator, through Sessions | The step fails (`resolver_missing`), as there is no local Sessions |
 | `parallelworks/scheduler-agent`, `parallelworks/wait-for-agent` | A platform's agent on a cluster's compute node, which the first starts through the cluster's scheduler with the platform's command-line tool and credentials, and the second waits for | A platform | The step fails (`action_needs_platform`) |
 
 None of them is a no-op where nothing provides it: a step that succeeded
@@ -2548,23 +2538,33 @@ pins, which are built.
   - A job cancelled this way doesn't fail the run, as in format 1, but the
     jobs that need it are skipped, which does, as a job they need that
     failed does.
-- **update-session** updates one of the run's own sessions, which its
-  `name` names, as text, through Sessions (`Sessions.Update`), with the
-  rest of its `with:` as it was evaluated, and whether that read a
-  variable or a password, which the provider keeps private, or a secret,
-  which it masks; a name that isn't one of the run's sessions' is refused
-  (`session_not_of_run`), a [bug fix](#bug-fixes-to-format-1). The
-  coordinator asks the provider before it stores the step's answer, and
-  asks it nothing for a step that its job's cancel, or its
-  `early-cancel:`, stops. A refusal of the provider's fails the step, as
-  a command that fails does, so its `retry:` tries it again; a provider
-  that can't answer is asked again, as the worker repeats its request.
-  Where nothing provides Sessions, as
-  with `meridian run`, the step fails when it runs (`resolver_missing`,
-  with the interface Sessions), as a feature whose interface is missing
-  fails, but when the step runs, not as the run is created; a run with
-  `sessions:` can't start there anyway, and all 15 known update-session
-  steps are in workflows that have them.
+- **update-session** updates the session its `name` names, as text,
+  through Sessions (`Sessions.Update`), with the rest of its `with:` as
+  it was evaluated, and whether that read a variable or a password, which
+  the provider keeps private, or a secret, which it masks. A name is any
+  session's: `${{ sessions.<key> }}` gives one of the run's own, as format
+  1's does, but Meridian doesn't hold a step to those. The provider
+  decides whether the run may update the session, as format 1's platform
+  decides whether the run's token may, and is told the run, its tree's
+  root and its `permissions:` to decide by:
+  - a run whose `permissions:` hold `'*'` acts as the person who runs it,
+    and may update any session they may, theirs or one shared with them,
+    as they could themself through the platform's API;
+  - any other may update only a session of its own tree, which a run of
+    the tree made, as format 1 makes a tree's sessions with its root's
+    run, and only one of the person who runs it.
+
+  The coordinator asks the provider before it stores the step's answer,
+  and asks it nothing for a step that its job's cancel, or its
+  `early-cancel:`, stops. A refusal of the provider's, as of a session the
+  run may not update, fails the step, as a command that fails does, so
+  its `retry:` tries it again; a provider that can't answer is asked
+  again, as the worker repeats its request. Where nothing provides
+  Sessions, as with `meridian run`, the step fails when it runs
+  (`resolver_missing`, with the interface Sessions), as a feature whose
+  interface is missing fails, but when the step runs, not as the run is
+  created; a run with `sessions:` can't start there anyway, and all 15
+  known update-session steps are in workflows that have them.
 - **scheduler-agent and wait-for-agent** need a platform's agent, its
   command-line tool and its credentials, which Meridian has none of, so the
   step fails (`action_needs_platform`). A platform that embeds Meridian can
