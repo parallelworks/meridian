@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -318,10 +319,11 @@ func (r *rig) check(p backend.Placement, want backend.State) backend.Status {
 	return st
 }
 
-// count counts the server's commands that contain s.
+// count counts the server's scripts that contain s, which every command,
+// /bin/sh -s, reads on its standard input.
 func (r *rig) count(s string) int {
 	n := 0
-	for _, c := range r.server.Commands() {
+	for _, c := range r.server.Scripts() {
 		if strings.Contains(c, s) {
 			n++
 		}
@@ -329,12 +331,12 @@ func (r *rig) count(s string) int {
 	return n
 }
 
-// The commands the server runs: hostbin's upload, its other scripts, and
-// meridian host, whose operation is on its standard input.
+// The scripts the server runs: hostbin's upload, its other scripts, and
+// meridian host.
 const (
 	uploadCommand = `cat > "$f"`
-	hostbinScript = "/bin/sh -c '"
-	helperCommand = "/bin/sh -s"
+	hostbinScript = "hx() {"
+	helperCommand = "unset GODEBUG; exec "
 )
 
 func problemOf(t *testing.T, err error, k *problems.Kind) problems.Params {
@@ -357,17 +359,17 @@ func TestProbe(t *testing.T) {
 	}
 	scripts, helpers := r.count(hostbinScript), r.count(helperCommand)
 	if r.count(uploadCommand) != 1 || helpers != 2 {
-		t.Errorf("the first probe ran %q", r.server.Commands())
+		t.Errorf("the first probe ran %q", r.server.Scripts())
 	}
 	r.probe()
 	if r.count(hostbinScript) != scripts || r.count(helperCommand) != helpers+1 {
-		t.Errorf("a probe on the same connection learned the host again: %q", r.server.Commands())
+		t.Errorf("a probe on the same connection learned the host again: %q", r.server.Scripts())
 	}
 	// A new connection learns it again, and finds the binary there.
 	r.server.Drop()
 	r.probe()
 	if r.count(uploadCommand) != 1 || r.count(hostbinScript) == scripts || r.count(helperCommand) != helpers+3 {
-		t.Errorf("a probe on a new connection ran %q", r.server.Commands())
+		t.Errorf("a probe on a new connection ran %q", r.server.Scripts())
 	}
 
 	// meridian host runs without the session's GODEBUG, which would turn
@@ -420,9 +422,9 @@ func TestPlace(t *testing.T) {
 	if p.Attempt != "attempt-1" || !ok || len(tag) != 32 || !strings.Contains(local, ":") || p.WorkerDigest != built.digest {
 		t.Errorf("the placement is %+v", p)
 	}
-	for _, c := range r.server.Commands() {
+	for _, c := range slices.Concat(r.server.Commands(), r.server.Scripts()) {
 		if strings.Contains(c, "token-attempt-1") {
-			t.Errorf("a command holds the bootstrap token: %q", c)
+			t.Errorf("a command or its script holds the bootstrap token: %q", c)
 		}
 	}
 	found, ok, err := r.d.Find(t.Context(), r.m, "attempt-1")

@@ -4368,6 +4368,15 @@ local backend there through `meridian host`
   nothing by itself, and without it a job there fails, saying how
   (`ssh_worker_binary_missing`). A host where the worker doesn't run, as
   one that isn't Linux, macOS or FreeBSD, is `ssh_host_unsupported`.
+- **What runs there.** Every command Meridian runs on a host is
+  `/bin/sh -s`, which any login shell, csh's among them, passes to `sh`
+  as it is, with its script on its standard input, values in it quoted
+  for `sh`. What a script says is a line of JSON, after a random nonce
+  the script prints first, so that nothing a login script prints is
+  taken for it, and what it reads after its script,
+  as the binary being copied, or `meridian host`'s request, is sent once
+  it has said it is ready for it: a `sh`, as dash's and BusyBox's, can
+  read ahead of the command it runs.
 - **Reaching the coordinator.** One replica at a time holds a host's
   connection, under a lease in the store named by a keyed hash of the
   host and its login, so the store never holds in the clear a host that

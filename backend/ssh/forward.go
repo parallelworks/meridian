@@ -131,25 +131,20 @@ func (d *Driver) learned(ctx context.Context, t sshconn.Target) (*sshconn.Conn, 
 }
 
 // unlinkSocket removes the socket at p on the host conn reaches, if a
-// socket is there, over an exec session: /bin/sh -s, which reads the
-// script, with p quoted for sh, from its standard input, as call's does,
-// and runs the system's rm.
+// socket is there, with a script (sshconn.Conn.Script) that runs the
+// system's rm.
 func unlinkSocket(ctx context.Context, conn *sshconn.Conn, p string) error {
-	s, err := conn.NewSession(ctx)
+	sc, err := conn.Script(ctx, "PATH=/usr/bin:/bin; export PATH; p="+sshconn.Quote(p)+"; if [ -S \"$p\" ]; then rm -f \"$p\"; fi")
 	if err != nil {
 		return err
 	}
-	defer s.Close()
-	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
-	defer stop()
-	stderr := &limitedBuffer{max: maxSaid}
-	s.Stderr = stderr
-	s.Stdin = strings.NewReader("PATH=/usr/bin:/bin; export PATH; p=" + shQuote(p) + "; if [ -S \"$p\" ]; then rm -f \"$p\"; fi\n")
-	if err := s.Run("/bin/sh -s"); err != nil {
+	defer sc.Close()
+	_ = sc.CloseWrite()
+	if err := sc.Wait(); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if said := strings.TrimSpace(stderr.String()); said != "" {
+		if said := strings.TrimSpace(sc.Stderr()); said != "" {
 			return fmt.Errorf("ssh: remove a socket left at %s: %w: %s", p, err, problems.EscapeControl(said))
 		}
 		return fmt.Errorf("ssh: remove a socket left at %s: %w", p, err)

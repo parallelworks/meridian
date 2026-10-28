@@ -1,16 +1,12 @@
 package ssh
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/parallelworks/meridian/backend/hostproto"
 	"github.com/parallelworks/meridian/backend/ssh/internal/hostbin"
@@ -128,27 +124,17 @@ func (d *Driver) call(ctx context.Context, conn *sshconn.Conn, h *host, t sshcon
 	return m, err
 }
 
-// maxMessage is the longest line of meridian host's that the driver reads,
-// and maxSaid the most of its standard error it keeps.
-const (
-	maxMessage = 4 << 20
-	maxSaid    = 16 << 10
-)
-
 // call runs meridian host op, the binary at path on the host, which conn
-// reaches, and which host names, over an exec session, and returns what it
-// said, as hostproto says: once it says it is ready, in the protocol's
-// version, the request is written, and only then, and its answer read. A
-// problem it says is returned as the *problem.Problem it is, with the
-// message, and an error it says as an error.
+// reaches, and which host names, as a script (sshconn.Conn.Script), and
+// returns what it said, as hostproto says: once it says it is ready, in
+// the protocol's version, the request is written, and only then, and its
+// answer read. A problem it says is returned as the *problem.Problem it
+// is, with the message, and an error it says as an error.
 //
-// The session's command is /bin/sh -s, which is all the user's login shell
-// reads, whatever shell it is, and sh reads from its standard input the
-// line that runs meridian host: path quoted for sh, which no login shell,
-// as csh, reads; and without GODEBUG, which could turn off what meridian
-// requires of its cryptography, as meridian host starts a worker without
-// it. What a login script prints first is skipped: the protocol's messages
-// are JSON objects, a line each.
+// The script runs meridian host, at path quoted for sh, without GODEBUG,
+// which could turn off what meridian requires of its cryptography, as
+// meridian host starts a worker without it. What a login script prints
+// first is skipped: the protocol's messages are JSON objects, a line each.
 //
 // meridian host that ends without a message, saying why on its standard
 // error, as meridian says a problem before it runs a command, as one with
@@ -165,33 +151,18 @@ func call(ctx context.Context, conn *sshconn.Conn, path, host, op string, req *h
 			err = &unsentError{err}
 		}
 	}()
-	s, err := conn.NewSession(ctx)
+	sc, err := conn.Script(ctx, "unset GODEBUG; exec "+sshconn.Quote(path)+" host "+op)
 	if err != nil {
 		return nil, err
 	}
-	defer s.Close()
-	stdin, err := s.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdout, err := s.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	stderr := &limitedBuffer{max: maxSaid}
-	s.Stderr = stderr
-	if err := s.Start("/bin/sh -s"); err != nil {
-		return nil, err
-	}
-	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
-	defer stop()
+	defer sc.Close()
 	failed := func(err error) (*hostproto.Message, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		// What it said is whole once it has ended.
-		settle(s)
-		said := stderr.String()
+		sc.Settle()
+		said := sc.Stderr()
 		if line := helperLine(said); line != "" {
 			return nil, problems.SSHHostHelperFailed.Problem(problems.Params{"host": host, "op": op, "reason": line})
 		}
@@ -200,11 +171,7 @@ func call(ctx context.Context, conn *sshconn.Conn, path, host, op string, req *h
 		}
 		return nil, fmt.Errorf("ssh: meridian host %s: %w", op, err)
 	}
-	if _, err := io.WriteString(stdin, "unset GODEBUG; exec "+shQuote(path)+" host "+op+"\n"); err != nil {
-		return failed(err)
-	}
-	r := bufio.NewReaderSize(stdout, 64<<10)
-	ready, err := readMessage(r)
+	ready, err := readMessage(sc)
 	if err != nil {
 		return failed(err)
 	}
@@ -221,16 +188,16 @@ func call(ctx context.Context, conn *sshconn.Conn, path, host, op string, req *h
 		return nil, err
 	}
 	sent = true
-	if _, err := stdin.Write(append(data, '\n')); err != nil {
+	if _, err := sc.Write(append(data, '\n')); err != nil {
 		return failed(err)
 	}
-	_ = stdin.Close()
-	m, err := readMessage(r)
+	_ = sc.CloseWrite()
+	m, err := readMessage(sc)
 	if err != nil {
 		return failed(err)
 	}
 	// It exits 2 for a problem or an error, which m says.
-	settle(s)
+	sc.Settle()
 	switch {
 	case m.Problem != nil:
 		return m, m.Problem
@@ -238,29 +205,6 @@ func call(ctx context.Context, conn *sshconn.Conn, path, host, op string, req *h
 		return m, fmt.Errorf("ssh: meridian host %s: %s", op, problems.EscapeControl(m.Error))
 	}
 	return m, nil
-}
-
-// settleTime is how long call waits for meridian host to end once it
-// has read what it says.
-const settleTime = 5 * time.Second
-
-// settle waits for the session's command to end, for a while
-// (settleTime): a command that holds its standard output and error open
-// longer is ended with the session.
-func settle(s *sshconn.Session) {
-	done := make(chan struct{})
-	go func() {
-		_ = s.Wait()
-		close(done)
-	}()
-	timer := time.NewTimer(settleTime)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-		_ = s.Close()
-		<-done
-	}
 }
 
 // An unsentError is an error of call's before it wrote its request, or of
@@ -296,75 +240,12 @@ func helperLine(said string) string {
 	return problems.EscapeControl(last)
 }
 
-// readMessage reads lines until one is a message of meridian host's: a
-// JSON object of the protocol's, whose protocol isn't 0. A line that isn't,
-// as a login script's, is skipped.
-func readMessage(r *bufio.Reader) (*hostproto.Message, error) {
-	for {
-		line, err := readLine(r)
-		if err != nil {
-			return nil, err
-		}
-		if !bytes.HasPrefix(line, []byte("{")) {
-			continue
-		}
-		var m hostproto.Message
-		if jsonv2.Unmarshal(line, &m) == nil && m.Protocol != 0 {
-			return &m, nil
-		}
+// readMessage reads what meridian host says until it is a message of its
+// protocol's: a JSON object whose protocol isn't 0 (sshconn.Next).
+func readMessage(sc *sshconn.Script) (*hostproto.Message, error) {
+	m, err := sshconn.Next(sc, func(m *hostproto.Message) bool { return m.Protocol != 0 })
+	if errors.Is(err, io.EOF) {
+		return nil, errors.New("it ended without a message")
 	}
-}
-
-// readLine reads a line, without its white space, at most maxMessage
-// bytes of it.
-func readLine(r *bufio.Reader) ([]byte, error) {
-	var line []byte
-	for {
-		chunk, err := r.ReadSlice('\n')
-		line = append(line, chunk...)
-		if len(line) > maxMessage {
-			return nil, errors.New("it wrote a line longer than a message can be")
-		}
-		switch {
-		case err == nil:
-			return bytes.TrimSpace(line), nil
-		case errors.Is(err, bufio.ErrBufferFull):
-			continue
-		case errors.Is(err, io.EOF) && len(bytes.TrimSpace(line)) > 0:
-			return bytes.TrimSpace(line), nil
-		case errors.Is(err, io.EOF):
-			return nil, errors.New("it ended without a message")
-		default:
-			return nil, err
-		}
-	}
-}
-
-// shQuote quotes s for sh: in single quotes, each single quote in it
-// ending them, escaped with a backslash, and starting them again.
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// A limitedBuffer keeps the first max bytes written to it, and takes the
-// rest without keeping it.
-type limitedBuffer struct {
-	mu  sync.Mutex
-	b   bytes.Buffer
-	max int
-}
-
-func (l *limitedBuffer) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if room := l.max - l.b.Len(); room > 0 {
-		l.b.Write(p[:min(len(p), room)])
-	}
-	return len(p), nil
-}
-
-func (l *limitedBuffer) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.String()
+	return m, err
 }

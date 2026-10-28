@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -52,6 +53,9 @@ type Options struct {
 	// (direct-tcpip), as a jump host that stalls once its handshake is
 	// done.
 	HoldForwards bool
+	// Sh runs a command that starts with /bin/sh in its place, as on a
+	// host whose sh is another, or the system's for "".
+	Sh string
 }
 
 // A Server is an SSH server on the loopback interface.
@@ -71,8 +75,10 @@ type Server struct {
 	// connection, which loggedIn holds by its session's ID.
 	logins   []string
 	loggedIn map[string]bool
-	// commands are the exec requests' commands, in order.
+	// commands are the exec requests' commands, in order, and scripts
+	// the first lines the commands read (Scripts).
 	commands []string
+	scripts  []string
 	// open is how many sessions are open (OpenSessions).
 	open int
 	// env is added to the environment of exec requests after
@@ -161,6 +167,15 @@ func (s *Server) Commands() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.commands...)
+}
+
+// Scripts are the first lines that the commands of the exec requests the
+// server has run read on their standard input, as /bin/sh -s reads its
+// script, in the order the server read them.
+func (s *Server) Scripts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.scripts...)
 }
 
 // OpenSessions is how many sessions are open, of every connection's: those
@@ -490,7 +505,11 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		s.commands = append(s.commands, p.Command)
 		env := slices.Concat(os.Environ(), s.opts.Env, s.env)
 		s.mu.Unlock()
-		cmd := exec.Command("sh", "-c", p.Command) //nolint:gosec,noctx // a test's command, run as the test's user, as sshd runs it
+		command := p.Command
+		if rest, ok := strings.CutPrefix(command, "/bin/sh "); ok && s.opts.Sh != "" {
+			command = s.opts.Sh + " " + rest
+		}
+		cmd := exec.Command("sh", "-c", command) //nolint:gosec,noctx // a test's command, run as the test's user, as sshd runs it
 		cmd.Env = env
 		cmd.Stdout, cmd.Stderr = ch, ch.Stderr()
 		// As with sshd, the session ends with its command, whether or not
@@ -502,7 +521,7 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		}
 		if err == nil {
 			go func() {
-				_, _ = io.Copy(stdin, ch)
+				_, _ = io.Copy(stdin, &firstLine{r: ch, s: s})
 				_ = stdin.Close()
 			}()
 			err = cmd.Wait()
@@ -517,6 +536,31 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		_, _ = ch.SendRequest("exit-status", false, binary.BigEndian.AppendUint32(nil, uint32(status))) //nolint:gosec // an exit status
 		return
 	}
+}
+
+// A firstLine reads r, and records the first line it reads in the
+// server's scripts, once it has read all of it.
+type firstLine struct {
+	r    io.Reader
+	s    *Server
+	line []byte
+	done bool
+}
+
+func (f *firstLine) Read(p []byte) (int, error) {
+	n, err := f.r.Read(p)
+	if !f.done {
+		i := bytes.IndexByte(p[:n], '\n')
+		if i < 0 {
+			f.line = append(f.line, p[:n]...)
+		} else {
+			f.line, f.done = append(f.line, p[:i]...), true
+			f.s.mu.Lock()
+			f.s.scripts = append(f.s.scripts, string(f.line))
+			f.s.mu.Unlock()
+		}
+	}
+	return n, err
 }
 
 // pipe copies between a channel and a connection until either ends.

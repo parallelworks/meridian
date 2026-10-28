@@ -9,6 +9,7 @@ import (
 	"crypto/fips140"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -141,7 +142,7 @@ func (h *home) server(opts sshtest.Options) *sshtest.Server {
 // run runs a command on c, and returns what it wrote.
 func run(t *testing.T, c *sshconn.Conn, command string) string {
 	t.Helper()
-	s, err := c.NewSession(t.Context())
+	s, err := sshconn.NewSession(t.Context(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -849,6 +850,97 @@ func TestDialTimeout(t *testing.T) {
 	}
 }
 
+// TestScript checks a script that sh runs on a host: what isn't a JSON
+// object the caller takes, as a login script's lines, is skipped; what
+// the caller writes once the script says it is ready reaches its
+// commands; a value quoted for sh comes through as it is; one that fails
+// is an error, with what it wrote on its standard error; and one whose
+// context ends is closed.
+func TestScript(t *testing.T) {
+	requireSSH(t)
+	h := newHome(t)
+	s := h.server(sshtest.Options{})
+	h.knownHosts(s.KnownHosts(""))
+	c := dial(t, h.dialer(), sshconn.Target{Host: s.Addr()})
+	type said struct {
+		N int    `json:"n"`
+		X string `json:"x"`
+		V string `json:"v"`
+	}
+	ours := func(m *said) bool { return m.N > 0 }
+	value := "it's $HOME and `id`; \\"
+	sc, err := c.Script(t.Context(), `echo Welcome; echo '{"n":0}'; echo '{"n":1,'; printf '{"n":1}\n'; IFS= read -r x; `+
+		`printf '{"n":2,"x":"%s"}\n' "$x"; printf '%s' `+sshconn.Quote(value)+` > v; printf '{"n":3,"v":"%s"}\n' "$(od -An -tx1 < v | tr -d ' \n')"; rm -f v`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Close()
+	if m, err := sshconn.Next(sc, ours); err != nil || m.N != 1 {
+		t.Fatalf("the script first said %+v, %v", m, err)
+	}
+	if _, err := sc.Write([]byte("hello\n")); err != nil {
+		t.Fatal(err)
+	}
+	_ = sc.CloseWrite()
+	if m, err := sshconn.Next(sc, ours); err != nil || m.N != 2 || m.X != "hello" {
+		t.Errorf("after what was written, the script said %+v, %v", m, err)
+	}
+	if m, err := sshconn.Next(sc, ours); err != nil || m.N != 3 || m.V != hex.EncodeToString([]byte(value)) {
+		t.Errorf("the value quoted for sh came through as %+v, %v", m, err)
+	}
+	if m, err := sshconn.Next(sc, ours); !errors.Is(err, io.EOF) {
+		t.Errorf("after its end, the script said %+v, %v", m, err)
+	}
+	if err := sc.Wait(); err != nil {
+		t.Errorf("the script ended with %v", err)
+	}
+
+	failed, err := c.Script(t.Context(), "echo oops >&2; exit 3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer failed.Close()
+	_ = failed.CloseWrite()
+	if _, err := sshconn.Next(failed, ours); !errors.Is(err, io.EOF) {
+		t.Errorf("a script that said nothing gave %v", err)
+	}
+	var exit *ssh.ExitError
+	if err := failed.Wait(); !errors.As(err, &exit) || exit.ExitStatus() != 3 || strings.TrimSpace(failed.Stderr()) != "oops" {
+		t.Errorf("a script that exited 3 gave %v, and wrote %q", err, failed.Stderr())
+	}
+
+	if _, err := c.Script(t.Context(), "echo 'a\x00b'"); err == nil {
+		t.Error("a script that holds NUL ran")
+	}
+
+	// One that writes more than the session takes unread ends, as one whose
+	// login script prints much does.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	loud, err := c.Script(ctx, "head -c 4194304 /dev/zero | tr '\\0' a; echo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loud.Close()
+	_ = loud.CloseWrite()
+	if err := loud.Wait(); err != nil {
+		t.Errorf("a script that wrote 4 MiB nobody read gave %v", err)
+	}
+
+	ctx, cancel = context.WithCancel(t.Context())
+	// It waits for what it is never written.
+	slow, err := c.Script(ctx, "read x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slow.Close()
+	start := time.Now()
+	cancel()
+	if err := slow.Wait(); !errors.Is(err, context.Canceled) || time.Since(start) > 10*time.Second {
+		t.Errorf("a script whose context ended gave %v after %v", err, time.Since(start))
+	}
+}
+
 // TestPoolCloseWaits checks that a pool's Close ends the dials going on,
 // as one whose ssh -G hangs, and returns once they have ended.
 func TestPoolCloseWaits(t *testing.T) {
@@ -908,21 +1000,21 @@ func TestSessions(t *testing.T) {
 	d := h.dialer()
 	d.Sessions = 2
 	c := dial(t, d, sshconn.Target{Host: s.Addr()})
-	a, err := c.NewSession(t.Context())
+	a, err := sshconn.NewSession(t.Context(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := c.NewSession(t.Context())
+	b, err := sshconn.NewSession(t.Context(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := c.NewSession(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := sshconn.NewSession(ctx, c); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("a third session gave %v, want to wait", err)
 	}
 	_ = a.Close()
-	third, err := c.NewSession(t.Context())
+	third, err := sshconn.NewSession(t.Context(), c)
 	if err != nil {
 		t.Fatalf("a session once one closed: %v", err)
 	}
@@ -936,7 +1028,7 @@ func TestSessions(t *testing.T) {
 	s.RefuseSessions(-1)
 	ctx, cancel = context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
-	if _, err := c.NewSession(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := sshconn.NewSession(ctx, c); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("a session the host keeps refusing gave %v", err)
 	}
 	if c.Err() != nil {
@@ -960,12 +1052,12 @@ func TestSessionUnanswered(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := c.NewSession(ctx); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 10*time.Second {
+	if _, err := sshconn.NewSession(ctx, c); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 10*time.Second {
 		t.Errorf("a session the host doesn't answer gave %v after %v", err, time.Since(start))
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.NewSession(context.WithoutCancel(t.Context()))
+		_, err := sshconn.NewSession(context.WithoutCancel(t.Context()), c)
 		done <- err
 	}()
 	_ = c.Close()
@@ -995,11 +1087,11 @@ func TestSessionAbandoned(t *testing.T) {
 	s.Stall()
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
-	if _, err := c.NewSession(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := sshconn.NewSession(ctx, c); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a session the host doesn't answer gave %v", err)
 	}
 	s.Resume()
-	next, err := c.NewSession(t.Context())
+	next, err := sshconn.NewSession(t.Context(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
