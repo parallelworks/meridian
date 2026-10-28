@@ -98,6 +98,7 @@ func bodies() []any {
 			Env:    map[string]workerapi.EnvVar{"PW_USER": {Value: "u"}, "PW_API_KEY": {Value: "k", Secret: true}},
 			Retry:  2, Container: &workerapi.Container{Runtime: "podman", Image: "ghcr.io/parallelworks/meridian-base@sha256:00"},
 			Control: &workerapi.Control{Version: 3, AnyJobFailed: true},
+			Tree:    &workerapi.Tree{JobID: "3", RootDir: "/runs/3", WorkflowName: "github.acme.tools", Masked: []string{"s3cr"}},
 		},
 		&workerapi.Control{Version: 2, Cancel: true, Reason: plan.ReasonCancelled, GraceSeconds: 10},
 		&workerapi.Events{},
@@ -123,6 +124,13 @@ func bodies() []any {
 		&workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled, Reason: plan.ReasonFailFast},
 		// The last of a type is the one TestUnmarshalRefuses changes.
 		&workerapi.ActionAnswer{Outcome: plan.OutcomeFailure, Diagnostics: problems.Diagnostics{diag}},
+		&workerapi.ChildRequest{
+			Step: 1, Try: 2, With: plan.DataOf(map[string]any{"region": "east", "n": int64(big)}), Env: map[string]string{"STAGE": "prod"},
+			WithPrivate: []string{"region"}, WithSecrets: []string{"key"}, EnvPrivate: []string{"STAGE"}, EnvSecrets: []string{"TOKEN"},
+			Masked: []string{"s3cr"}, WorkingDirectory: "work",
+		},
+		&workerapi.Child{Run: "7", Ended: true, Outcome: plan.OutcomeCancelled, Reason: plan.ReasonTimeout, Diagnostics: problems.Diagnostics{diag}},
+		&workerapi.ChildStop{Step: 1, Try: 2, Reason: plan.ReasonCancelled},
 	}
 }
 

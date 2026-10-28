@@ -61,6 +61,9 @@ func TestBodiesAreVersioned(t *testing.T) {
 		workerapi.Complete{},
 		workerapi.ActionRequest{},
 		workerapi.ActionAnswer{},
+		workerapi.ChildRequest{},
+		workerapi.Child{},
+		workerapi.ChildStop{},
 	} {
 		walk(reflect.TypeOf(body))
 	}

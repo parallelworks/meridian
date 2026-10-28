@@ -388,6 +388,19 @@ func parentActs(tx *store.Tx, run, name string, outcome plan.Outcome) (bool, err
 type controlNotifier interface {
 	Notify(ids ...string)
 	Placed(ids ...string)
+	Ended(ids ...string)
+}
+
+// runsEnded tells the coordinator's controlNotifier, if it has one, that
+// the runs ids ended, which answers the polls for their ends as children
+// that it holds (store.Options.OnRunsEnded).
+func (c *Coordinator) runsEnded(ids []string) {
+	c.mu.Lock()
+	n := c.controls
+	c.mu.Unlock()
+	if n != nil {
+		n.Ended(ids...)
+	}
 }
 
 // controlsChanged tells the coordinator's controlNotifier, if it has one,

@@ -3,11 +3,13 @@ package workerapisrv_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,6 +108,9 @@ func fakeJobID() hopper.JobID {
 type fakeReadier struct {
 	mu   sync.Mutex
 	runs map[string]*workerapisrv.Ready
+	// needs is the oldest version of the worker API each attempt needs:
+	// 1 for 0.
+	needs int
 }
 
 func (f *fakeReadier) set(run string, r *workerapisrv.Ready) {
@@ -129,6 +134,96 @@ func (f *fakeReadier) get(run string) (*workerapisrv.Ready, error) {
 
 func (f *fakeReadier) ReadyAttempt(_ context.Context, run *store.Run, _ *store.Attempt) (*workerapisrv.Ready, error) {
 	return f.get(run.ID)
+}
+
+func (f *fakeReadier) Needs(context.Context, *store.Run, *store.Attempt) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return max(f.needs, 1), nil
+}
+
+// rigChildren are a rig's workerapisrv.Children: each child a step asks
+// for is a run of the rig's store, linked to the step's try, as the
+// coordinator's are, and its stops are kept, by the attempt that asked.
+type rigChildren struct {
+	r *rig
+
+	mu    sync.Mutex
+	stops map[string][]workerapi.ChildStop
+}
+
+func (k *rigChildren) Child(ctx context.Context, run *store.Run, a *store.Attempt, req *workerapi.ChildRequest) (*workerapi.Child, error) {
+	ready, err := k.r.readier.get(run.ID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Step >= len(ready.Job.Steps) {
+		return nil, fmt.Errorf("%w: step %d", workerapisrv.ErrNotChild, req.Step)
+	}
+	c := created(k.r.t)
+	var id string
+	err = k.r.store.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		if id, err = tx.Child(a.ID, req.Step, req.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		now, err := tx.Attempt(a.ID)
+		if err != nil {
+			return err
+		}
+		if !now.Holds {
+			return store.ErrFenced
+		}
+		if id, err = tx.NewRunID(); err != nil {
+			return err
+		}
+		return tx.InsertRun(store.NewRun{
+			ID: id, Plan: c.Plan, DefaultGroup: "local", RunDir: "/runs/" + id, WorkflowID: fakeJobID(),
+			Parent: &store.Link{Run: run.ID, Job: a.Job, Attempt: a.ID, Step: req.Step, Try: req.Try, Root: run.ID, Depth: 1},
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &workerapi.Child{Run: id}, nil
+}
+
+// StopChild keeps the stop, by the attempt whose step's child id is.
+func (k *rigChildren) StopChild(ctx context.Context, id string, reason plan.Reason) error {
+	var r *store.Run
+	if err := k.r.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		r, err = tx.Run(id)
+		return err
+	}); err != nil {
+		return err
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.stops == nil {
+		k.stops = map[string][]workerapi.ChildStop{}
+	}
+	k.stops[r.Parent.Attempt] = append(k.stops[r.Parent.Attempt], workerapi.ChildStop{Step: r.Parent.Step, Try: r.Parent.Try, Reason: reason})
+	return nil
+}
+
+// end ends the child of the step's try of the attempt, with outcome, and
+// tells the rig's servers.
+func (k *rigChildren) end(attempt string, step, try int, outcome plan.Outcome) {
+	var id string
+	k.r.inTx(func(tx *store.Tx) error {
+		var err error
+		if id, err = tx.Child(attempt, step, try); err != nil {
+			return err
+		}
+		return tx.EndRun(id, outcome, "")
+	})
+	k.r.mu.Lock()
+	servers := slices.Clone(k.r.servers)
+	k.r.mu.Unlock()
+	for _, s := range servers {
+		s.Ended(id)
+	}
 }
 
 func (f *fakeReadier) Steps(_ context.Context, run *store.Run, _ *store.Attempt) (int, error) {
@@ -202,18 +297,21 @@ func (f *fakeActions) times() int {
 
 // A rig is a store, and a server of it on a socket of its own.
 type rig struct {
-	t       testing.TB
-	store   *store.Store
-	path    string
-	sealer  *seal.Sealer
-	readier *fakeReadier
-	actions *fakeActions
-	logs    *runlogtest.Logs
-	server  *workerapisrv.Server
-	socket  string
+	t        testing.TB
+	store    *store.Store
+	path     string
+	sealer   *seal.Sealer
+	readier  *fakeReadier
+	actions  *fakeActions
+	children *rigChildren
+	logs     *runlogtest.Logs
+	server   *workerapisrv.Server
+	socket   string
 
 	mu    sync.Mutex
 	woken []string
+	// servers are the rig's servers, the first and each other replica.
+	servers []*workerapisrv.Server
 }
 
 // rigOptions change the rig's server.
@@ -253,6 +351,7 @@ func newRig(t testing.TB, opts rigOptions) *rig {
 	}
 	readier := &fakeReadier{}
 	r := &rig{t: t, store: s, path: path, sealer: sealer, readier: readier, actions: &fakeActions{readier: readier}, logs: &runlogtest.Logs{}}
+	r.children = &rigChildren{r: r}
 	r.server = r.serve(opts)
 	first.Store(r.server)
 	return r
@@ -263,7 +362,8 @@ func newRig(t testing.TB, opts rigOptions) *rig {
 func (r *rig) serve(opts rigOptions) *workerapisrv.Server {
 	r.t.Helper()
 	srv, err := workerapisrv.New(workerapisrv.Options{
-		Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Actions: r.actions, Peers: opts.peers, MaxConnections: opts.maxConns,
+		Store: r.store, Logs: r.logs, Sealer: r.sealer, Readier: r.readier, Actions: r.actions, Children: r.children,
+		Peers: opts.peers, MaxConnections: opts.maxConns,
 		Wake: func(_ context.Context, _ *store.Tx, run, job string) (func(), error) {
 			return func() {
 				r.mu.Lock()
@@ -286,6 +386,9 @@ func (r *rig) serve(opts rigOptions) *workerapisrv.Server {
 	if opts.configure != nil {
 		opts.configure(srv)
 	}
+	r.mu.Lock()
+	r.servers = append(r.servers, srv)
+	r.mu.Unlock()
 	socket := listen(r.t, srv)
 	if r.socket == "" {
 		r.socket = socket

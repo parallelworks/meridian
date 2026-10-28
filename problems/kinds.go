@@ -167,6 +167,7 @@ var (
 	// and dir the child's directory.
 	ChildNotPinned  = define(Error, "child_not_pinned", "Called workflow not pinned with its run's tree", "uses")
 	ChildDirOutside = define(Error, "child_dir_outside", "Called workflow's directory outside its root run's", "dir")
+	ChildNotCreated = define(Error, "child_not_created", "Called workflow's run not created")
 )
 
 // A workflow's jobs.

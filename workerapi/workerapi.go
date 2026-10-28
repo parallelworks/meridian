@@ -116,7 +116,8 @@
 // attempt's end once: repeating it with the same report changes nothing,
 // and a different one is refused, as Fenced. So does an ActionRequest, by
 // its step and try: the coordinator performs the action once, and gives a
-// repeat the same answer.
+// repeat the same answer. A ChildRequest makes a step's try's child run
+// once: repeating it is answered with the same child.
 //
 // # Errors
 //
@@ -130,11 +131,12 @@
 // are events with a member the attempt's version doesn't have, as LastTry
 // in an attempt of version 1, and an ActionRequest of a step that uses no
 // action the coordinator performs. A log upload of more than MaxLogUpload
-// bytes, or an ActionRequest of more than MaxActionRequest, is 413 Content
-// Too Large. A path the API doesn't have is 404, as is a path a later
-// version adds, of an attempt of an earlier one; and one of its paths with
-// another method is 405, with an Allow header. The suite in package
-// workerapitest checks a coordinator against all of this.
+// bytes, an ActionRequest of more than MaxActionRequest, or a ChildRequest
+// of more than MaxChildRequest, is 413 Content Too Large. A path the API
+// doesn't have is 404, as is a path a later version adds, of an attempt of
+// an earlier one; and one of its paths with another method is 405, with an
+// Allow header. The suite in package workerapitest checks a coordinator
+// against all of this.
 //
 // While the coordinator can't be reached, a worker keeps running its
 // steps, spools its logs to disk up to a limit, keeps its events in
@@ -144,10 +146,15 @@
 // and waits until the coordinator has stored it, so whether the workflow's
 // code may have run is always known.
 //
-// Child runs, through which a step runs a workflow its uses: names, aren't
-// defined yet: the Sources resolver pins and reads such a workflow, and
-// the requests that start its run and wait for it come with the
-// coordinator.
+// # Child runs
+//
+// A step whose uses: names a workflow runs it as a run of its own, a
+// child of the step's try, which the coordinator creates and runs as it
+// runs any (docs/design.md, Workflows a step calls). In an attempt of
+// version 3 or later, the step's worker asks for it (PathChild), waits for
+// it to end (PathChildEnd), and stops it when the step is stopped
+// (PathChildStop); and a child run's attempt is told what it has of its
+// tree (Claim.Tree).
 package workerapi
 
 import (
@@ -175,9 +182,14 @@ const Version2 = 2
 
 // Version3 is the version of the API that added PathAction, through which
 // a step that uses a built-in action the coordinator performs asks it for
-// that action (ActionRequest, ActionAnswer). A worker asks only in an
-// attempt of version 3 or later, and the coordinator answers the path for
-// another as one the API doesn't have, 404.
+// that action (ActionRequest, ActionAnswer); and child runs: PathChild,
+// PathChildEnd and PathChildStop, through which a step whose uses: names a
+// workflow asks for the run of it, waits for it and stops it (ChildRequest,
+// Child, ChildStop), and Claim.Tree, what a child run's attempt has of its
+// tree. A worker asks only in an attempt of version 3 or later, and the
+// coordinator answers the paths for another as ones the API doesn't have,
+// 404. An attempt whose job has a step whose uses: names a workflow, or of
+// a child run, needs version 3 (WorkerAPITooOld).
 const Version3 = 3
 
 // Marshal encodes a body as the API writes it: encoding/json/v2's
@@ -239,6 +251,18 @@ const (
 	// uses, which the coordinator performs: ActionRequest, answered with an
 	// ActionAnswer. It is of version 3 (Version3).
 	PathAction = "/v1/action"
+	// PathChild asks for the child run of a step's try whose uses: names a
+	// workflow: ChildRequest, answered with a Child. It is of version 3.
+	PathChild = "/v1/child"
+	// PathChildEnd is a long poll for the end of the child run of a step's
+	// try, named in its query (QueryStep, QueryTry): answered with its
+	// Child once it has ended, or after ControlWaitSeconds as it is, and
+	// the worker polls again. It is of version 3.
+	PathChildEnd = "/v1/child/end"
+	// PathChildStop stops the child run of a step's try: ChildStop,
+	// answered with 204 No Content once the child's stop is stored. It is
+	// of version 3.
+	PathChildStop = "/v1/child/stop"
 )
 
 // ControlWaitSeconds is the longest the coordinator holds a control poll
@@ -252,6 +276,10 @@ const MaxLogUpload = 1 << 20
 // with:, as Step evaluated it, can hold its job's needs' outputs, each up
 // to 1 MiB.
 const MaxActionRequest = 4 << 20
+
+// MaxChildRequest is the most bytes a ChildRequest takes, for the same
+// reason as MaxActionRequest.
+const MaxChildRequest = 4 << 20
 
 // The query parameters of PathControl and PathLogs.
 const (
@@ -491,6 +519,34 @@ type Claim struct {
 	// worker does as it asks before anything of the job runs, and polls
 	// for what comes after it (PathControl).
 	Control *Control `json:"control,omitzero"`
+	// Tree is what an attempt of a child run has of its tree, in an
+	// attempt of version 3 or later, which such an attempt needs; nil for
+	// a run no step called.
+	Tree *Tree `json:"tree,omitzero"`
+}
+
+// A Tree is what an attempt of a child run has of its tree (Claim.Tree):
+// its identity, which is its root's, as format 1 gives a child, and the
+// strings the worker of the step that called it masked. Every member is
+// of version 3.
+type Tree struct {
+	// JobID is the root run's ID, which the job's steps read as
+	// PW_JOB_ID; RootDir the root's run directory, PW_PARENT_JOB_DIR; and
+	// WorkflowName format 1's name for the call, PW_WORKFLOW_NAME
+	// (plan.SourceRef.CallName). The worker sets them as it sets its own,
+	// over the platform's (Env) for none of them, and PW_JOB_DIR is the
+	// child's own directory (RunDir).
+	JobID        string `json:"jobID,omitzero"`
+	RootDir      string `json:"rootDir,omitzero"`
+	WorkflowName string `json:"workflowName,omitzero"`
+	// Masked are the strings the worker of the step that called the run
+	// masked for the step (plan.Inherited.Masked): its run's secrets', and
+	// what its job and step made from one. The worker counts each as the
+	// text of a secret that doesn't come from the run, as it counts a
+	// secret Env gives (plan.JobState.Secrets), in each of the job's
+	// phases: it masks each in the job's logs and problems however short,
+	// and End names an output that holds one a secret.
+	Masked []string `json:"masked,omitzero"`
 }
 
 // An EnvVar is a variable a platform gives a job's steps (Claim.Env).
@@ -718,4 +774,96 @@ type ActionAnswer struct {
 	// Diagnostics are the action's problems: why it failed, and its
 	// warnings, at the step's path in the workflow and under it.
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitzero"`
+}
+
+// A ChildRequest asks for the child run of a step's try whose uses: names
+// a workflow (PathChild), of version 3: what the step's worker gives the
+// child of the step, as Step evaluated it for the try (plan.ReadyStep).
+// The coordinator reads which workflow it runs from the run's plan, at the
+// step, and never from the request, and so whether the step outlives its
+// job's cancellation, as its if: says (plan.OutlivesCancel).
+//
+// The coordinator makes a step's try's child once: a repeat of the request
+// is answered with the same child, whatever it holds. A request from an
+// attempt that no longer holds its job is refused, as Fenced, before
+// anything is made. A step that doesn't outlive its job's cancellation, of
+// an attempt whose control asks to cancel its job, for any reason but the
+// run's timeout, or of a run that was stopped, is answered with a child
+// that ended cancelled, without one made, as the worker would have stopped
+// the step had it read the control first; and so, with no reason, is a
+// step whose early-cancel: is any-job-failed, once a job of the run has
+// failed (Control.AnyJobFailed). A request of a step whose uses: names no
+// workflow, or of a try past the step's retry:, is 400.
+//
+// Every member is of version 3, and left out when it is zero.
+type ChildRequest struct {
+	// Step is the step's index in its job, from 0, and Try its try: 0 for
+	// its first run.
+	Step int `json:"step,omitzero"`
+	Try  int `json:"try,omitzero"`
+	// With is the step's with:, a mapping, which the child is submitted,
+	// but for its $yaml, $host and $thumbnail.
+	With plan.Data `json:"with,omitzero"`
+	// Env is the step's environment, which the child's env: is laid over:
+	// Step's (plan.ReadyStep.Env), with the variables the worker defines
+	// for the step that format 1 defines (plan.IsFormatVariable) over it,
+	// and never the step's process's own, which holds the platform's
+	// credential.
+	Env map[string]string `json:"env,omitzero"`
+	// WithPrivate, WithSecrets, EnvPrivate and EnvSecrets name what of With
+	// and Env Step made from a variable or a password but no secret, and
+	// from a secret (plan.ReadyStep): the child keeps them out of its plan,
+	// and masks those made from a secret.
+	WithPrivate []string `json:"withPrivate,omitzero"`
+	WithSecrets []string `json:"withSecrets,omitzero"`
+	EnvPrivate  []string `json:"envPrivate,omitzero"`
+	EnvSecrets  []string `json:"envSecrets,omitzero"`
+	// Masked are the strings the worker masks for the step: its run's
+	// secrets', and what its job and step made from one, which the child's
+	// jobs mask too (Tree.Masked).
+	Masked []string `json:"masked,omitzero"`
+	// WorkingDirectory is the step's working directory, as Step gave it
+	// (plan.ReadyStep.WorkingDirectory): "" for its run's directory, or a
+	// path relative to it, or absolute. The child's directory is
+	// subworkflows/<job>/step_<n> in it.
+	WorkingDirectory string `json:"workingDirectory,omitzero"`
+}
+
+// A Child is the child run of a step's try, as it is (PathChild,
+// PathChildEnd). Every member is of version 3.
+type Child struct {
+	// Run is the child run's ID, or "" for a child that wasn't made: one
+	// whose Create failed, or that its step's job's cancel kept from being
+	// made.
+	Run string `json:"run,omitzero"`
+	// Ended is set once the child has ended, with how: Outcome is the
+	// child run's (success, failure or cancelled), and Reason why it ended
+	// other than as its jobs did. The worker maps it to the step's end, as
+	// docs/design.md says under Workflows a step calls: a child it stopped
+	// ends its step cancelled, whatever its outcome. One that wasn't made
+	// has ended, failure, with why in Diagnostics, or cancelled, with the
+	// cancel's Reason, or with none for the step's early-cancel:.
+	Ended   bool         `json:"ended,omitzero"`
+	Outcome plan.Outcome `json:"outcome,omitzero"`
+	Reason  plan.Reason  `json:"reason,omitzero"`
+	// Diagnostics are why a child that wasn't made wasn't: its own
+	// problems, as its Create gave them, or the coordinator's, at the
+	// step's uses:, which the worker reports as the step's, masked as the
+	// step's are.
+	Diagnostics problems.Diagnostics `json:"diagnostics,omitzero"`
+}
+
+// A ChildStop stops the child run of a step's try (PathChildStop), as the
+// step is stopped: the run's or its job's cancel, a timeout, or its
+// early-cancel:. The coordinator stops the child as a person's cancel
+// does, for Reason, and the worker keeps waiting for its end
+// (PathChildEnd), so the step ends after the child's cleanups. Stopping a
+// child that has ended, or was stopped already, changes nothing. Every
+// member is of version 3.
+type ChildStop struct {
+	Step int `json:"step,omitzero"`
+	Try  int `json:"try,omitzero"`
+	// Reason is cancelled, or timeout for the step's own, its try's, its
+	// job's or its run's.
+	Reason plan.Reason `json:"reason,omitzero"`
 }

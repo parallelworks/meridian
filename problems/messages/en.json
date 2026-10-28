@@ -283,6 +283,7 @@
   "workflows_too_large": "The workflows the run calls hold more than {max} bytes of text in all, as much as a run's can.",
   "child_not_pinned": "The step calls {uses}, which wasn't pinned and kept with its run's tree: the run was created by a release that didn't pin a run's whole tree.",
   "child_dir_outside": "The step's working directory puts the run it calls in {dir}, which isn't in its root run's directory.",
+  "child_not_created": "The run of the workflow this step calls wasn't created: its problems follow.",
   "owner_unmapped": "Meridian can't check {path}: the owner of {dir}, on the way to it, is hidden by a user namespace, so Meridian can't tell that no other user can change it.",
   "owner_unknown": "Meridian can't tell who owns {path}, so it can't tell that no other user can change it.",
   "directory_replaced": "The directory {path} was replaced as the worker made it, so the worker doesn't use it.",
