@@ -48,6 +48,10 @@ type Options struct {
 	// NoForwarding refuses to forward Unix sockets, as sshd's
 	// AllowStreamLocalForwarding no does.
 	NoForwarding bool
+	// HoldForwards never answers a request to forward a TCP connection
+	// (direct-tcpip), as a jump host that stalls once its handshake is
+	// done.
+	HoldForwards bool
 }
 
 // A Server is an SSH server on the loopback interface.
@@ -325,6 +329,9 @@ func (s *Server) serve(c net.Conn) {
 				s.session(ch, reqs)
 			})
 		case "direct-tcpip":
+			if s.opts.HoldForwards {
+				continue
+			}
 			var p struct {
 				Host       string
 				Port       uint32

@@ -406,18 +406,22 @@ func (tx *Tx) Wake(run, key string) (*Job, error) {
 }
 
 // PlaceTried records that a backend couldn't answer as the run's job was
-// placed, and returns how many times in a row one hasn't, which choosing
-// where its next attempt is placed (ChoosePlace), or counting it as a
-// failure (PlaceFailed), starts again from 0. A job that has ended is
-// ErrState.
-func (tx *Tx) PlaceTried(run, key string) (int, error) {
+// placed, by, times, as a look that couldn't counts once, and one that saw
+// failures to reach a member counts each (backend.Demand.Tries); and
+// returns how many times since one last did, which choosing where its
+// next attempt is placed (ChoosePlace), or counting it as a failure
+// (PlaceFailed), starts again from 0. A job that has ended is ErrState.
+func (tx *Tx) PlaceTried(run, key string, by int) (int, error) {
 	n, ok := runNumber(run)
 	if !ok {
 		return 0, ErrNotFound
 	}
+	if by < 1 {
+		return 0, fmt.Errorf("store: run %s's job %q tried %d times", run, key, by)
+	}
 	var tries int
-	err := tx.queryRow("UPDATE meridian_jobs SET place_tries = place_tries + 1 WHERE run_id = ? AND key = ? AND outcome IS NULL RETURNING place_tries",
-		n, key).Scan(&tries)
+	err := tx.queryRow("UPDATE meridian_jobs SET place_tries = place_tries + ? WHERE run_id = ? AND key = ? AND outcome IS NULL RETURNING place_tries",
+		by, n, key).Scan(&tries)
 	if errors.Is(err, sql.ErrNoRows) {
 		if _, err := tx.Job(run, key); err != nil {
 			return 0, err

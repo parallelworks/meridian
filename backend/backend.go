@@ -20,8 +20,10 @@ package backend
 import (
 	"context"
 	"encoding/json/jsontext"
+	"errors"
 	"io"
 	"net"
+	"time"
 
 	"github.com/parallelworks/foundation/problem"
 )
@@ -190,7 +192,43 @@ type Demand struct {
 	// can't release what a placement holds, as a batch scheduler's
 	// allocation, ignores them all.
 	Parked []string
+	// Tries is how many times, since the job was last placed, its
+	// placement found that a member's backend couldn't answer, as the
+	// coordinator counts them: a look that couldn't, once, or, for a
+	// member whose driver counts its failures to reach it (FailedError),
+	// each of those since the job's previous look. A driver that tries to
+	// reach a member as it probes it, as the ssh backend does, gives up on
+	// it for the job by this count, so that every job waiting on a member
+	// that doesn't answer gives up after as many failures as it has seen.
+	Tries int
 }
+
+// ErrNotYet is what a driver's Probe wraps for a member it hasn't tried
+// for the job, but will, as one it is reaching for another job, or one it
+// waits to try again after failing to: the coordinator asks again soon,
+// and doesn't count the look, but for the failures the driver says
+// happened since the job's previous look (FailedError).
+var ErrNotYet = errors.New("backend: the member hasn't been tried for the job yet")
+
+// A FailedError is a Probe's error for a member its driver hasn't reached
+// for the job, with how many times in all, for any job, the driver has
+// failed to reach the member, Failed, which only grows: a failed try counts
+// for every job that waits on the member. The coordinator counts the
+// job's look by the failures since the count its previous look saw
+// (Demand.Tries), or as one, where Err doesn't wrap ErrNotYet, and its
+// previous look saw none: the job's own try failed. RetryAt, where it
+// isn't zero, is when the driver tries the member again, which the
+// coordinator waits for before it asks again about a look it didn't
+// count.
+type FailedError struct {
+	Failed  int
+	RetryAt time.Time
+	Err     error
+}
+
+func (e *FailedError) Error() string { return e.Err.Error() }
+
+func (e *FailedError) Unwrap() error { return e.Err }
 
 // A Fit is what a member says of a job: whether it can run it, and how
 // soon.

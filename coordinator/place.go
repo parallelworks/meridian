@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
@@ -77,10 +79,14 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 	if err != nil {
 		return 0, err
 	}
-	fits, reasons, unanswered := c.rank(ctx, g, demand, private)
+	demand.Tries = job.PlaceTries
+	fits, reasons, look := c.rank(ctx, g, demand, private, seenKey(run.ID, job.Key))
 	if len(fits) == 0 {
-		if unanswered {
-			return c.unanswered(ctx, run, job, private, errors.New("a member's backend couldn't say whether it can run the job"))
+		switch {
+		case look.counted > 0:
+			return c.unansweredBy(ctx, run, job, private, look.counted, errors.New("a member's backend couldn't say whether it can run the job"))
+		case look.notYet:
+			return c.notYetWait(look.retryAt), nil
 		}
 		diags := append(problems.Diagnostics{diagnostic(problems.PlacementImpossible, problems.Params{"job": job.Key})}, reasons...)
 		return 0, c.endJob(ctx, run.ID, job.Key, store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: diags}, done)
@@ -130,6 +136,7 @@ func (c *Coordinator) placeJob(ctx context.Context, run *store.Run, job *store.J
 	if err != nil {
 		return 0, err
 	}
+	c.forgetSeen(run.ID, job.Key)
 	return c.placeAttempt(ctx, run, job, id, token, rj, chosen, private)
 }
 
@@ -400,6 +407,7 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		if err != nil {
 			return c.unanswered(ctx, run, job, private, err)
 		}
+		c.forgetSeen(run.ID, job.Key)
 		return c.recordPlacement(ctx, run.ID, a.ID, cand, p, key, private)
 	}
 	// Nothing was placed: once the run has stopped, the job is as one
@@ -416,11 +424,21 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	if err != nil {
 		return 0, err
 	}
+	demand.Tries = job.PlaceTries
 	if cand.fit, err = cand.driver.Probe(ctx, m, demand); err == nil && cand.fit.Problem != nil {
 		err = cand.fit.Problem
 	}
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
+		c.forgetSeen(run.ID, job.Key)
 		return 0, c.attemptSetupFailed(ctx, a.ID, prob)
+	}
+	if err != nil {
+		switch counted, notYet, retryAt := c.probeCounted(seenKey(run.ID, job.Key)+m.Name, err); {
+		case counted > 0:
+			return c.unansweredBy(ctx, run, job, private, counted, err)
+		case notYet:
+			return c.notYetWait(retryAt), nil
+		}
 	}
 	if err != nil {
 		return c.unanswered(ctx, run, job, private, err)
@@ -442,6 +460,7 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	if err != nil {
 		return 0, err
 	}
+	c.forgetSeen(run.ID, job.Key)
 	return c.placeAttempt(ctx, run, job, a.ID, token, rj, cand, private)
 }
 
@@ -575,35 +594,89 @@ func (c *Coordinator) withdrawals(ctx context.Context, run *store.Run, keys []st
 // cancelPlacements has the drivers of ws, placements by attempt, cancel
 // those of the attempts withdrawn, as far as they can: a placement that
 // wasn't recorded is found by its attempt first. One a driver couldn't
-// cancel is in the log, unless where it runs is private; its worker's
+// cancel now, as one on a host it can't reach for a while, it has the
+// driver cancel again in the background (cancelLater); its worker's
 // reports are refused all the same.
 func (c *Coordinator) cancelPlacements(ctx context.Context, run string, ws map[string]*withdrawal, withdrawn []string) {
 	for _, id := range withdrawn {
-		w := ws[id]
-		if w == nil {
-			continue
-		}
-		m, d, p := w.cand.member, w.cand.driver, w.placement
-		var err error
-		if p.ID == "" {
-			var found bool
-			if p, found, err = d.Find(ctx, m, id); err == nil && !found {
-				continue
+		if w := ws[id]; w != nil {
+			if err := c.cancelPlacement(ctx, id, w); err != nil {
+				c.cancelLater(ctx, run, id, w, err)
 			}
 		}
-		if err == nil {
-			err = d.Cancel(ctx, m, p)
+	}
+}
+
+// cancelPlacement has w's driver cancel the placement of the attempt id,
+// which it finds first if it wasn't recorded, and then forget it.
+func (c *Coordinator) cancelPlacement(ctx context.Context, id string, w *withdrawal) error {
+	m, d, p := w.cand.member, w.cand.driver, w.placement
+	if p.ID == "" {
+		var (
+			found bool
+			err   error
+		)
+		if p, found, err = d.Find(ctx, m, id); err != nil || !found {
+			return err
 		}
-		if err == nil {
-			c.mu.Lock()
-			c.unremember(id)
-			c.mu.Unlock()
-			c.forget(w.cand, p)
-		}
-		if err != nil && !w.private {
+	}
+	if err := d.Cancel(ctx, m, p); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.unremember(id)
+	c.mu.Unlock()
+	c.forget(w.cand, p)
+	return nil
+}
+
+// How a placement a driver couldn't cancel is cancelled again
+// (cancelLater): after cancelFirst, twice as long each time after, up to
+// cancelMost, for cancelFor in all.
+const (
+	cancelFirst = time.Second
+	cancelMost  = 30 * time.Second
+	cancelFor   = 5 * time.Minute
+)
+
+// cancelLater has w's driver cancel the placement of the attempt id of the
+// run again, in the background, while Serve runs, as forget has a driver
+// forget one: a driver that couldn't, as it answered err, as one whose
+// host is being reached again, can a moment later. Once it has tried for
+// cancelFor, the log says it couldn't, unless where the attempt runs is
+// private.
+func (c *Coordinator) cancelLater(ctx context.Context, run, id string, w *withdrawal, err error) {
+	failed := func(ctx context.Context, err error) {
+		if !w.private {
 			c.log.WarnContext(ctx, "coordinator: couldn't cancel the placement of an attempt it withdrew; its worker's reports are refused", "run", run, "attempt", id, "error", err)
 		}
 	}
+	c.mu.Lock()
+	later := c.forgetCtx
+	if later != nil {
+		c.forgetting.Add(1)
+	}
+	c.mu.Unlock()
+	if later == nil {
+		failed(ctx, err)
+		return
+	}
+	ctx = later
+	go func() {
+		defer c.forgetting.Done()
+		deadline := time.Now().Add(cancelFor)
+		for wait := cancelFirst; time.Now().Add(wait).Before(deadline); wait = min(2*wait, cancelMost) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			if err = c.cancelPlacement(ctx, id, w); err == nil {
+				return
+			}
+		}
+		failed(ctx, err)
+	}()
 }
 
 // unanswered handles cause, a backend's, or Groups', that couldn't answer
@@ -614,7 +687,23 @@ func (c *Coordinator) cancelPlacements(ctx context.Context, run string, ws map[s
 // for the record. The log says what cause says, unless where the job runs
 // is private, when what it says can name the member.
 func (c *Coordinator) unanswered(ctx context.Context, run *store.Run, job *store.Job, private bool, cause error) (time.Duration, error) {
+	return c.unansweredBy(ctx, run, job, private, 1, cause)
+}
+
+// unansweredBy is unanswered, which counts the look as by of the times a
+// backend couldn't answer, as it does each failure a driver saw to reach a
+// member since the job's previous look (backend.FailedError). A look that
+// counts more than one, as one after its supervisor stalled, takes the job
+// no further than the try before its last: the driver, given the job's
+// tries (backend.Demand.Tries), says at the job's next look that it can't
+// reach the member, as only it can, before the job fails with
+// placement_unanswered, as long as it allows fewer tries than the
+// supervision does.
+func (c *Coordinator) unansweredBy(ctx context.Context, run *store.Run, job *store.Job, private bool, by int, cause error) (time.Duration, error) {
 	key := job.Key
+	if by > 1 {
+		by = max(1, min(by, c.supervision.tries-1-job.PlaceTries))
+	}
 	if private {
 		c.log.WarnContext(ctx, "coordinator: a backend couldn't answer as a job was placed, and is asked again later", "run", run.ID, "job", key)
 	} else {
@@ -623,7 +712,7 @@ func (c *Coordinator) unanswered(ctx context.Context, run *store.Run, job *store
 	var tries int
 	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
-		tries, err = tx.PlaceTried(run.ID, key)
+		tries, err = tx.PlaceTried(run.ID, key, by)
 		return err
 	}); err != nil {
 		if errors.Is(err, store.ErrState) {
@@ -639,6 +728,7 @@ func (c *Coordinator) unanswered(ctx context.Context, run *store.Run, job *store
 		_, err := tx.PlaceFailed(c.newAttempt(run.ID, key, false), job.Fence, p)
 		return err
 	})
+	c.forgetSeen(run.ID, key)
 	switch {
 	case errors.Is(err, store.ErrState) || errors.Is(err, store.ErrFenced):
 		// Claimed, or ended, meanwhile.
@@ -742,11 +832,12 @@ func (c *Coordinator) demandOf(ctx context.Context, run *store.Run, rj *plan.Rea
 
 // rank returns the members of g that can run a job that asks for demand,
 // as their drivers' Probe say, the soonest to start it first, and in the
-// group's order among those as soon; and, for each member that can't, the
-// problem its Probe gave, masked when where the job runs is private.
-// unanswered reports that a Probe couldn't answer, so that a job no member
-// can run now may be placed later.
-func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend.Demand, private bool) (fits []candidate, reasons problems.Diagnostics, unanswered bool) {
+// group's order among those as soon; for each member that can't, the
+// problem its Probe gave, masked when where the job runs is private; and,
+// of those whose Probe couldn't answer, what the look counts for the job
+// (probeLook), which seen, with a member's name after it, keys
+// (probeCounted).
+func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend.Demand, private bool, seen string) (fits []candidate, reasons problems.Diagnostics, look probeLook) {
 	for i := range g.Members {
 		m := &g.Members[i]
 		d := c.driver(m)
@@ -759,16 +850,95 @@ func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend
 			continue
 		}
 		if err != nil {
-			if !private {
+			counted, notYet, retryAt := c.probeCounted(seen+m.Name, err)
+			if counted > 0 && !private {
 				c.log.WarnContext(ctx, "coordinator: a member's backend couldn't say whether it can run a job", "member", m.Name, "error", err)
 			}
-			unanswered = true
+			look.add(counted, notYet, retryAt)
 			continue
 		}
 		fits = append(fits, candidate{group: g.Name, member: m, driver: d, fit: fit})
 	}
 	slices.SortStableFunc(fits, func(a, b candidate) int { return cmp.Compare(a.fit.Availability, b.fit.Availability) })
-	return fits, reasons, unanswered
+	return fits, reasons, look
+}
+
+// A probeLook is what a look's probes said of the members that couldn't
+// say whether they can run the job: the times the look counts as a
+// backend's that couldn't answer, the most any member's counted
+// (probeCounted); whether one hasn't tried the job yet, but will
+// (backend.ErrNotYet), counting none; and the soonest such a member is
+// tried again, if its driver says.
+type probeLook struct {
+	counted int
+	notYet  bool
+	retryAt time.Time
+}
+
+// add adds a member's probe to l.
+func (l *probeLook) add(counted int, notYet bool, retryAt time.Time) {
+	l.counted = max(l.counted, counted)
+	l.notYet = l.notYet || notYet
+	if !retryAt.IsZero() && (l.retryAt.IsZero() || retryAt.Before(l.retryAt)) {
+		l.retryAt = retryAt
+	}
+}
+
+// seenKey is what keys the job key of the run in Coordinator.seenFailed,
+// before a member's name.
+func seenKey(run, key string) string { return run + "\x00" + key + "\x00" }
+
+// probeCounted returns how many times err, of a member's Probe for a job,
+// counts as the member's backend's that couldn't answer, whether it says
+// the member hasn't been tried for the job yet, and when it will be, if
+// it says. A backend.FailedError counts the failures to reach the member
+// since the count the job's previous look saw, which the coordinator keeps,
+// in memory, by key, the job's and the member's: so that every job waiting
+// on a member that doesn't answer gives up after as many failures as it
+// has seen, its own tries' and those for others alike. A job's first look,
+// as after a restart, sees none it can count, but for its own try, which
+// counts once. ErrNotYet alone counts none, and any other error once.
+func (c *Coordinator) probeCounted(key string, err error) (counted int, notYet bool, retryAt time.Time) {
+	fe, ok := errors.AsType[*backend.FailedError](err)
+	switch {
+	case ok:
+		own := !errors.Is(fe.Err, backend.ErrNotYet)
+		c.mu.Lock()
+		last, seen := c.seenFailed[key]
+		if !seen && len(c.seenFailed) >= maxMembers {
+			clear(c.seenFailed)
+		}
+		c.seenFailed[key] = fe.Failed
+		c.mu.Unlock()
+		if seen && fe.Failed > last {
+			counted = fe.Failed - last
+		}
+		if own {
+			counted = max(counted, 1)
+		}
+		return counted, counted == 0, fe.RetryAt
+	case errors.Is(err, backend.ErrNotYet):
+		return 0, true, time.Time{}
+	}
+	return 1, false, time.Time{}
+}
+
+// forgetSeen forgets what the coordinator saw of failures to reach members
+// as it placed the run's job key (probeCounted), once it has placed it, or
+// placing it has failed, or the job, or its run, has ended.
+func (c *Coordinator) forgetSeen(run, key string) {
+	prefix := seenKey(run, key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	maps.DeleteFunc(c.seenFailed, func(k string, _ int) bool { return strings.HasPrefix(k, prefix) })
+}
+
+// notYetWait is how long a supervisor waits before it looks again at its
+// job, which a member's backend hasn't tried yet, but will: until the
+// member is tried again, retryAt, if a driver said, or else supervision's
+// first wait, the least.
+func (c *Coordinator) notYetWait(retryAt time.Time) time.Duration {
+	return min(max(time.Until(retryAt), c.supervision.first), c.supervision.most)
 }
 
 // driver returns the driver of m's backend: the coordinator's, or

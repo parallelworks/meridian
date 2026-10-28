@@ -119,7 +119,7 @@ func (d *Driver) socket(m *backend.Member, h *host) (string, error) {
 // closed is made again, once.
 func (d *Driver) learned(ctx context.Context, t sshconn.Target) (*sshconn.Conn, *host, error) {
 	for try := 1; ; try++ {
-		conn, err := d.Pool.Get(ctx, t)
+		conn, err := d.connect(ctx, t)
 		if err != nil {
 			return nil, nil, err
 		}

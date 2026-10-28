@@ -108,7 +108,14 @@ var errAgain = errors.New("coordinator: the job changed meanwhile")
 // the one the look saw, and an attempt is ended, or given a new token, only
 // while its placement isn't recorded; otherwise the supervisor looks again
 // (errAgain).
-func (c *Coordinator) supervise(ctx context.Context, runID, key string, done func(context.Context, *store.Tx) error) (time.Duration, error) {
+func (c *Coordinator) supervise(ctx context.Context, runID, key string, done func(context.Context, *store.Tx) error) (wait time.Duration, err error) {
+	defer func() {
+		// The job has ended, or its run has, or isn't running: nothing
+		// places it again.
+		if wait == 0 && (err == nil || errors.Is(err, errSettled)) {
+			c.forgetSeen(runID, key)
+		}
+	}()
 	for look := 0; ; look++ {
 		var (
 			run *store.Run

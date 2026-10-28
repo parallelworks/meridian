@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode"
@@ -723,12 +724,146 @@ func TestPool(t *testing.T) {
 	_, err = p.Get(t.Context(), target)
 	paramsOf(t, err, problems.SSHHostKeyChanged)
 
-	// A failure is followed by a backoff: a Get that can't wait it out
-	// ends with its context, without dialing.
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	// A failure is followed by a backoff, within which a Get answers at
+	// once, without dialing, with the last dial's error.
+	start := time.Now()
+	_, err = p.Get(t.Context(), target)
+	if de, ok := errors.AsType[*sshconn.DialError](err); !ok || !de.Waiting || de.Failures != 1 || time.Since(start) > time.Second {
+		t.Errorf("a Get within the backoff gave %v after %v", err, time.Since(start))
+	}
+	paramsOf(t, err, problems.SSHHostKeyChanged)
+}
+
+// TestPoolAnswersAtOnce checks that a pool doesn't keep its users waiting
+// on a host that doesn't answer: a Get while another dials the host
+// answers at once that it is being dialed, and one whose context ends
+// before its own dial does returns then, while the dial goes on, and is
+// counted when it fails, as the next Get, within the backoff after it,
+// answers at once too.
+func TestPoolAnswersAtOnce(t *testing.T) {
+	h := newHome(t)
+	s := h.server(sshtest.Options{})
+	h.knownHosts(s.KnownHosts(""))
+	d := h.dialer()
+	d.ConnectTimeout = time.Second
+	p := &sshconn.Pool{Dialer: d}
+	t.Cleanup(func() { _ = p.Close() })
+	target := sshconn.Target{Host: s.Addr()}
+	s.Stall()
+	defer s.Resume()
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := p.Get(ctx, target); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+		t.Errorf("a Get whose context ended as it dialed gave %v after %v", err, time.Since(start))
+	}
+	start = time.Now()
+	_, err := p.Get(t.Context(), target)
+	if de, ok := errors.AsType[*sshconn.DialError](err); !ok || !de.Waiting || de.Failures != 0 || !errors.Is(err, sshconn.ErrDialing) || time.Since(start) > time.Second {
+		t.Errorf("a Get while the host is being dialed gave %v after %v", err, time.Since(start))
+	}
+	// The dial goes on until the handshake's timeout, and fails.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err := p.Get(t.Context(), target)
+		de, ok := errors.AsType[*sshconn.DialError](err)
+		if !ok {
+			t.Fatalf("a Get gave %v", err)
+		}
+		if de.Failures == 1 {
+			if !de.Waiting || errors.Is(err, sshconn.ErrDialing) {
+				t.Errorf("a Get within the backoff gave %+v", de)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the dial wasn't counted")
+		}
+		time.Sleep(20 * time.Millisecond) //nolint:forbidigo // the dial in the background, which nothing signals
+	}
+}
+
+// hangingSSH writes an ssh client to a directory of the test's whose -G
+// never answers, as a config's Match exec that hangs, and returns a Dialer
+// that reads the config with it, whose connect timeout is a second.
+func hangingSSH(t *testing.T) *sshconn.Dialer {
+	t.Helper()
+	dir := t.TempDir()
+	hang := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(hang, []byte("#!/bin/sh\nexec sleep 60\n"), 0o700); err != nil { //nolint:gosec // the test's ssh, which hangs
+		t.Fatal(err)
+	}
+	return &sshconn.Dialer{SSH: hang, Home: dir, User: "tester", Getenv: func(string) string { return "" }, ConnectTimeout: time.Second}
+}
+
+// TestPoolDialTimeout checks that a dial whose ssh -G doesn't end, as a
+// config's Match exec that hangs, ends by itself, at twice the connect
+// timeout, and counts as a failure: the pool waits to dial the host
+// again, rather than answer for good that it is being dialed.
+func TestPoolDialTimeout(t *testing.T) {
+	p := &sshconn.Pool{Dialer: hangingSSH(t)}
+	t.Cleanup(func() { _ = p.Close() })
+	target := sshconn.Target{Host: "farm"}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := p.Get(ctx, target); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("a Get within the backoff gave %v", err)
+		t.Fatalf("a Get whose context ended as ssh -G hung gave %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err := p.Get(t.Context(), target)
+		de, ok := errors.AsType[*sshconn.DialError](err)
+		if !ok {
+			t.Fatalf("a Get gave %v", err)
+		}
+		if de.Failures == 1 {
+			if de.Failed != 1 || !de.Waiting || de.RetryAt.IsZero() {
+				t.Errorf("a Get after the dial failed gave %+v", de)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a dial whose ssh -G hung never ended")
+		}
+		time.Sleep(20 * time.Millisecond) //nolint:forbidigo // the dial in the background, which nothing signals
+	}
+}
+
+// TestDialTimeout checks that a dial whose jump host stalls once its own
+// handshake is done, never answering the request to forward a connection
+// to the host, which nothing else bounds, ends at the Dialer's
+// DialTimeout.
+func TestDialTimeout(t *testing.T) {
+	requireSSH(t)
+	h := newHome(t)
+	j, s := h.server(sshtest.Options{HoldForwards: true}), h.server(sshtest.Options{})
+	h.knownHosts(j.KnownHosts(""), s.KnownHosts(""))
+	d := h.dialer()
+	d.DialTimeout = 500 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := d.Dial(ctx, sshconn.Target{Host: s.Addr(), JumpHost: j.Addr()})
+	if took := time.Since(start); err == nil || took > 3*time.Second || ctx.Err() != nil {
+		t.Errorf("a dial through a jump host that stalls gave %v after %v", err, took)
+	}
+}
+
+// TestPoolCloseWaits checks that a pool's Close ends the dials going on,
+// as one whose ssh -G hangs, and returns once they have ended.
+func TestPoolCloseWaits(t *testing.T) {
+	p := &sshconn.Pool{Dialer: hangingSSH(t)}
+	var dialed atomic.Bool
+	sshconn.SetDialed(p, func() { dialed.Store(true) })
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := p.Get(ctx, sshconn.Target{Host: "farm"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a Get whose context ended as ssh -G hung gave %v", err)
+	}
+	start := time.Now()
+	_ = p.Close()
+	if !dialed.Load() || time.Since(start) > time.Second {
+		t.Errorf("Close returned after %v, the dial ended %v", time.Since(start), dialed.Load())
 	}
 }
 

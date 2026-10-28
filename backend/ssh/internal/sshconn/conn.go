@@ -284,23 +284,60 @@ func (c *Conn) ListenUnix(path string) (net.Listener, error) {
 	return nil, fmt.Errorf("%w: %w", ErrForwardingRefused, err)
 }
 
-// A Pool keeps one connection to each target, which its users share.
+// A Pool keeps one connection to each target, which its users share. It
+// never makes its users wait on a target that isn't answering: while it
+// dials a target, or waits to dial one again after failing to reach it,
+// Get answers at once that it can't yet (DialError).
 type Pool struct {
 	Dialer *Dialer
 
 	mu      sync.Mutex
 	entries map[string]*entry
 	closed  bool
+	// dials are the dials going on, which Close waits for.
+	dials sync.WaitGroup
+	// dialed, which a test sets, is called once a dial has ended, and
+	// what it made, or how it failed, is recorded.
+	dialed func()
 }
 
 // An entry is a pool's connection to a target, or how it last failed to
-// make one: after how many failures in a row, and when it may try again.
+// make one: after how many failures in a row, and how many in all, with
+// what error, and when it may try again; and, while it dials one, what
+// closes once it is done, and what ends the dial.
 type entry struct {
 	conn     *Conn
 	dialing  chan struct{}
+	cancel   context.CancelFunc
 	failures int
+	failed   int
+	lastErr  error
 	retryAt  time.Time
 }
+
+// ErrDialing is a DialError's error while another user of the pool is
+// connecting to the target, before any dial of it has failed.
+var ErrDialing = errors.New("sshconn: the host is being connected to")
+
+// A DialError is a pool's answer for a target it has no connection to:
+// the error of its last dial of it, or ErrDialing before one has failed;
+// how many of its dials in a row have failed, Failures, and how many in
+// all, Failed, which only grows, so that what failed since a caller last
+// asked is the difference. Waiting is set where Get didn't dial, as
+// another user is dialing the target, or the pool is waiting to dial it
+// again after failing to reach it, until RetryAt: what the caller asks of
+// the host is to be asked again later.
+type DialError struct {
+	Err      error
+	Failures int
+	Failed   int
+	Waiting  bool
+	RetryAt  time.Time
+}
+
+func (e *DialError) Error() string { return e.Err.Error() }
+
+func (e *DialError) Unwrap() error { return e.Err }
 
 // How long a pool waits to dial a target again after it failed: from
 // redialFirst, doubling with each failure in a row, up to redialMost, less
@@ -311,81 +348,105 @@ const (
 	redialMost  = 30 * time.Second
 )
 
-// Get returns the pool's connection to t, and dials one if it has none
-// that is open, once any backoff from failing to has passed. A dial ctx
-// ended isn't counted as a failure.
+// Get returns the pool's connection to t. Where it has none that is open,
+// it dials t, and waits for the dial until ctx is done: the dial goes on,
+// bounded by the Dialer's own timeouts (Dialer.Dial), and what it makes is
+// the pool's, for the next Get. While another Get's dial of t is going
+// on, or before the backoff from failing to reach t has passed, it dials
+// nothing, and answers at once, a *DialError that is Waiting. A dial that
+// fails, its own bounds included, is a *DialError, which counts it; the
+// pool's Close ends one early, and counts nothing.
 func (p *Pool) Get(ctx context.Context, t Target) (*Conn, error) {
 	key := t.key()
-	for {
-		p.mu.Lock()
-		if p.closed {
-			p.mu.Unlock()
-			return nil, ErrClosed
-		}
-		if p.entries == nil {
-			p.entries = map[string]*entry{}
-		}
-		e := p.entries[key]
-		if e == nil {
-			e = &entry{}
-			p.entries[key] = e
-		}
-		if e.conn != nil && e.conn.Err() == nil {
-			p.mu.Unlock()
-			return e.conn, nil
-		}
-		wait := time.Until(e.retryAt)
-		if dialing := e.dialing; dialing != nil || wait > 0 {
-			p.mu.Unlock()
-			if err := waitFor(ctx, dialing, wait); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		e.dialing = make(chan struct{})
+	p.mu.Lock()
+	if p.closed {
 		p.mu.Unlock()
-
-		conn, err := p.Dialer.Dial(ctx, t)
-
-		p.mu.Lock()
-		close(e.dialing)
-		e.dialing = nil
-		switch {
-		case p.closed:
-			// Closed while it dialed: what it dialed is closed too.
-			if conn != nil {
-				_ = conn.Close()
-			}
-			conn, err = nil, ErrClosed
-		case err == nil:
-			e.conn, e.failures, e.retryAt = conn, 0, time.Time{}
-		case ctx.Err() == nil:
-			e.failures++
-			e.retryAt = time.Now().Add(redialAfter(e.failures))
-		}
-		p.mu.Unlock()
-		return conn, err
+		return nil, ErrClosed
 	}
+	if p.entries == nil {
+		p.entries = map[string]*entry{}
+	}
+	e := p.entries[key]
+	if e == nil {
+		e = &entry{}
+		p.entries[key] = e
+	}
+	if e.conn != nil && e.conn.Err() == nil {
+		p.mu.Unlock()
+		return e.conn, nil
+	}
+	if e.dialing != nil || time.Now().Before(e.retryAt) {
+		err := e.lastErr
+		if err == nil {
+			err = ErrDialing
+		}
+		de := &DialError{Err: err, Failures: e.failures, Failed: e.failed, Waiting: true}
+		if e.dialing == nil {
+			de.RetryAt = e.retryAt
+		}
+		p.mu.Unlock()
+		return nil, de
+	}
+	done := make(chan struct{})
+	dctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	e.dialing, e.cancel = done, cancel
+	p.dials.Add(1)
+	p.mu.Unlock()
+	go p.dial(dctx, e, t)
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case p.closed:
+		return nil, ErrClosed
+	case e.conn != nil && e.lastErr == nil:
+		return e.conn, nil
+	}
+	return nil, &DialError{Err: e.lastErr, Failures: e.failures, Failed: e.failed}
 }
 
-// waitFor waits until dialing is closed, if it isn't nil, or else for d,
-// or until ctx is done.
-func waitFor(ctx context.Context, dialing chan struct{}, d time.Duration) error {
-	if dialing != nil {
-		select {
-		case <-dialing:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+// Failed returns how many of the pool's dials of t have failed, in all.
+func (p *Pool) Failed(t Target) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e := p.entries[t.key()]; e != nil {
+		return e.failed
 	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	return 0
+}
+
+// dial dials t for the entry e, with ctx, which only the pool's Close
+// ends, records what it made, or how it failed, and closes
+// the entry's dialing once it has.
+func (p *Pool) dial(ctx context.Context, e *entry, t Target) {
+	defer p.dials.Done()
+	if p.dialed != nil {
+		defer p.dialed()
+	}
+	conn, err := p.Dialer.Dial(ctx, t)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e.cancel()
+	defer close(e.dialing)
+	e.dialing, e.cancel = nil, nil
+	switch {
+	case p.closed:
+		// Closed while it dialed: what it dialed is closed too.
+		if conn != nil {
+			_ = conn.Close()
+		}
+		e.lastErr = ErrClosed
+	case err == nil:
+		e.conn, e.failures, e.lastErr, e.retryAt = conn, 0, nil, time.Time{}
+	default:
+		e.failures++
+		e.failed++
+		e.lastErr = err
+		e.retryAt = time.Now().Add(redialAfter(e.failures))
 	}
 }
 
@@ -399,16 +460,20 @@ func redialAfter(failures int) time.Duration {
 	return d - rand.N(d/4+1) //nolint:gosec // jitter, not a secret
 }
 
-// Close closes every connection of the pool's, and those it is dialing
-// once they are made. It gets none after.
+// Close closes every connection of the pool's, ends the dials going on,
+// and waits for them, closing what they made. It gets none after.
 func (p *Pool) Close() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.closed = true
 	for _, e := range p.entries {
 		if e.conn != nil {
 			_ = e.conn.Close()
 		}
+		if e.cancel != nil {
+			e.cancel()
+		}
 	}
+	p.mu.Unlock()
+	p.dials.Wait()
 	return nil
 }
