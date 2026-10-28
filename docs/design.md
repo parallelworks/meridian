@@ -2757,17 +2757,16 @@ not assumed idempotent.
   directory before its next try, and only on the machine the run started
   on, by a caller that runs there: never a host's copy, as in format 1,
   nor, for a caller on a host, the copy where the run started, which
-  format 1 cleans ([Workflows a step calls](#workflows-a-step-calls)). As
-  in format 1, it never cleans one that is the root run's directory, or
-  holds it: a run's logs aren't in a run's directory, so format 1's log
-  directory has nothing to match. It is
-  stricter than format 1 in one place: it never cleans the calling run's
-  own directory, or one that holds it, where format 1 spares only the
-  root's, and would clean, for a call in a child, a `working-directory:`
-  that names the child's own directory, with what its steps keep there
-  for its later steps, which no workflow could mean. That differs only
-  for such a step, and none of the 270 known calls sets a
-  `working-directory:`.
+  format 1 cleans ([Workflows a step calls](#workflows-a-step-calls)).
+  It never cleans the caller's run directory, or one that holds it, and
+  so never the root run's, which holds the caller's, as format 1 never
+  does; a run's logs aren't in a run's directory, so format 1's log
+  directory has nothing to match. That is stricter than format 1 in one
+  place: format 1 spares only the root's directory, and would clean, for
+  a call in a child, a `working-directory:` that names the child's own
+  directory, with what its steps keep there for its later steps, which
+  no workflow could mean. That differs only for such a step, and none of
+  the 270 known calls sets a `working-directory:`.
 - **Batch schedulers don't rerun jobs either.** Jobs are submitted with
   `--no-requeue` (Slurm) or `-r n` (PBS), so the scheduler doesn't rerun one
   behind Meridian's back. That holds for jobs with a `retry:` too: Meridian
