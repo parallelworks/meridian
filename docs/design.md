@@ -67,17 +67,20 @@ Meridian is a set of Go packages:
 The backends that start workers (`local`, `ssh`, `kubernetes`, `slurm`,
 `pbs`) and the drivers of container runtimes (Podman, Docker, Apptainer,
 Apple's `container`) will be packages of their own; only `local`, which
-runs workers on this machine, is built yet
+runs workers on this machine, and `ssh`, which runs them on hosts it
+reaches over SSH, are built yet
 ([Backends and isolation](#backends-and-isolation)).
 
 The `meridian` command wires the packages together with local resolvers.
 It runs a coordinator in its own process, with a SQLite store: today it
 validates a workflow (`meridian validate`), runs one, its jobs on this
-machine with the `local` backend (`meridian run`), shows runs and their
-logs (`meridian status` and `logs`), takes up a run whose command stopped
-(`meridian resume`), cancels one (`meridian cancel`), and runs one attempt
-of a job as a worker (`meridian worker`), and its other commands say they
-aren't built yet ([The `meridian` command](#the-meridian-command)). A
+machine with the `local` backend or on hosts with the `ssh` backend
+(`meridian run`), shows runs and their logs (`meridian status` and
+`logs`), takes up a run whose command stopped (`meridian resume`), cancels
+one (`meridian cancel`), runs one attempt of a job as a worker (`meridian
+worker`), and runs the local backend on a host for the `ssh` backend
+(`meridian host`), and its other commands say they aren't built yet
+([The `meridian` command](#the-meridian-command)). A
 platform wires them with its own resolvers, Postgres, whose store isn't
 built yet, and as many coordinator replicas as it needs. Nothing in the
 packages knows which of the two it is running in.
@@ -234,6 +237,11 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     that needs it when it runs: a whole checkout of a repository with
     submodules, and a cancel of another run's jobs
     ([Built-in actions](#built-in-actions));
+  - what isn't built yet of checkout's revisions, which fails the run as
+    it is created: one that format 1's whole checkout takes, as `git
+    checkout` does, that isn't a branch, a tag or a full commit, such as
+    a short commit or `HEAD~1`, which none of the 148 known checkouts
+    names ([Built-in actions](#built-in-actions));
   - a workflow a step calls, which is a run of its own, can name groups
     with `runs-on:`, and its caller's job too; and what isn't built yet of
     one, which fails the step that calls it when it runs: a directory
@@ -1854,11 +1862,12 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
 | Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
+| Trees | The trees of the commits checkouts were pinned to, which the coordinator serves to their steps' workers | The copies of the repositories that Sources pinned them from, in Meridian's cache directory |
 | Sessions | Interactive sessions a workflow serves, which it makes and updates | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
-are interfaces in `compile`, the coordinator's, Keys and Logs, in
+are interfaces in `compile`, the coordinator's, Keys, Trees and Logs, in
 `coordinator`, and the backends' `Driver` in `backend`. Built-in actions
 have no interface of their own: each goes through the one that owns what
 it acts on ([Built-in actions](#built-in-actions)). Whoever shows a run
@@ -1866,7 +1875,8 @@ as it happens, as the command's progress display does, follows its events
 and its logs (`Coordinator.Follow`, below), rather than being told of
 them. A resolver may be
 missing. Then the workflow features that need it fail to compile, with an
-error saying which interface was missing.
+error saying which interface was missing; without Trees, a checkout's
+step fails as it runs, saying so (`resolver_missing`).
 
 Resolvers get the caller's context, so cancellation, deadlines and traces
 reach them. They report what is wrong as a problem, a kind and its params
@@ -2508,12 +2518,13 @@ name under `parallelworks/`. The worker evaluates the step as it does a
 `run:` step, its `with:`, `if:`, `retry:`, `timeout:` and `cleanup:` among
 it, and does the action, or asks the coordinator to, in place of a
 command. Each action goes through the interface that owns what it acts
-on, rather than an interface of actions: a repository is Sources', a
-session Sessions', and the run's jobs the coordinator's own.
+on, rather than an interface of actions: a repository is Sources', the
+tree of a commit pinned from it Trees', a session Sessions', and the run's
+jobs the coordinator's own.
 
 | Action | Acts on | Done by | Without a platform |
 | --- | --- | --- | --- |
-| `parallelworks/checkout` | A Git repository | The coordinator, which pins it through Sources as the run is created, and sends its tree to the worker, which writes it | Works, with Git on the coordinator's host, as Sources needs |
+| `parallelworks/checkout` | A Git repository | The coordinator, which pins it through Sources as the run is created, and sends its tree, read through Trees, to the worker, which writes it | Works, with Git on the coordinator's host, as Sources needs |
 | `parallelworks/cancel-jobs` | Jobs of the step's run | The coordinator, asked by the worker | Works |
 | `parallelworks/update-session` | A session the run may update, as the provider decides | The coordinator, through Sessions | The step fails (`resolver_missing`), as there is no local Sessions |
 | `parallelworks/scheduler-agent`, `parallelworks/wait-for-agent` | A platform's agent on a cluster's compute node, which the first starts through the cluster's scheduler with the platform's command-line tool and credentials, and the second waits for | A platform | The step fails (`action_needs_platform`) |
@@ -2551,7 +2562,10 @@ checkout.
     another revision that format 1's whole checkout takes, as `git
     checkout` does, such as a short commit or `HEAD~1`, isn't built yet,
     and fails the run as it is created (`source_revision_not_found`). No
-    known checkout names one. A full commit the copy doesn't hold is
+    known checkout names one. The local Sources refuses a revision git
+    could take for an option, or refuses as a branch's or a tag's name,
+    as it does a `uses:`'s, without asking git
+    (`checkout_revision_invalid`). A full commit the copy doesn't hold is
     fetched by itself, which the server must allow, as Git's protocol
     version 2 does. The pin is the step's in the plan
     (`Step.Checkout`), and the pins of the checkouts of the workflows a
@@ -3637,8 +3651,10 @@ and a platform that embeds Meridian serve the same API.
   root's ID and directory, the call's name, and the strings its caller's
   worker masked, which each of its job's phases counts as secrets' own
   texts. Version 3 adds them. The coordinator serves them, and the worker
-  makes them for a step that calls a workflow; one of an attempt of an
-  earlier version fails (`uses_not_supported`).
+  makes them for a step that calls a workflow. Such a job needs version 3:
+  the coordinator refuses it to an earlier worker, and a later worker, in
+  an attempt an earlier coordinator serves, fails the step
+  (`uses_not_supported`) (Never a silent downgrade, below).
 - **Actions:** ask the coordinator to do a step's cancel-jobs,
   update-session or checkout, from version 3
   ([Built-in actions](#built-in-actions)). The request has the step's
@@ -3664,8 +3680,8 @@ and a platform that embeds Meridian serve the same API.
   the answer through a stop's grace period, as a command has until
   SIGKILL: the step ends as the answer says, and the stop applies from
   the step after; past it, the step ends as the stop has it, though
-  the coordinator may have done the action. In an attempt of an earlier
-  version, the step fails as before (`uses_not_supported`). The request
+  the coordinator may have done the action. Such a job needs version 3,
+  as one that calls a workflow does (Child runs, above). The request
   also says what evaluating `with:` read, which update-session's provider
   is given. The worker fails a step that uses an action only a platform
   provides (`action_needs_platform`).
@@ -3747,9 +3763,13 @@ coordinator say to each other.
   version is older before it sends anything of the run
   (`worker_api_too_old`), rather than run the job without that part. The
   attempt fails before its first step, and is placed again, as for
-  `plan_too_new`. A job with a step whose `uses:` names a workflow, and
-  every job of a child run, whose claim holds what masks what it inherits,
-  needs version 3; any other, version 1.
+  `plan_too_new`. A job with a step whose `uses:` names a workflow, or an
+  action the coordinator performs (checkout, cancel-jobs or
+  update-session), and every job of a child run, whose claim holds what
+  masks what it inherits, needs version 3; any other, version 1. A later
+  worker, in an attempt an earlier coordinator serves at an earlier
+  version, fails such a step (`uses_not_supported`), rather than run it
+  otherwise.
 - **What a body carries of a run is the plan's.** The run's values, the
   job Ready evaluated and the results of the jobs it needs are encoded at
   the run's plan version, and a change to one of their types raises the
@@ -4097,12 +4117,15 @@ isolation, as the built-in `local` group's does, runs no job: a job that no
 other member can take fails, with that member's reason among the rest,
 rather than run on the host.
 
-Today only the `local` backend is built (`backend/local`), and it runs a
-member's jobs on the host only. A member of it names `isolation: host`, as
-the built-in `local` group's member does. One that names a runtime, or
-none, which is a rootless container, has `isolation_not_built`, so
-placement leaves it out rather than run its jobs on the host. A member of
-another backend has `backend_not_built` (`backend.NotBuilt`).
+Today the `local` backend (`backend/local`) and the `ssh` backend
+(`backend/ssh`), which runs the local backend on its host through
+`meridian host` ([The `ssh` backend](#the-ssh-backend)), are built, and
+both run a member's jobs on the host only. A member of either names
+`isolation: host`, as the built-in `local` group's member does, and as the
+member a format 1 `ssh:` makes does. One that names a runtime, or none,
+which is a rootless container, has `isolation_not_built`, so placement
+leaves it out rather than run its jobs on the host. A member of another
+backend has `backend_not_built` (`backend.NotBuilt`).
 
 The `local` backend starts `meridian worker` from the binary that places
 it, once it has checked that no other user can change that binary, or the

@@ -16,7 +16,9 @@ import (
 // commit to the commit it names now, from the repository its URL names, as
 // a step writes it; that a commit it holds is pinned again without the
 // network; and that a revision that names nothing, a short commit among
-// them, is source_revision_not_found, which names no commit (ErrNotFound).
+// them, is source_revision_not_found, and one git could take for an option,
+// or refuses as a branch's or a tag's name, checkout_revision_invalid,
+// each of which names no commit (ErrNotFound).
 func TestSourcesPin(t *testing.T) {
 	origins, s := newOrigins(t)
 	const repo = "https://example.com/acme/app.git"
@@ -37,9 +39,12 @@ func TestSourcesPin(t *testing.T) {
 			t.Errorf("Pin %s = %s, %v; want %s", rev, got, err, want)
 		}
 	}
-	for _, rev := range []string{"gone", first[:12], "-x", "a..b."} {
+	for rev, want := range map[string]*problems.Kind{
+		"gone": problems.SourceRevisionNotFound, first[:12]: problems.SourceRevisionNotFound,
+		"-x": problems.CheckoutRevisionInvalid, "a..b.": problems.CheckoutRevisionInvalid, "v/.x": problems.CheckoutRevisionInvalid,
+	} {
 		_, err := s.Pin(t.Context(), repo, rev)
-		kindtest.Want(t, err, problems.SourceRevisionNotFound)
+		kindtest.Want(t, err, want)
 		if !errors.Is(err, compile.ErrNotFound) {
 			t.Errorf("Pin %s: %v names a commit", rev, err)
 		}
