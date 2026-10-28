@@ -16,7 +16,7 @@ import (
 // keep the user's other processes out of its memory.
 var errNotUnix error = problems.WorkerSystemUnsupported.Problem(problems.Params{"os": runtime.GOOS})
 
-func runProcess(*exec.Cmd, io.Writer, <-chan stopRequest, func(int)) (int, stopCause, error) {
+func runProcess(*exec.Cmd, io.Writer, <-chan stopRequest, func(int), func(int)) (int, stopCause, error) {
 	return -1, noStop, errNotUnix
 }
 
