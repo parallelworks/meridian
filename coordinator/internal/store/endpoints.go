@@ -21,7 +21,8 @@ type Endpoint struct {
 	TakenAt time.Time
 	// GraceFrom is when the grace period after which the coordinator acts
 	// on lapsed leases began: when the endpoint was taken, or when its
-	// holder's host last woke (RestartGrace).
+	// holder's host last woke (RestartGrace); or the zero time for one
+	// taken as idle, which started none (HoldIdleEndpoint).
 	GraceFrom time.Time
 }
 
@@ -42,7 +43,11 @@ func (tx *Tx) Endpoint(name string) (*Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.TakenAt, e.GraceFrom = time.UnixMicro(taken).UTC(), time.UnixMicro(grace).UTC()
+	e.TakenAt = time.UnixMicro(taken).UTC()
+	if grace != 0 {
+		// 0 is no grace (HoldIdleEndpoint).
+		e.GraceFrom = time.UnixMicro(grace).UTC()
+	}
 	return &e, nil
 }
 
@@ -63,12 +68,13 @@ func (tx *Tx) RestartGrace(name string) error {
 }
 
 // GraceFrom returns when the latest grace began, in which no lapsed lease
-// counts: the latest time an endpoint of the store's was taken, or its
-// holder's host woke (RestartGrace), or a grace for the whole store
-// started (StartGrace); or the zero time if none is recorded.
+// counts: the latest time an endpoint of the store's was taken, but as
+// idle (HoldIdleEndpoint), or its holder's host woke (RestartGrace), or a
+// grace for the whole store started (StartGrace); or the zero time if
+// none is recorded.
 func (tx *Tx) GraceFrom() (time.Time, error) {
 	var from sql.NullInt64
-	err := tx.queryRow(`SELECT max(t) FROM (SELECT max(grace_from) AS t FROM meridian_endpoints
+	err := tx.queryRow(`SELECT max(t) FROM (SELECT max(grace_from) AS t FROM meridian_endpoints WHERE grace_from > 0
 UNION ALL SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'grace')`).Scan(&from)
 	return timeOf(from), err
 }
@@ -101,6 +107,23 @@ type Hold struct {
 // is on a local disk, so is the lock, which every process that opens the
 // database shares. On a system without file locks, it fails.
 func (s *Store) HoldEndpoint(ctx context.Context, name, holder string) (*Hold, error) {
+	return s.holdEndpoint(ctx, name, holder, false)
+}
+
+// HoldIdleEndpoint takes the endpoint named name, as HoldEndpoint does,
+// for a member's listener that its process let go of while no attempt on
+// the member (Placement.MemberKey) had an end to wait for, and takes again:
+// no worker of the member's can have waited to reach it since. Unless an
+// attempt on the member that hasn't ended is recorded as it takes it, as
+// one another process placed meanwhile, it starts no grace, so that the
+// leases of the store's other attempts lapse as they would: its grace_from
+// is 0, which adds none (GraceFrom).
+func (s *Store) HoldIdleEndpoint(ctx context.Context, name, holder string) (*Hold, error) {
+	return s.holdEndpoint(ctx, name, holder, true)
+}
+
+// holdEndpoint is HoldEndpoint, or, where idle is set, HoldIdleEndpoint.
+func (s *Store) holdEndpoint(ctx context.Context, name, holder string, idle bool) (*Hold, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -123,9 +146,19 @@ func (s *Store) HoldEndpoint(ctx context.Context, name, holder string) (*Hold, e
 		if err != nil {
 			return err
 		}
+		grace := now
+		if idle {
+			var waiting bool
+			if err := tx.queryRow("SELECT EXISTS (SELECT 1 FROM meridian_attempts WHERE member_key = ? AND state <> ?)", name, AttemptEnded).Scan(&waiting); err != nil {
+				return err
+			}
+			if !waiting {
+				grace = 0
+			}
+		}
 		if _, err := tx.tx.ExecContext(ctx, `INSERT INTO meridian_endpoints (name, holder, taken_at, grace_from) VALUES (?, ?, ?, ?)
 ON CONFLICT (name) DO UPDATE SET holder = excluded.holder, taken_at = excluded.taken_at, grace_from = excluded.grace_from`,
-			name, holder, now, now); err != nil {
+			name, holder, now, grace); err != nil {
 			return err
 		}
 		e, err := tx.Endpoint(name)
