@@ -263,6 +263,18 @@ func ShowRepo(repo string) string {
 		if at := scpUserinfo(repo); at >= 0 {
 			return problems.Masked + repo[at:]
 		}
+		// With its address in brackets, a user can hold a colon as ssh
+		// splits the destination, at its last @: x@a:b@[::1]:app's x@a:b,
+		// or x@[a:b@h]:app's.
+		if user, address, path, ok := scpBracketed(repo); ok {
+			dest := address
+			if user != "" {
+				dest = user + "@" + address
+			}
+			if at := strings.LastIndex(dest, "@"); at >= 0 && strings.Contains(dest[:at], ":") {
+				return problems.Masked + "@[" + dest[at+1:] + "]:" + path
+			}
+		}
 		return repo
 	}
 	authority, path, hasPath := strings.Cut(rest, "/")

@@ -128,6 +128,8 @@ func TestCheckRepo(t *testing.T) {
 		{"ssh://a@host%40-x/app", plan.RepoForm, "ssh://" + problems.Masked + "@host%40-x/app"},
 		{"git+ssh://u@[-x]:22/app", plan.RepoForm, "git+ssh://" + problems.Masked + "@[-x]:22/app"},
 		{"ssh://a@b:c@host/app", plan.RepoCredential, "ssh://" + problems.Masked + "@host/app"},
+		{"x@a:b@[::1]:app", plan.RepoCredential, problems.Masked + "@[::1]:app"},
+		{"x@[a:b@h]:app", plan.RepoCredential, problems.Masked + "@[h]:app"},
 	} {
 		p := kindtest.Want(t, plan.CheckRepo(tc.repo), problems.CheckoutRepoInvalid)
 		shown := tc.shown
