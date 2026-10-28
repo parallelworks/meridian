@@ -55,7 +55,7 @@ func TestChildStoppedWithItsAttempt(t *testing.T) {
 				t.Fatal(err)
 			}
 			attempt, _, _ := r.attempt(t, root, "build", false)
-			child, _, err := r.c.CreateChild(t.Context(), ChildRequest{Attempt: attempt, With: treeWith})
+			child, _, err := askChild(t, r.c, attempt, workerapi.ChildRequest{With: plan.DataOf(treeWith)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -113,12 +113,12 @@ func TestChildStoppedWithItsRun(t *testing.T) {
 				}) == nil
 			})
 			a := latestAttempt(t, c, root, "build")
-			stopped, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: a.ID, Step: 0, With: treeWith})
+			stopped, _, err := askChild(t, c, a.ID, workerapi.ChildRequest{Step: 0, With: plan.DataOf(treeWith)})
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Step 2's if: is always(), which outlives the stop.
-			outlives, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: a.ID, Step: 2, With: treeWith})
+			outlives, _, err := askChild(t, c, a.ID, workerapi.ChildRequest{Step: 2, With: plan.DataOf(treeWith)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -186,7 +186,7 @@ func TestChildStoppedWithItsLostAttempt(t *testing.T) {
 	serve(t, c)
 	<-started
 	a := latestAttempt(t, c, root, "build")
-	child, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: a.ID, With: treeWith})
+	child, _, err := askChild(t, c, a.ID, workerapi.ChildRequest{With: plan.DataOf(treeWith)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestChildStopRewakes(t *testing.T) {
 		return err == nil && a.State == store.AttemptRunning
 	})
 	a := latestAttempt(t, c, root, "build")
-	child, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: a.ID, With: treeWith})
+	child, _, err := askChild(t, c, a.ID, workerapi.ChildRequest{With: plan.DataOf(treeWith)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestChildUnreadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	attempt, _, _ := r.attempt(t, root, "build", false)
-	child, _, err := r.c.CreateChild(t.Context(), ChildRequest{Attempt: attempt, With: treeWith})
+	child, _, err := askChild(t, r.c, attempt, workerapi.ChildRequest{With: plan.DataOf(treeWith)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +453,7 @@ func startCanceller(t *testing.T, r *actionRig) (string, string, string) {
 		t.Fatal(err)
 	}
 	attempt, _, _ := r.attempt(t, root, "build", false)
-	child, _, err := r.c.CreateChild(t.Context(), ChildRequest{Attempt: attempt, With: map[string]any{"$yaml": "w.yaml"}})
+	child, _, err := askChild(t, r.c, attempt, workerapi.ChildRequest{With: plan.DataOf(map[string]any{"$yaml": "w.yaml"})})
 	if err != nil || child == "" {
 		t.Fatal(child, err)
 	}

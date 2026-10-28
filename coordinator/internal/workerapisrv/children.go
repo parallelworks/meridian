@@ -16,8 +16,9 @@ import (
 )
 
 // Children makes, and stops, the child runs of the steps of attempts' jobs
-// whose uses: names a workflow, as the coordinator does
-// (coordinator.CreateChild): the server gives it what a worker asks.
+// whose uses: names a workflow, as the coordinator does: the server gives
+// it what a worker asks, once it has authorized the attempt and seen it
+// hold its job.
 type Children interface {
 	// Child returns the child run of the try of a step of the attempt a,
 	// of run, that req asks for: the one the try has, or one made now; or

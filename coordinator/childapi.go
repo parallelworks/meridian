@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -16,14 +15,14 @@ import (
 )
 
 // childAPI is the coordinator's workerapisrv.Children: it makes the child
-// runs that attempts' steps ask for (CreateChild), and stops them as their
+// runs that attempts' steps ask for (createChild), and stops them as their
 // steps do.
 type childAPI struct{ c *Coordinator }
 
 var _ workerapisrv.Children = childAPI{}
 
 // Child gives the child run of a try of a step of the attempt a, of run,
-// that req asks for, as CreateChild makes it: its ID, the one the try has
+// that req asks for, as createChild makes it: its ID, the one the try has
 // already whatever changed since, or how the step's child wasn't made,
 // ended, as the worker reports the step's end. What it reads of the step,
 // as whether it outlives its job's cancellation, it reads from the run's
@@ -34,40 +33,35 @@ var _ workerapisrv.Children = childAPI{}
 //     job, for any reason but the run's timeout, gets none, cancelled, with
 //     the control's reason, as the worker would have stopped the step had
 //     it read the control first; and so does one of a run that was stopped
-//     (ErrRunStopped), with its stop's. So, with no reason, does a step
+//     (errRunStopped), with its stop's. So, with no reason, does a step
 //     whose early-cancel: is any-job-failed, once a job of the run has
-//     failed (workerapi.Control.AnyJobFailed). CreateChild reads each of
-//     them again as it stores the child (StepStoppedError).
+//     failed (workerapi.Control.AnyJobFailed). createChild reads each of
+//     them again as it stores the child (stepStoppedError).
 //   - A child whose Create failed, failure, with child_not_created at the
 //     step's uses:, and its own problems after it.
 //   - One the coordinator refused, as child_dir_outside, failure, with
 //     that problem at the step's uses:.
 //
 // An attempt that no longer holds its job, or whose run has ended
-// (ErrStepGone), is store.ErrFenced, which the server answers Fenced; and
+// (errStepGone), is store.ErrFenced, which the server answers Fenced; and
 // a step whose uses: names no workflow, or a try past the step's retry:,
 // is workerapisrv.ErrNotChild, which it answers 400.
 func (k childAPI) Child(ctx context.Context, run *store.Run, a *store.Attempt, req *workerapi.ChildRequest) (*workerapi.Child, error) {
 	c := k.c
-	step, err := k.stepOf(run, a, req.Step, req.Try)
+	p, step, err := k.stepOf(run, a, req.Step, req.Try)
 	if err != nil {
 		return nil, err
 	}
-	// CreateChild answers with the try's child, if it has one, whatever has
+	// createChild answers with the try's child, if it has one, whatever has
 	// changed since it was made, as a repeat of the ask is.
-	with, _ := req.With.Get().(map[string]any)
-	id, diags, err := c.CreateChild(ctx, ChildRequest{
-		Attempt: a.ID, Step: req.Step, Try: req.Try, With: with, Env: req.Env,
-		WithPrivate: req.WithPrivate, WithSecrets: req.WithSecrets, EnvPrivate: req.EnvPrivate, EnvSecrets: req.EnvSecrets,
-		Masked: req.Masked, WorkingDirectory: req.WorkingDirectory,
-	})
-	if errors.Is(err, ErrStepGone) {
+	id, diags, err := c.createChild(ctx, a, p, step, req)
+	if errors.Is(err, errStepGone) {
 		return nil, fmt.Errorf("%w: %w", store.ErrFenced, err)
 	}
-	if stopped, ok := errors.AsType[*StepStoppedError](err); ok {
-		return &workerapi.Child{Ended: true, Outcome: plan.OutcomeCancelled, Reason: stopped.Reason}, nil
+	if stopped, ok := errors.AsType[*stepStoppedError](err); ok {
+		return &workerapi.Child{Ended: true, Outcome: plan.OutcomeCancelled, Reason: stopped.reason}, nil
 	}
-	if errors.Is(err, ErrRunStopped) {
+	if errors.Is(err, errRunStopped) {
 		reason := plan.ReasonCancelled
 		if err := c.store.View(ctx, func(tx *store.Tx) error {
 			r, err := tx.Run(run.ID)
@@ -98,30 +92,28 @@ func (k childAPI) Child(ctx context.Context, run *store.Run, a *store.Attempt, r
 	return &workerapi.Child{Run: id}, nil
 }
 
-// stepOf returns the step at index in the job of the attempt a, of run, as
-// its plan has it: an error that wraps workerapisrv.ErrNotChild if the job
-// has no such step, or it calls no workflow, or try is past its retry:,
-// where the plan writes that out (plan.Step.LastTry).
-func (k childAPI) stepOf(run *store.Run, a *store.Attempt, index, try int) (*plan.Step, error) {
-	p, err := k.c.plans.get(run)
-	if err != nil {
-		return nil, err
+// stepOf returns run's plan, and the step at index in the job of the
+// attempt a, of run, as the plan has it, which createChild takes as it is:
+// an error that wraps workerapisrv.ErrNotChild if the job has no such
+// step, or it calls no workflow, or try is no try of the step's: past its
+// retry:, where the plan writes that out (plan.Step.LastTry), so that a
+// worker can't make a child for each number.
+func (k childAPI) stepOf(run *store.Run, a *store.Attempt, index, try int) (*plan.Plan, *plan.Step, error) {
+	p, step, err := k.c.planStep(run, a, index)
+	switch {
+	case err != nil:
+		return nil, nil, err
+	case step == nil || step.Source == nil:
+		return nil, nil, fmt.Errorf("%w: job %q's step %d calls no workflow", workerapisrv.ErrNotChild, a.Job, index)
+	case try < 0:
+		return nil, nil, fmt.Errorf("%w: job %q's step %d has no try %d", workerapisrv.ErrNotChild, a.Job, index, try)
 	}
-	name, _, _ := strings.Cut(a.Job, "#")
-	job := p.Job(name)
-	if job == nil {
-		return nil, fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, name)
-	}
-	if index < 0 || index >= len(job.Steps) || job.Steps[index].Source == nil {
-		return nil, fmt.Errorf("%w: job %q's step %d calls no workflow", workerapisrv.ErrNotChild, name, index)
-	}
-	step := &job.Steps[index]
 	if try > 0 {
 		if last, known := step.LastTry(try - 1); known && last {
-			return nil, fmt.Errorf("%w: job %q's step %d has no try %d", workerapisrv.ErrNotChild, name, index, try)
+			return nil, nil, fmt.Errorf("%w: job %q's step %d has no try %d", workerapisrv.ErrNotChild, a.Job, index, try)
 		}
 	}
-	return step, nil
+	return p, step, nil
 }
 
 // StopChild stops the child run id, for reason, as its step asks, as a

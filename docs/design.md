@@ -2169,7 +2169,7 @@ its link to its step and to its root (`Run.Parent`), with what of them is
 private kept in its secret record (`Record.Inherited`), and what Step says
 of a calling step's `with:` and environment that is private
 (`ReadyStep.WithPrivate` and the rest); and the coordinator's creation of
-a step's try's child, linked to it (`CreateChild`), in its directory, in
+a step's try's child, linked to it (`createChild`), in its directory, in
 its caller's job's group, but not yet on its member, with its root's
 variables, and the root's finisher, which waits for every run of its tree;
 and the worker API's paths for a child, served, and what a child's
