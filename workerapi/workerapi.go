@@ -197,9 +197,10 @@ const Version2 = 2
 // where the worker cleans a child's directory. A worker asks only in an
 // attempt of version 3 or later, and the coordinator answers the paths
 // for another as ones the API doesn't have, 404. An attempt whose job has
-// a step whose uses: names a workflow, or of a child run, needs version 3
-// (WorkerAPITooOld). No release has written it yet, so what is added
-// before one does joins it, as for a plan version.
+// a step whose uses: names a workflow, or an action the coordinator
+// performs, or of a child run, needs version 3 (WorkerAPITooOld). No
+// release has written it yet, so what is added before one does joins it,
+// as for a plan version.
 const Version3 = 3
 
 // Marshal encodes a body as the API writes it: encoding/json/v2's
