@@ -228,7 +228,11 @@ var environmental = []*problems.Kind{
 // a host it drives.
 func (r *rig) probe() backend.Fit {
 	r.t.Helper()
-	fit, err := r.d.Probe(ctx(r.t, time.Minute), r.m, backend.Demand{})
+	var fit backend.Fit
+	err := askAgain(r.t, func() (err error) {
+		fit, err = r.d.Probe(ctx(r.t, time.Minute), r.m, backend.Demand{})
+		return err
+	})
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -240,6 +244,23 @@ func (r *rig) probe() backend.Fit {
 		}
 	}
 	return fit
+}
+
+// askAgain calls call until it gives anything but the pool's answer that
+// the host hasn't answered yet, as it is being dialed, or the pool waits
+// to dial it again (sshconn.DialError's Waiting), as the coordinator asks
+// again later, for a minute at most; and returns what it gave last.
+func askAgain(t *testing.T, call func() error) error {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
+		err := call()
+		de, ok := errors.AsType[*sshconn.DialError](err)
+		if !ok || !de.Waiting || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond) //nolint:forbidigo // as the coordinator asks again, later
+	}
 }
 
 // place places an attempt on the member, and stops its worker when the
@@ -285,7 +306,11 @@ func (r *rig) placeAsking(attempt string, res backend.Resources) backend.Placeme
 // check checks p, and fails the test unless it is in the state want.
 func (r *rig) check(p backend.Placement, want backend.State) backend.Status {
 	r.t.Helper()
-	st, err := r.d.Check(ctx(r.t, time.Minute), r.m, p)
+	var st backend.Status
+	err := askAgain(r.t, func() (err error) {
+		st, err = r.d.Check(ctx(r.t, time.Minute), r.m, p)
+		return err
+	})
 	if err != nil || st.State != want {
 		r.t.Fatalf("Check gives %+v, %v, want state %d", st, err, want)
 	}
@@ -446,10 +471,13 @@ func TestProbeParked(t *testing.T) {
 	}
 }
 
-// TestUnreachable checks that Probe tries a host that doesn't answer four
-// times, with the pool's backoff between, and that then the member can't
-// run the job (ssh_unreachable); and that a problem with the host, as a
-// key known_hosts doesn't have, isn't tried again.
+// TestUnreachable checks that Probe tries a host that doesn't answer once
+// at most, and says it hasn't answered yet, an error that isn't a
+// problem, which the coordinator asks about again later; that a Probe
+// within the pool's backoff after a try answers at once, without a try;
+// that once the host has failed to answer four times in a row, the member
+// can't run the job (ssh_unreachable); and that a problem with the host,
+// as a key known_hosts doesn't have, is the member's at once.
 func TestUnreachable(t *testing.T) {
 	r := newRig(t)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -469,21 +497,38 @@ func TestUnreachable(t *testing.T) {
 		}
 	}()
 	down := member(t, "down", map[string]any{"remoteHost": ln.Addr().String()})
-	start := time.Now()
-	fit, err := r.d.Probe(ctx(t, time.Minute), down, backend.Demand{})
-	if err != nil || fit.Problem == nil {
-		t.Fatalf("a host that doesn't answer gives %+v, %v", fit, err)
+	var fit backend.Fit
+	deadline := time.Now().Add(time.Minute)
+	for looks := 1; fit.Problem == nil; looks++ {
+		before := tries.Load()
+		start := time.Now()
+		var err error
+		fit, err = r.d.Probe(ctx(t, time.Minute), down, backend.Demand{})
+		took, tried := time.Since(start), tries.Load()-before
+		switch {
+		case tried > 1 || took > 3*time.Second:
+			t.Fatalf("look %d tried the host %d times in %v", looks, tried, took)
+		case fit.Problem != nil:
+			if tries.Load() != Tries {
+				t.Errorf("the member can't run the job after %d tries", tries.Load())
+			}
+		case err == nil:
+			t.Fatalf("look %d gave %+v, without an error", looks, fit)
+		case asProblem(err) != nil:
+			t.Fatalf("look %d gave the problem %v", looks, err)
+		case time.Now().After(deadline):
+			t.Fatalf("the host was tried %d times in a minute", tries.Load())
+		default:
+			// As the coordinator asks again, later.
+			time.Sleep(100 * time.Millisecond) //nolint:forbidigo // a supervisor's snooze
+		}
 	}
 	if p := problemOf(t, fit.Problem, problems.SSHUnreachable); p["host"] != ln.Addr().String() || p["reason"] == "" {
 		t.Errorf("the problem's params are %v", p)
 	}
-	// The pool waits about 1, 2 and 4 seconds, less up to a quarter.
-	if n, took := tries.Load(), time.Since(start); n != Tries || took < 5*time.Second {
-		t.Errorf("the host was tried %d times in %v", n, took)
-	}
 
 	unknown := sshtest.New(t, sshtest.Options{})
-	start = time.Now()
+	start := time.Now()
 	fit, err = r.d.Probe(ctx(t, time.Minute), member(t, "unknown", map[string]any{"remoteHost": unknown.Addr()}), backend.Demand{})
 	if err != nil || fit.Problem == nil || fit.Problem.Code != problems.SSHHostKeyUnknown.Code() || time.Since(start) > 3*time.Second {
 		t.Errorf("a host whose key isn't known gives %+v, %v, after %v", fit, err, time.Since(start))

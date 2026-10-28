@@ -723,12 +723,62 @@ func TestPool(t *testing.T) {
 	_, err = p.Get(t.Context(), target)
 	paramsOf(t, err, problems.SSHHostKeyChanged)
 
-	// A failure is followed by a backoff: a Get that can't wait it out
-	// ends with its context, without dialing.
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	// A failure is followed by a backoff, within which a Get answers at
+	// once, without dialing, with the last dial's error.
+	start := time.Now()
+	_, err = p.Get(t.Context(), target)
+	if de, ok := errors.AsType[*sshconn.DialError](err); !ok || !de.Waiting || de.Failures != 1 || time.Since(start) > time.Second {
+		t.Errorf("a Get within the backoff gave %v after %v", err, time.Since(start))
+	}
+	paramsOf(t, err, problems.SSHHostKeyChanged)
+}
+
+// TestPoolAnswersAtOnce checks that a pool doesn't keep its users waiting
+// on a host that doesn't answer: a Get while another dials the host
+// answers at once that it is being dialed, and one whose context ends
+// before its own dial does returns then, while the dial goes on, and is
+// counted when it fails, as the next Get, within the backoff after it,
+// answers at once too.
+func TestPoolAnswersAtOnce(t *testing.T) {
+	h := newHome(t)
+	s := h.server(sshtest.Options{})
+	h.knownHosts(s.KnownHosts(""))
+	d := h.dialer()
+	d.ConnectTimeout = time.Second
+	p := &sshconn.Pool{Dialer: d}
+	t.Cleanup(func() { _ = p.Close() })
+	target := sshconn.Target{Host: s.Addr()}
+	s.Stall()
+	defer s.Resume()
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
-	if _, err := p.Get(ctx, target); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("a Get within the backoff gave %v", err)
+	start := time.Now()
+	if _, err := p.Get(ctx, target); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+		t.Errorf("a Get whose context ended as it dialed gave %v after %v", err, time.Since(start))
+	}
+	start = time.Now()
+	_, err := p.Get(t.Context(), target)
+	if de, ok := errors.AsType[*sshconn.DialError](err); !ok || !de.Waiting || de.Failures != 0 || !errors.Is(err, sshconn.ErrDialing) || time.Since(start) > time.Second {
+		t.Errorf("a Get while the host is being dialed gave %v after %v", err, time.Since(start))
+	}
+	// The dial goes on until the handshake's timeout, and fails.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err := p.Get(t.Context(), target)
+		de, ok := errors.AsType[*sshconn.DialError](err)
+		if !ok {
+			t.Fatalf("a Get gave %v", err)
+		}
+		if de.Failures == 1 {
+			if !de.Waiting || errors.Is(err, sshconn.ErrDialing) {
+				t.Errorf("a Get within the backoff gave %+v", de)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the dial wasn't counted")
+		}
+		time.Sleep(20 * time.Millisecond) //nolint:forbidigo // the dial in the background, which nothing signals
 	}
 }
 

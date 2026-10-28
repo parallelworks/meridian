@@ -4377,7 +4377,16 @@ local backend there through `meridian host`
   between the tries; Meridian waits about 1, 2 and 4, as it does before
   it dials any host again that it failed to reach. Then its member can't
   run the job (`ssh_unreachable`), and the job fails
-  (`placement_impossible`), as format 1's step does.
+  (`placement_impossible`), as format 1's step does. The tries are spread
+  over the looks of the job's supervisor, never made in one: a host that
+  doesn't answer must not hold the workers that every run's supervisors
+  share. A probe makes one try at most, and waits 5 seconds at most for
+  it, the try going on without it; while the host is being tried, or
+  before the wait after a try that failed has passed, a probe, or a
+  check, answers at once that the host hasn't answered yet, which the
+  supervisor asks about again later, as it does any backend that couldn't
+  answer. Once the host has failed four tries in a row, a probe says the
+  member can't run the job, until a try reaches it.
 - **Format 1's keys.** `remoteUser` and `jumpNodeUser` are the user's
   config's `User` for the host where they're empty, or else the local
   user; format 1's "your pw username" is the local user here. A

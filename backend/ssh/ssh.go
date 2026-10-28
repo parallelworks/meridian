@@ -58,12 +58,21 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// Tries is how many times Probe connects to a host that doesn't answer
-// before the member can't run the job (problems.SSHUnreachable), as format
-// 1 tries four times. The pool waits between them, as it does before it
-// dials any host again that it failed to reach: about a second, then two,
-// then four.
+// Tries is how many times in a row the driver fails to connect to a host
+// before Probe says the member can't run the job
+// (problems.SSHUnreachable), as format 1 tries four times. The pool waits
+// between them, as it does before it dials any host again that it failed
+// to reach: about a second, then two, then four. Each Probe makes one try
+// at most, so that the tries are spread over the looks of the supervisor
+// that probes, which asks again later (reach).
 const Tries = 4
+
+// connectBudget is how long a call of the driver's waits for a connection
+// to a host it has none to: the dial goes on without it, bounded by the
+// host's ConnectTimeout, and what it makes, or how it fails, is the pool's,
+// for the next call. So a host that doesn't answer holds a supervisor's
+// look, and the workers the coordinator's looks share, for no longer.
+const connectBudget = 5 * time.Second
 
 // MinKeyLen is the shortest Driver.Key, in bytes.
 const MinKeyLen = 32
@@ -219,21 +228,31 @@ func hostMember(m *backend.Member) *backend.Member {
 	}
 }
 
-// reach connects to t, as many times as Probe tries: a problem, as a host
-// key known_hosts doesn't have, isn't tried again; a host that still
-// doesn't answer is problems.SSHUnreachable.
+// connect returns the pool's connection to t, waiting connectBudget at
+// most for one it has to dial (sshconn.Pool.Get): a host that is being
+// dialed, or that the pool waits to dial again, is answered at once.
+func (d *Driver) connect(ctx context.Context, t sshconn.Target) (*sshconn.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, connectBudget)
+	defer cancel()
+	return d.Pool.Get(ctx, t)
+}
+
+// reach connects to t for Probe, with one try at most: a problem, as a
+// host key known_hosts doesn't have, is the member's; a host that has
+// failed to answer Tries times in a row is problems.SSHUnreachable; and a
+// host that hasn't answered yet, as one being dialed, or that the pool
+// waits to dial again, is an error that isn't a problem, which the
+// coordinator asks about again later, as it does any backend that
+// couldn't answer, so that it makes the next try then.
 func (d *Driver) reach(ctx context.Context, t sshconn.Target) (*sshconn.Conn, error) {
-	for try := 1; ; try++ {
-		conn, err := d.Pool.Get(ctx, t)
-		switch {
-		case err == nil:
-			return conn, nil
-		case asProblem(err) != nil || ctx.Err() != nil:
-			return nil, err
-		case try >= Tries:
-			return nil, problems.SSHUnreachable.Problem(problems.Params{"host": t.Host, "reason": err.Error()})
-		}
+	conn, err := d.connect(ctx, t)
+	if err == nil || asProblem(err) != nil || ctx.Err() != nil {
+		return conn, err
 	}
+	if de, ok := errors.AsType[*sshconn.DialError](err); ok && de.Failures >= Tries {
+		return nil, problems.SSHUnreachable.Problem(problems.Params{"host": t.Host, "reason": de.Err.Error()})
+	}
+	return nil, err
 }
 
 // run runs meridian host op on the host t names, over conn, or else the
@@ -246,7 +265,7 @@ func (d *Driver) run(ctx context.Context, t sshconn.Target, conn *sshconn.Conn, 
 	for try := 1; ; try++ {
 		if conn == nil {
 			var err error
-			if conn, err = d.Pool.Get(ctx, t); err != nil {
+			if conn, err = d.connect(ctx, t); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -300,7 +319,7 @@ func (d *Driver) runOn(ctx context.Context, conn *sshconn.Conn, t sshconn.Target
 
 // Probe says whether m's host can run a job that asks for demand, as the
 // host's local backend says, through meridian host, once the driver has
-// reached the host, trying Tries times (problems.SSHUnreachable), put the
+// reached the host, with one try at most (reach), put the
 // binary for its system there, and asked it what it is, and how it would
 // start a worker (hostproto.OpHello). A problem on the way, as a host key
 // known_hosts doesn't have, a system the worker doesn't run on, or a host
