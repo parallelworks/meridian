@@ -1,4 +1,0 @@
-jobs:
-  greet:
-    steps:
-      - run: echo hello

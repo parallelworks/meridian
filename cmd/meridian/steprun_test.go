@@ -386,3 +386,48 @@ func TestSSHStepRunCross(t *testing.T) {
 		t.Errorf("a step didn't run on the other job's host:\n%s", logs)
 	}
 }
+
+// TestSSHStepRunCallRefused checks a step that calls a workflow with an
+// ssh: of its own that names a host: it fails, with step_ssh_not_supported,
+// without calling the workflow, and its job's next step, whose if: reads
+// failure(), runs. Format 1 runs the workflow where its caller runs, with
+// the host's paths in its environment, which Meridian doesn't (docs/
+// design.md, Workflows a step calls).
+func TestSSHStepRunCallRefused(t *testing.T) {
+	flowsRepo(t, map[string]string{"flows/called.yaml": "jobs:\n  greet:\n    steps:\n      - run: echo hello\n"})
+	env := runEnv(t)
+	h := newSSHHost(t, env)
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--format", "json", writeFile(t, "w.yaml", `jobs:
+  main:
+    steps:
+      - uses: github/acme/flows@main
+        with:
+          $yaml: flows/called.yaml
+        ssh:
+          remoteHost: farm
+      - if: ${{ failure() }}
+        run: echo the call was refused
+`)))
+	if r.code != exitInvalid {
+		t.Fatalf("meridian run of a call with an ssh: of its own = %+v", r)
+	}
+	var refused, log, finished bool
+	for _, l := range jsonLines(t, r.stdout) {
+		switch step, _ := l["step"].(float64); {
+		case l["kind"] == "child.created":
+			t.Errorf("a run was created for the call: %v", l)
+		case l["kind"] == "step.finished" && step == 0 && l["outcome"] == "failure":
+			ds, _ := l["diagnostics"].([]any)
+			for _, d := range ds {
+				refused = refused || d.(map[string]any)["code"] == "step_ssh_not_supported"
+			}
+		case l["kind"] == "log" && step == 1:
+			log = log || l["text"] == "the call was refused\n"
+		case l["kind"] == "run.finished":
+			finished = l["outcome"] == "failure"
+		}
+	}
+	if !refused || !log || !finished {
+		t.Errorf("the call's step failed with step_ssh_not_supported %v, the next step logged %v, the run failed %v:\n%s", refused, log, finished, r.stdout)
+	}
+}
