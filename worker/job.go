@@ -804,7 +804,10 @@ func (a *attempt) runAction(ctx context.Context, key logKey, rs *plan.ReadyStep,
 	}
 	// One request, which a checkout's tree is asked for with too, unchanged:
 	// the coordinator serves the tree only for the request it answered.
-	req := &workerapi.ActionRequest{Step: key.step, Try: key.try, With: rs.With}
+	req := &workerapi.ActionRequest{
+		Step: key.step, Try: key.try, With: rs.With,
+		Private: rs.WithRead.Private, Secret: rs.WithRead.Marked,
+	}
 	answered := make(chan result, 1)
 	go func() {
 		answer, err := a.client.action(reqCtx, req)
@@ -948,7 +951,7 @@ func (a *attempt) runCommand(key logKey, rs *plan.ReadyStep, script, dir string,
 		requests, unwatch := a.watch(s)
 		defer unwatch()
 		defer a.endedGroup(cmd)
-		return runProcess(cmd, w, requests, a.startedGroup)
+		return runProcess(cmd, w, requests, a.startedGroup, a.terminate)
 	}()
 	w.Close()
 	stream.Close()

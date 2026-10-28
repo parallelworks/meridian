@@ -38,7 +38,7 @@ func TestBodiesAreVersioned(t *testing.T) {
 			version, ok := workerapi.Since[member]
 			switch {
 			case !ok:
-				t.Errorf("%s has no version: give it the next version of the API, and raise workerapi.Version", member)
+				t.Errorf("%s has no version: give it the newest version of the API no release has written, raising workerapi.Version if a release has written it", member)
 			case version > workerapi.Version:
 				t.Errorf("%s is from version %d, after workerapi.Version %d", member, version, workerapi.Version)
 			case version > 1 && typ.Name() == "ClaimRequest":

@@ -29,7 +29,7 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
-	"github.com/parallelworks/meridian/backend/ssh/internal/sshtest"
+	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -842,6 +842,43 @@ func TestSessionUnanswered(t *testing.T) {
 	}
 }
 
+// TestSessionAbandoned checks a session given up on before the host
+// answered: once the host answers, the session is closed, and only then
+// is its place on the connection given back, so that a connection of one
+// place opens the next only once the first is closed, and no session is
+// left open.
+func TestSessionAbandoned(t *testing.T) {
+	h := newHome(t)
+	s := h.server(sshtest.Options{})
+	h.knownHosts(s.KnownHosts(""))
+	d := h.dialer()
+	d.Sessions = 1
+	d.KeepAlive, d.KeepAliveTimeout = time.Hour, time.Hour
+	c := dial(t, d, sshconn.Target{Host: s.Addr()})
+	s.Stall()
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := c.NewSession(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a session the host doesn't answer gave %v", err)
+	}
+	s.Resume()
+	next, err := c.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := s.OpenSessions(); n != 1 {
+		t.Errorf("with the next session open, the host has %d open", n)
+	}
+	_ = next.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for s.OpenSessions() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d sessions are left open", s.OpenSessions())
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // the server's count, which nothing signals
+	}
+}
+
 // TestListenUnix checks that a host forwards a Unix socket's connections
 // over the connection.
 func TestListenUnix(t *testing.T) {
@@ -879,6 +916,28 @@ func TestListenUnix(t *testing.T) {
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ping" {
 		t.Errorf("the forwarded connection echoed %q, %v", buf, err)
+	}
+}
+
+// TestListenUnixRefused checks that a host that won't forward a Unix
+// socket is ErrForwardingRefused, told by the connection being up rather
+// than by x/crypto's words, and that a connection that is closed is not:
+// it is an outage, which passes.
+func TestListenUnixRefused(t *testing.T) {
+	h := newHome(t)
+	s := h.server(sshtest.Options{NoForwarding: true})
+	h.knownHosts(s.KnownHosts(""))
+	c := dial(t, h.dialer(), sshconn.Target{Host: s.Addr()})
+	path := filepath.Join(t.TempDir(), "c.sock")
+	if _, err := c.ListenUnix(path); !errors.Is(err, sshconn.ErrForwardingRefused) {
+		t.Errorf("a host that won't forward gave %v, want ErrForwardingRefused", err)
+	}
+	if err := c.Err(); err != nil {
+		t.Errorf("a refusal closed the connection: %v", err)
+	}
+	_ = c.Close()
+	if _, err := c.ListenUnix(path); err == nil || errors.Is(err, sshconn.ErrForwardingRefused) {
+		t.Errorf("a closed connection gave %v, want its own error", err)
 	}
 }
 

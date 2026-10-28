@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"io"
+	"net"
 
 	"github.com/parallelworks/foundation/problem"
 )
@@ -91,9 +92,10 @@ type Driver interface {
 	// Connect makes m's workers able to reach the coordinator, at
 	// coordinator, where this replica listens, and returns the endpoint
 	// they reach it at from where they run: the coordinator's own Unix
-	// socket for local; a Unix socket on the host that the driver's SSH
-	// connection forwards, for ssh; or meridian relay on a login node,
-	// which forwards their TLS connections over SSH, for slurm and pbs.
+	// socket for local; or meridian relay on a login node, which forwards
+	// their TLS connections over SSH, for slurm and pbs. The workers of a
+	// Forwarder's members, as the ssh backend's, reach it through a
+	// listener on the member instead, which the coordinator serves.
 	//
 	// One replica at a time holds a member's connection, under a lease in
 	// the store, and serves every attempt that reaches the coordinator
@@ -140,6 +142,34 @@ type Driver interface {
 	// doesn't grow. A placement whose worker still runs is kept, and an
 	// error; one that isn't there is none.
 	Forget(ctx context.Context, m *Member, p Placement) error
+}
+
+// A Forwarder is a Driver whose members' workers can't reach the
+// coordinator where it listens, but through a listener the driver opens on
+// the member, as the ssh backend's forwards a Unix socket on a host over
+// SSH: the coordinator serves the worker API on what that listener
+// accepts, to the attempts placed on the member, and on no other.
+//
+// One replica at a time forwards a member, under a lease in the store
+// named by the member's key; the others place workers on it all the same,
+// at the endpoint the one that holds the lease forwards. Connect isn't
+// called on a Forwarder.
+type Forwarder interface {
+	Driver
+	// MemberKey returns the key of m, which the store records with the
+	// attempts placed on it, and names its lease by: the same for every
+	// member that reaches the same place as the same user, whatever else
+	// it is called, and nothing a person could read a host or a user
+	// from. It is the name of an endpoint (ssh- and lower-case hex).
+	MemberKey(m *Member) (string, error)
+	// Endpoint returns where m's workers reach the coordinator from where
+	// they run, as Forward listens there: the same each time for the same
+	// member.
+	Endpoint(ctx context.Context, m *Member) (Endpoint, error)
+	// Forward listens at m's endpoint, on m, for this replica, and returns
+	// the listener, whose connections are m's workers'. It ends with the
+	// connection it is made over, or once it is closed.
+	Forward(ctx context.Context, m *Member) (net.Listener, error)
 }
 
 // Demand is what a job asks of a member.
@@ -255,6 +285,13 @@ type Placement struct {
 	// attempt until then, and a claim from a worker that says another
 	// (workerapi.WorkerDigestMismatch).
 	WorkerDigest string `json:"workerDigest,omitempty"`
+	// RunDir is the run's directory on the member, where the worker runs
+	// the job's steps by default: the PlaceRequest's, or one the member
+	// chose, as a host the ssh backend reaches does, under its user's
+	// home, which the coordinator records with the attempt, and gives the
+	// worker as it claims it. Find gives it too, but "" where the driver
+	// doesn't know it, for the PlaceRequest's.
+	RunDir string `json:"runDir,omitempty"`
 }
 
 // A Status is what has become of a placement's worker.

@@ -264,7 +264,8 @@ func TestLogBytes(t *testing.T) {
 }
 
 // An attempt whose placement is private is recorded without its group,
-// member, backend and the backend's ID for it, which are held only sealed,
+// member, backend, the backend's ID for it and the run's directory on the
+// member, which are held only sealed,
 // and is claimed once the digest of the worker binary it started is
 // recorded; the problem it ends with is stored masked, since it can name
 // the member.
@@ -288,6 +289,7 @@ func TestPrivatePlacement(t *testing.T) {
 			{Member: "laptop", WorkerDigest: testPlacement.WorkerDigest},
 			{Backend: "local", WorkerDigest: testPlacement.WorkerDigest},
 			{ID: "pod-on-host-7", WorkerDigest: testPlacement.WorkerDigest},
+			{RunDir: "/home/alice/.local/state/meridian/runs/r1", WorkerDigest: testPlacement.WorkerDigest},
 			{},
 		} {
 			if err := tx.RecordPlacement(a.ID, bad); err == nil {
@@ -301,13 +303,13 @@ func TestPrivatePlacement(t *testing.T) {
 		if got, err := tx.Attempt(a.ID); err != nil || !got.Private || !got.Placed() || got.Placement != p {
 			t.Errorf("the attempt is %+v, %v; want private, placed at %+v", got, err, p)
 		}
-		var group, member, backend, placementID sql.NullString
-		if err := tx.tx.QueryRowContext(tx.ctx, "SELECT grp, member, backend, placement_id FROM meridian_attempts WHERE id = ?", a.ID).Scan(
-			&group, &member, &backend, &placementID); err != nil {
+		var group, member, backend, placementID, runDir sql.NullString
+		if err := tx.tx.QueryRowContext(tx.ctx, "SELECT grp, member, backend, placement_id, run_dir FROM meridian_attempts WHERE id = ?", a.ID).Scan(
+			&group, &member, &backend, &placementID, &runDir); err != nil {
 			return err
 		}
-		if group.Valid || member.Valid || backend.Valid || placementID.Valid {
-			t.Errorf("a private placement is held in the clear: %v %v %v %v", group, member, backend, placementID)
+		if group.Valid || member.Valid || backend.Valid || placementID.Valid || runDir.Valid {
+			t.Errorf("a private placement is held in the clear: %v %v %v %v %v", group, member, backend, placementID, runDir)
 		}
 		if _, err := tx.Claim(token, credential('a'), testWorker, workerapi.Version); err != nil {
 			return err

@@ -286,6 +286,35 @@ func (s *Server) Placed(ids ...string) {
 // request from it.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	conns := newConnSet(s.maxConns, evictAfter)
+	return s.serve(ctx, &peerListener{Listener: l, s: s, conns: conns}, conns)
+}
+
+// ServeMember serves the worker API on l, the listener of a member whose
+// workers reach the coordinator through it, as a socket on a host the ssh
+// backend forwards over SSH (backend.Forwarder), until ctx is done, or l
+// fails, as when its connection drops: then it closes l, as Serve does.
+// Its connections come with no user the system can name: they are the
+// member's, which its login to the host vouches for, and the socket's
+// mode there, which only its user can connect to. So a request on one is
+// held to the attempts placed on the member, whose key is member
+// (store.Placement.MemberKey), and refused, 401, for any other, as one
+// with a credential that is no attempt's is, without asking Peers, which
+// names users; and a request on Serve's socket is held to the attempts
+// placed on no such member. A connection
+// that takes no deadlines, as an SSH channel's doesn't, is bridged through
+// one that does (net.Pipe), so that the server's bounds on a request's
+// time hold on it too.
+func (s *Server) ServeMember(ctx context.Context, l net.Listener, member string) error {
+	if member == "" {
+		return errors.New("workerapisrv: a member's listener without its key")
+	}
+	conns := newConnSet(s.maxConns, evictAfter)
+	return s.serve(ctx, &memberListener{Listener: l, member: member, conns: conns}, conns)
+}
+
+// serve serves the worker API on l, whose connections conns holds, as
+// Serve says.
+func (s *Server) serve(ctx context.Context, l net.Listener, conns *connSet) error {
 	srv := &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: s.headerTime,
@@ -298,7 +327,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		BaseContext: func(net.Listener) context.Context { return ctx },
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if pc, ok := c.(*peerConn); ok {
-				return context.WithValue(ctx, peerKey{}, pc.uid)
+				return context.WithValue(ctx, peerKey{}, pc.peer)
 			}
 			return ctx
 		},
@@ -313,7 +342,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		}
 		shut <- err
 	})
-	err := srv.Serve(&peerListener{Listener: l, s: s, conns: conns})
+	err := srv.Serve(l)
 	if stop() {
 		// Serve ended on its own, before ctx: nothing shuts it down.
 		return err
@@ -327,15 +356,33 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	return err
 }
 
-// peerKey is the context key of the user a request's connection is from.
+// peerKey is the context key of whom a request's connection is from.
 type peerKey struct{}
 
-// peerOf returns the user the request's connection is from, as Serve's
-// listener asked the system, and false for a request that didn't come
-// through it, which the server refuses.
-func peerOf(r *http.Request) (int, bool) {
-	uid, ok := r.Context().Value(peerKey{}).(int)
-	return uid, ok
+// A peer is whom a request's connection is from: a user, as the system
+// says, on Serve's socket; or a member, by its key, on its listener
+// (ServeMember).
+type peer struct {
+	uid    int
+	member string
+}
+
+// peerOf returns whom the request's connection is from, as the listener it
+// came through says, and false for a request that didn't come through
+// one, which the server refuses.
+func peerOf(r *http.Request) (peer, bool) {
+	p, ok := r.Context().Value(peerKey{}).(peer)
+	return p, ok
+}
+
+// allows reports whether a request from p may claim, or report on, an
+// attempt a of run: one placed on p's member, for a member's; or else one
+// placed on no such member, of a run Peers allows the user.
+func (s *Server) allows(ctx context.Context, p peer, run *store.Run, a *store.Attempt) bool {
+	if p.member != "" || a.Placement.MemberKey != "" {
+		return p.member == a.Placement.MemberKey
+	}
+	return s.peers.Allows(ctx, p.uid, run)
 }
 
 // A peerListener takes only connections from the peers its server
@@ -346,12 +393,12 @@ type peerListener struct {
 	conns *connSet
 }
 
-// A peerConn is a connection a peerListener took, and the user it is from.
-// Closing it takes it out of its set.
+// A peerConn is a connection a peerListener, or a memberListener, took,
+// and whom it is from. Closing it takes it out of its set.
 type peerConn struct {
 	net.Conn
-	uid int
-	set *connSet
+	peer peer
+	set  *connSet
 }
 
 func (c *peerConn) Close() error {
@@ -383,7 +430,7 @@ func (l *peerListener) Accept() (net.Conn, error) {
 			c.Close()
 			continue
 		}
-		pc := &peerConn{Conn: c, uid: uid, set: l.conns}
+		pc := &peerConn{Conn: c, peer: peer{uid: uid}, set: l.conns}
 		if !l.conns.add(pc) {
 			c.Close()
 			return nil, net.ErrClosed
@@ -396,6 +443,54 @@ func (l *peerListener) Accept() (net.Conn, error) {
 func (l *peerListener) Close() error {
 	l.conns.close()
 	return l.Listener.Close()
+}
+
+// A memberListener takes the connections of a member's listener, whose
+// peer is the member, and holds at most as many at once as conns does.
+type memberListener struct {
+	net.Listener
+	member string
+	conns  *connSet
+}
+
+func (l *memberListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	pc := &peerConn{Conn: withDeadlines(c), peer: peer{uid: -1, member: l.member}, set: l.conns}
+	if !l.conns.add(pc) {
+		pc.Conn.Close()
+		return nil, net.ErrClosed
+	}
+	return pc, nil
+}
+
+// Close closes the listener, and ends an Accept that waits for room.
+func (l *memberListener) Close() error {
+	l.conns.close()
+	return l.Listener.Close()
+}
+
+// withDeadlines returns c, or, for a connection that takes no deadlines,
+// as an SSH channel's doesn't, one that does, which passes what is
+// written to it on to c, and what c reads on to it, until either closes.
+func withDeadlines(c net.Conn) net.Conn {
+	if c.SetDeadline(time.Time{}) == nil {
+		return c
+	}
+	near, far := net.Pipe()
+	go func() {
+		_, _ = io.Copy(c, far)
+		_ = c.Close()
+		_ = far.Close()
+	}()
+	go func() {
+		_, _ = io.Copy(far, c)
+		_ = far.Close()
+		_ = c.Close()
+	}()
+	return near
 }
 
 // A connSet holds the connections a server's listener took, at most max
@@ -593,18 +688,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveUnknown(w, r, rt.method, known)
 		return
 	}
-	uid, ok := peerOf(r)
+	from, ok := peerOf(r)
 	if !ok {
 		// Not through Serve, whose listener asks who a connection is
-		// from: it is no peer's the server trusts.
+		// from, nor ServeMember: it is no peer's the server trusts.
 		writeStatus(w, http.StatusUnauthorized)
 		return
 	}
 	if r.URL.Path == workerapi.PathClaim {
-		s.serveClaim(w, r, uid)
+		s.serveClaim(w, r, from)
 		return
 	}
-	a, run, ok := s.attempt(w, r, uid)
+	a, run, ok := s.attempt(w, r, from)
 	if !ok {
 		return
 	}
@@ -659,7 +754,7 @@ func (s *Server) serveUnknown(w http.ResponseWriter, r *http.Request, method str
 // attempt, of a run its peer may report on, that was claimed at a later
 // version of the worker API than the server speaks.
 func (s *Server) ofLaterVersion(r *http.Request) bool {
-	uid, ok := peerOf(r)
+	from, ok := peerOf(r)
 	credential := bearer(r)
 	if !ok || credential == "" {
 		return false
@@ -676,7 +771,7 @@ func (s *Server) ofLaterVersion(r *http.Request) bool {
 		run, err = tx.Run(a.Run)
 		return err
 	})
-	return err == nil && a.APIVersion > s.speaks && s.peers.Allows(r.Context(), uid, run)
+	return err == nil && a.APIVersion > s.speaks && s.allows(r.Context(), from, run, a)
 }
 
 // bearer returns the request's bearer token, or "".
@@ -687,7 +782,8 @@ func bearer(r *http.Request) string {
 
 // attempt returns the attempt whose credential the request bears, and its
 // run, once it has answered a request it refuses: 401 for a credential
-// that is no attempt's, of a run the peer may not report on, or that has
+// that is no attempt's, of a run the peer may not report on, or of an
+// attempt placed on another member than the peer's (allows), or that has
 // lapsed with a lease; and 503 for a run whose plan is of a version the
 // server doesn't read, or an attempt claimed at a version of the worker
 // API it doesn't speak, but a heartbeat, events or a log upload of such
@@ -696,7 +792,7 @@ func bearer(r *http.Request) string {
 // hears so from every replica, whatever versions they read. Whether an
 // attempt it serves still holds its job, its write checks in its own
 // transaction. Nothing of the request's body is read before.
-func (s *Server) attempt(w http.ResponseWriter, r *http.Request, uid int) (*store.Attempt, *store.Run, bool) {
+func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from peer) (*store.Attempt, *store.Run, bool) {
 	ctx := r.Context()
 	credential := bearer(r)
 	if credential == "" {
@@ -723,7 +819,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, uid int) (*stor
 	case err != nil:
 		s.writeError(w, r, err)
 		return nil, nil, false
-	case !s.peers.Allows(ctx, uid, run), lapsed:
+	case !s.allows(ctx, from, run, a), lapsed:
 		writeStatus(w, http.StatusUnauthorized)
 		return nil, nil, false
 	case run.PlanVersion <= s.reads && a.APIVersion <= s.speaks:

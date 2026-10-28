@@ -44,7 +44,6 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
@@ -332,12 +331,6 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 		return backend.Fit{}, errors.New("ssh: meridian host's probe gave no fit")
 	}
 	return msg.Fit.Fit(), nil
-}
-
-// Connect isn't built yet: the coordinator's socket, forwarded to the
-// host, which the host's workers reach it at.
-func (d *Driver) Connect(_ context.Context, m *backend.Member, _ backend.Endpoint) (backend.Endpoint, io.Closer, error) {
-	return backend.Endpoint{}, nil, problems.BackendNotBuilt.Problem(problems.Params{"member": m.Name, "backend": m.Backend})
 }
 
 // Place starts a worker for the attempt on m's host, through meridian host,

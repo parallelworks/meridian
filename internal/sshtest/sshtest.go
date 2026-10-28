@@ -45,6 +45,9 @@ type Options struct {
 	// Env is added to the environment the server runs exec requests with,
 	// the test process's, as sshd sets a session's.
 	Env []string
+	// NoForwarding refuses to forward Unix sockets, as sshd's
+	// AllowStreamLocalForwarding no does.
+	NoForwarding bool
 }
 
 // A Server is an SSH server on the loopback interface.
@@ -66,6 +69,8 @@ type Server struct {
 	loggedIn map[string]bool
 	// commands are the exec requests' commands, in order.
 	commands []string
+	// open is how many sessions are open (OpenSessions).
+	open int
 	// env is added to the environment of exec requests after
 	// Options.Env (SetEnv).
 	env []string
@@ -152,6 +157,14 @@ func (s *Server) Commands() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.commands...)
+}
+
+// OpenSessions is how many sessions are open, of every connection's: those
+// the server accepted, and whose clients haven't closed them.
+func (s *Server) OpenSessions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.open
 }
 
 // SetEnv makes the server run the exec requests it gets from now on with
@@ -293,7 +306,17 @@ func (s *Server) serve(c net.Conn) {
 			if err != nil {
 				continue
 			}
-			wg.Go(func() { s.session(ch, reqs) })
+			s.mu.Lock()
+			s.open++
+			s.mu.Unlock()
+			wg.Go(func() {
+				defer func() {
+					s.mu.Lock()
+					s.open--
+					s.mu.Unlock()
+				}()
+				s.session(ch, reqs)
+			})
 		case "direct-tcpip":
 			var p struct {
 				Host       string
@@ -357,7 +380,7 @@ func (s *Server) global(conn *ssh.ServerConn, req *ssh.Request, f *forwards, wg 
 	switch req.Type {
 	case "streamlocal-forward@openssh.com":
 		var p struct{ Path string }
-		if ssh.Unmarshal(req.Payload, &p) != nil {
+		if s.opts.NoForwarding || ssh.Unmarshal(req.Payload, &p) != nil {
 			_ = req.Reply(false, nil)
 			return
 		}

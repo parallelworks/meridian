@@ -399,6 +399,14 @@
           "not": {
             "type": "null"
           }
+        },
+        "private": {
+          "description": "Added in worker API version 3. Set when evaluating with: read a variable or a password, which makes what it gives private.",
+          "type": "boolean"
+        },
+        "secret": {
+          "description": "Added in worker API version 3. Set when evaluating with: read a secret, which makes what it gives masked.",
+          "type": "boolean"
         }
       },
       "required": [],
