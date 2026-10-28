@@ -424,6 +424,19 @@ func ChildDir(runDir, workingDirectory, job string, step int) string {
 	return filepath.Join(runDir, "subworkflows", job, "step_"+strconv.Itoa(step))
 }
 
+// InDir returns the path of dir relative to root, as filepath.Rel gives
+// it, "." for root itself, and whether dir is root or in it, as their
+// names say, without reading the file system, so a symbolic link isn't
+// followed. The coordinator and a step's worker each read where a child's
+// directory is (ChildDir) with it, so that both agree.
+func InDir(root, dir string) (rel string, ok bool) {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return rel, true
+}
+
 // A Job is one of the workflow's jobs. A matrix job is one Job, whose
 // instances are made from its Strategy as the run goes.
 type Job struct {

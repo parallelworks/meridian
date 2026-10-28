@@ -206,12 +206,12 @@ func (c *Coordinator) rootOf(ctx context.Context, run *store.Run) (*store.Run, e
 }
 
 // treePath returns the path of the directory of run, of the tree whose
-// root is root, relative to the root's, as filepath.Rel gives it: "." for
+// root is root, relative to the root's, as plan.InDir gives it: "." for
 // a root, or a child whose directory is its root's. A child's is always
 // in its root's, as createChild makes it (child_dir_outside).
 func treePath(root, run *store.Run) (string, error) {
-	path, err := filepath.Rel(root.RunDir, run.RunDir)
-	if err != nil || !filepath.IsLocal(path) {
+	path, ok := plan.InDir(root.RunDir, run.RunDir)
+	if !ok {
 		return "", fmt.Errorf("coordinator: run %s's directory isn't in its root's, run %s's", run.ID, root.ID)
 	}
 	return path, nil

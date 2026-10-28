@@ -38,13 +38,14 @@ type Trees interface {
 
 // A TreeSurvey is what the tree of a commit holds of a checkout's paths.
 type TreeSurvey struct {
-	// Size is how many bytes its files hold, together, and Entries how
-	// many directories, files, links and submodules it has.
+	// Size is how many bytes its files hold, together, its symbolic links'
+	// targets among them, and Entries how many entries WriteTree writes of
+	// it: its directories, files, links and submodules.
 	Size    int64
 	Entries int
 	// Missing are the indexes of the paths that name nothing in it.
 	Missing []int
-	// Submodules is set when it holds a submodule.
+	// Submodules is set when what it holds of the paths has a submodule.
 	Submodules bool
 }
 

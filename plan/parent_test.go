@@ -270,6 +270,32 @@ func TestChildDir(t *testing.T) {
 	}
 }
 
+// InDir finds a directory in another, or the other itself, by their
+// names, and nothing beside it or above it, as one whose name only starts
+// with the other's is.
+func TestInDir(t *testing.T) {
+	for _, tc := range []struct {
+		dir  string
+		rel  string
+		want bool
+	}{
+		{"/runs/1", ".", true},
+		{"/runs/1/", ".", true},
+		{"/runs/1/subworkflows/build/step_0", "subworkflows/build/step_0", true},
+		{"/runs/1/..x", "..x", true},
+		{"/runs/1/a/../b", "b", true},
+		{"/runs/12", "", false},
+		{"/runs", "", false},
+		{"/runs/1/../2", "", false},
+		{"/scratch", "", false},
+		{"runs/1", "", false},
+	} {
+		if rel, ok := plan.InDir("/runs/1", tc.dir); rel != tc.rel || ok != tc.want {
+			t.Errorf("InDir(/runs/1, %q) = %q, %v, want %q, %v", tc.dir, rel, ok, tc.rel, tc.want)
+		}
+	}
+}
+
 // A step whose uses: names a workflow gives its own working-directory:
 // alone, as format 1 makes its child's directory of it, never its job's;
 // a step that runs a command still runs in its job's.
