@@ -97,8 +97,14 @@ type Sources struct {
 	dir string
 	// git is the git command.
 	git string
-	// remote returns the URL of the repository repo on host.
-	remote func(host, repo string) string
+	// remote returns the URL of the repository repo on host; and repoURL
+	// the URL git fetches a checkout's repository from, repo itself.
+	remote  func(host, repo string) string
+	repoURL func(repo string) string
+	// protocols are the transports a fetch may use, whatever URL it ends
+	// up at, through a redirect or an insteadOf of the user's: https and
+	// ssh, and file for a test's repositories.
+	protocols []string
 	// servers are the GitLab servers, besides gitlab.com, that a
 	// reference's $host can name.
 	servers map[string]bool
@@ -123,11 +129,13 @@ var _ compile.Sources = (*Sources)(nil)
 // no others.
 func NewSources(dir string, servers []string) *Sources {
 	s := &Sources{
-		dir:     filepath.Join(dir, SourcesDir),
-		git:     "git",
-		remote:  func(host, repo string) string { return "https://" + host + "/" + repo + ".git" },
-		servers: map[string]bool{},
-		repos:   map[string]chan struct{}{},
+		dir:       filepath.Join(dir, SourcesDir),
+		git:       "git",
+		remote:    func(host, repo string) string { return "https://" + host + "/" + repo + ".git" },
+		repoURL:   func(repo string) string { return repo },
+		protocols: []string{"https", "ssh"},
+		servers:   map[string]bool{},
+		repos:     map[string]chan struct{}{},
 	}
 	for _, server := range servers {
 		s.servers[strings.ToLower(server)] = true
@@ -387,7 +395,12 @@ func (s *Sources) open(ctx context.Context, r sourceRef) (repo string, unlock fu
 	// parseRef has checked that each name is one, and not . or .., and
 	// that the server is a DNS name.
 	owner, name, _ := strings.Cut(r.repo, "/")
-	repo = filepath.Join(s.dir, r.host, owner, name+".git")
+	return s.openAt(ctx, filepath.Join(s.dir, r.host, owner, name+".git"))
+}
+
+// openAt returns the copy at repo, in the sources directory, creating it if
+// it isn't there, locked as open says.
+func (s *Sources) openAt(ctx context.Context, repo string) (string, func(), error) {
 	if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
 		return "", nil, err
 	}
@@ -403,7 +416,7 @@ func (s *Sources) open(ctx context.Context, r sourceRef) (repo string, unlock fu
 		release()
 		return "", nil, err
 	}
-	unlock = func() {
+	unlock := func() {
 		unlockFile()
 		release()
 	}
@@ -461,6 +474,13 @@ func (s *Sources) lockRepo(ctx context.Context, repo string) (func(), error) {
 // fetch fetches rev of r's repository into repo, keeps its commit, and
 // returns it.
 func (s *Sources) fetch(ctx context.Context, repo string, r sourceRef, rev string) (string, error) {
+	return s.fetchFrom(ctx, repo, s.remote(r.host, r.repo), rev, r.repoName(), r.location())
+}
+
+// fetchFrom fetches rev from url into repo, keeps its commit, and returns
+// it. name and location name the repository in a problem: as
+// source_revision_not_found's repo, and the location of the rest.
+func (s *Sources) fetchFrom(ctx context.Context, repo, url, rev, name, location string) (string, error) {
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return "", err
@@ -468,32 +488,41 @@ func (s *Sources) fetch(ctx context.Context, repo string, r sourceRef, rev strin
 	// Each fetch has a ref of its own, so that two at once never read each
 	// other's.
 	fetched := "refs/meridian/fetch/" + hex.EncodeToString(nonce[:])
-	url := s.remote(r.host, r.repo)
-	if _, err := s.run(ctx, repo, "",
+	// Only the transports s allows, whatever the URL a redirect or an
+	// insteadOf of the user's makes of url: none that would have git read
+	// the host's files, run a command, or fetch without TLS or SSH, unless
+	// the user's own configuration allows one by its name
+	// (protocol.<name>.allow), which git reads before protocol.allow.
+	args := []string{"-c", "protocol.allow=never"}
+	for _, p := range s.protocols {
+		args = append(args, "-c", "protocol."+p+".allow=always")
+	}
+	args = append(args,
 		// A transfer that slows below a kilobyte a second for a minute is
 		// stopped, so that a remote that hangs doesn't hang Meridian when
 		// its context has no deadline.
 		"-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=60",
 		"-c", "fetch.fsckObjects=true",
 		"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--depth=1",
-		"--", url, "+"+rev+":"+fetched); err != nil {
+		"--", url, "+"+rev+":"+fetched)
+	if _, err := s.run(ctx, repo, "", args...); err != nil {
 		gerr, ok := errors.AsType[*gitError](err)
 		switch {
 		case !ok:
 			return "", err
 		case gerr.notFound():
-			return "", notFound(problems.SourceRevisionNotFound, problems.Params{"repo": r.repoName(), "revision": rev, "reason": gerr.message()})
+			return "", notFound(problems.SourceRevisionNotFound, problems.Params{"repo": name, "revision": rev, "reason": gerr.message()})
 		case gerr.denied():
-			return "", problems.SourceAccessDenied.Problem(problems.Params{"location": r.location(), "reason": gerr.message()})
+			return "", problems.SourceAccessDenied.Problem(problems.Params{"location": location, "reason": gerr.message()})
 		case gerr.malformed():
-			return "", problems.SourceObjectsInvalid.Problem(problems.Params{"location": r.location(), "reason": gerr.message()})
+			return "", problems.SourceObjectsInvalid.Problem(problems.Params{"location": location, "reason": gerr.message()})
 		}
 		return "", err
 	}
 	out, err := s.run(ctx, repo, "", "rev-parse", "--verify", fetched+"^{commit}")
 	if err != nil {
 		if gerr, ok := errors.AsType[*gitError](err); ok {
-			return "", notFound(problems.SourceRevisionNotFound, problems.Params{"repo": r.repoName(), "revision": rev, "reason": gerr.message()})
+			return "", notFound(problems.SourceRevisionNotFound, problems.Params{"repo": name, "revision": rev, "reason": gerr.message()})
 		}
 		return "", err
 	}

@@ -34,6 +34,13 @@
           "items": {
             "$ref": "#/$defs/Call"
           }
+        },
+        "checkouts": {
+          "description": "The pins of the parallelworks/checkout steps of the workflows the run calls, down the tree, each by the digest of its workflow's text and the step's JSON Pointer in it, in the order of the two, each once. Version 2.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckoutPin"
+          }
         }
       },
       "required": ["version", "run", "jobs"],
@@ -57,6 +64,48 @@
         }
       },
       "required": ["caller", "step", "source"],
+      "additionalProperties": false
+    },
+    "CheckoutPin": {
+      "description": "The pin of a parallelworks/checkout step of a workflow the run calls. Version 2.",
+      "type": "object",
+      "properties": {
+        "caller": {
+          "description": "The digest of the text of the workflow whose step it is.",
+          "type": "string"
+        },
+        "step": {
+          "description": "The step's JSON Pointer in that text, as /jobs/build/steps/0.",
+          "type": "string"
+        },
+        "checkout": {
+          "$ref": "#/$defs/Checkout"
+        }
+      },
+      "required": ["caller", "step", "checkout"],
+      "additionalProperties": false
+    },
+    "Checkout": {
+      "description": "A parallelworks/checkout step's repository and revision, as its with: writes them out, pinned to the commit the revision named as the run was created. Version 2.",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "description": "The repository's URL, as with: repo writes it: https or ssh, or scp-like, with no credential in it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "description": "The branch, tag or commit with: branch names.",
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "description": "The commit the revision named, in full, as git writes it.",
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        }
+      },
+      "required": ["repo", "revision", "commit"],
       "additionalProperties": false
     },
     "Run": {
@@ -423,6 +472,10 @@
         "source": {
           "description": "The workflow the step's uses: names, pinned as the run was created.",
           "$ref": "#/$defs/Source"
+        },
+        "checkout": {
+          "description": "The pin of a parallelworks/checkout step: its repository and revision, pinned to a commit as the run was created. Version 2.",
+          "$ref": "#/$defs/Checkout"
         },
         "with": {
           "$ref": "#/$defs/Value"

@@ -1608,10 +1608,13 @@ sees one version.
   (`Plan.Calls`), the variables the tree reads (`Run.TreeVariables`), each
   pin's remote context (`Source.Remote`), and a child run's link to its
   step (`Run.Parent`), with what its secret record holds of the step
-  (`Record.Inherited`), so a run that calls no workflow is of version 1. A
-  release reads every version up to its own, each by its own schemas,
-  under `plan/schema/<version>/`, and refuses what a later version added
-  in an earlier one's plan (`plan.ErrMalformed`).
+  (`Record.Inherited`); and the pins of `parallelworks/checkout` steps, a
+  run's own (`Step.Checkout`) and its called workflows'
+  (`Plan.Checkouts`). So a run that calls no workflow, and checks out
+  nothing, is of version 1. A release reads every version up to its own,
+  each by its own schemas, under `plan/schema/<version>/`, and refuses
+  what a later version added in an earlier one's plan
+  (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
@@ -2391,7 +2394,7 @@ that uses scheduler-agent or wait-for-agent with `action_needs_platform`
 already, and the coordinator does cancel-jobs. Until checkout and
 update-session are built, a step that uses one fails with
 `uses_not_supported`; what this section says of them is decided, and
-built next.
+built next, but for checkout's pins, which are built.
 
 - **checkout.**
   - **Pinned as the run is created.** Create pins each checkout's `repo`
@@ -2402,13 +2405,35 @@ built next.
     does. Both must be written out (`checkout_not_known`), so that the
     coordinator, not the worker, chooses what is fetched, with whose
     credentials. ACTIVATE reads the branch when the step runs. All 148
-    known checkouts write both out.
+    known checkouts write both out. A `repo` or `branch` written out as
+    `""` pins nothing, and the step checks out nothing and succeeds, as
+    format 1's does. The branch is a branch, a tag or a full commit;
+    another revision that format 1's whole checkout takes, as `git
+    checkout` does, such as a short commit or `HEAD~1`, isn't built yet,
+    and fails the run as it is created (`source_revision_not_found`). No
+    known checkout names one. A full commit the copy doesn't hold is
+    fetched by itself, which the server must allow, as Git's protocol
+    version 2 does. The pin is the step's in the plan
+    (`Step.Checkout`), and the pins of the checkouts of the workflows a
+    run calls, down the tree, are its root's (`Plan.Checkouts`), by the
+    digest of their workflow's text and the step's place in it, as calls'
+    are, so that a child run's Create reads them rather than pin them
+    again; each repository and revision is asked once for the tree. A
+    plan that holds a pin is of version 2. A written-out `sparse_checkout`
+    entry is checked as the run is created (below); one an expression
+    gives, as the step runs. The local Sources keeps a copy of each
+    repository by the SHA-256 digest of its URL as the step writes it, and
+    pins a full commit it holds without the network.
   - **Fetched by the coordinator.** Git runs on the coordinator's host,
     through Sources: with the user's own Git configuration, credential
     helpers and SSH agent where `meridian` runs, and a platform's linked
     accounts on a platform; and never prompting. A `repo` is any
-    `https://` or `ssh://` URL, or an scp-like `user@host:path`, on any
-    host, as format 1 takes; a platform's Sources may take fewer. Two are
+    `https://` or `ssh://` URL, or an scp-like `user@host:path`, with an
+    IPv6 address in brackets too, on any host, as format 1 takes; a
+    platform's Sources may take fewer. Whatever URL Git ends up at,
+    through a redirect or the user's `insteadOf`, it fetches only over
+    https and ssh (`protocol.allow`), for `uses:` workflows too, unless
+    the user's own configuration allows another transport by name. Two are
     refused as the run is created (`checkout_repo_invalid`), differences
     from format 1: another transport, as `file://` or `ext::`, so that a
     workflow can't have the coordinator read its host's files, or run a

@@ -25,6 +25,14 @@ import (
 type treeSources struct {
 	texts map[string]string
 	asked []plan.SourceRef
+	// pinned are the repositories and revisions it was asked to pin, as
+	// repo@revision, each pinned to a commit of its own.
+	pinned []string
+}
+
+func (s *treeSources) Pin(_ context.Context, repo, revision string) (string, error) {
+	s.pinned = append(s.pinned, repo+"@"+revision)
+	return "89abcdef0123456789abcdef0123456789abcdef", nil
 }
 
 func (s *treeSources) Resolve(_ context.Context, ref plan.SourceRef) (*compile.Workflow, error) {

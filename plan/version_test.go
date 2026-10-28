@@ -16,8 +16,10 @@ import (
 // plan.Version, as the worker API's since table does for its bodies'
 // own types, with the API's version.
 var since = map[string]int{
-	"Plan.version": 1, "Plan.run": 1, "Plan.jobs": 1, "Plan.warnings": 1, "Plan.calls": 2,
+	"Plan.version": 1, "Plan.run": 1, "Plan.jobs": 1, "Plan.warnings": 1, "Plan.calls": 2, "Plan.checkouts": 2,
 	"Call.caller": 2, "Call.step": 2, "Call.source": 2,
+	"CheckoutPin.caller": 2, "CheckoutPin.step": 2, "CheckoutPin.checkout": 2,
+	"Checkout.repo": 2, "Checkout.revision": 2, "Checkout.commit": 2,
 
 	"Run.source": 1, "Run.format": 1, "Run.release": 1, "Run.name": 1, "Run.description": 1, "Run.icon": 1,
 	"Run.thumbnail": 1, "Run.inputs": 1, "Run.definitions": 1, "Run.withheld": 1, "Run.decisions": 1, "Run.env": 1,
@@ -36,7 +38,7 @@ var since = map[string]int{
 	"Need.job": 1, "Need.any": 1,
 	"Strategy.matrix": 1, "Strategy.failFast": 1, "Strategy.maxParallel": 1,
 	"JobRetry.reasons": 1, "JobRetry.maxRetries": 1, "JobRetry.interval": 1,
-	"Step.id": 1, "Step.name": 1, "Step.if": 1, "Step.run": 1, "Step.uses": 1, "Step.source": 1, "Step.with": 1,
+	"Step.id": 1, "Step.name": 1, "Step.if": 1, "Step.run": 1, "Step.uses": 1, "Step.source": 1, "Step.checkout": 2, "Step.with": 1,
 	"Step.env": 1, "Step.shell": 1, "Step.workingDirectory": 1, "Step.ssh": 1, "Step.retry": 1, "Step.timeout": 1,
 	"Step.ignoreErrors": 1, "Step.earlyCancel": 1, "Step.cleanup": 1, "Step.path": 1,
 	"StepRetry.maxRetries": 1, "StepRetry.interval": 1, "StepRetry.timeout": 1, "StepRetry.cleanOnRetry": 1,
