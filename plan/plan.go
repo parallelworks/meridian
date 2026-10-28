@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"cmp"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -689,10 +688,11 @@ func Decode(data []byte) (*Plan, error) {
 		// their schemas refuse.
 		return nil, fmt.Errorf("%w: the plan of version %d has what version %d adds", ErrMalformed, p.Version, p.MinVersion())
 	}
-	if err := p.checkCalls(); err != nil {
+	// A child run's Create finds its steps' pins by their order.
+	if err := checkPins(p.Calls, "call"); err != nil {
 		return nil, fmt.Errorf("%w: the plan: %w", ErrMalformed, err)
 	}
-	if err := p.checkCheckouts(); err != nil {
+	if err := checkPins(p.Checkouts, "checkout"); err != nil {
 		return nil, fmt.Errorf("%w: the plan: %w", ErrMalformed, err)
 	}
 	if err := p.Run.Parent.check(); err != nil {
@@ -731,33 +731,12 @@ func (r *ParentRun) check() error {
 	return nil
 }
 
-// checkCalls checks that the plan's calls are in the order of their
-// callers and steps, each once, as Calls is, since a child run's Create
-// finds its steps' pins by them in that order.
-func (p *Plan) checkCalls() error {
-	for i := 1; i < len(p.Calls); i++ {
-		a, b := p.Calls[i-1], p.Calls[i]
-		switch c := cmp.Or(strings.Compare(a.Caller, b.Caller), strings.Compare(a.Step, b.Step)); {
-		case c == 0:
-			return fmt.Errorf("the call of %s's %s is in the plan twice", b.Caller, b.Step)
-		case c > 0:
-			return fmt.Errorf("the call of %s's %s comes after %s's %s", b.Caller, b.Step, a.Caller, a.Step)
-		}
-	}
-	return nil
-}
-
 // FindCall returns the pin of the workflow that the step at the JSON
 // Pointer step of the workflow of the digest caller names, among those the
 // plan's calls hold.
 func (p *Plan) FindCall(caller, step string) (Source, bool) {
-	i, ok := slices.BinarySearchFunc(p.Calls, [2]string{caller, step}, func(c Call, k [2]string) int {
-		return cmp.Or(strings.Compare(c.Caller, k[0]), strings.Compare(c.Step, k[1]))
-	})
-	if !ok {
-		return Source{}, false
-	}
-	return p.Calls[i].Source, true
+	c, ok := findPin(p.Calls, caller, step)
+	return c.Source, ok
 }
 
 // decodeVersioned decodes data into v, whose version version reads once

@@ -254,7 +254,7 @@ func (x *expansion) fail(k *problems.Kind, params problems.Params, keys ...strin
 func (x *expansion) combinations(m any) ([]map[string]any, error) {
 	matrix, ok := m.(map[string]any)
 	if !ok {
-		return nil, x.fail(problems.WrongType, problems.Params{"count": 1, "type1": "object", "has_got": true, "got": typeName(m)})
+		return nil, x.fail(problems.WrongType, problems.WrongTypeParams(TypeName(m), "object"))
 	}
 	var keys []string
 	var lists []*valueList

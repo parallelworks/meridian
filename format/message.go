@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"math/big"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -218,11 +217,7 @@ func mustBeType(want []string, got string) finding {
 	if len(want) == 0 || len(want) > 3 {
 		return finding{problems.NoForm, nil}
 	}
-	params := problems.Params{"count": len(want), "type1": "", "type2": "", "type3": "", "has_got": strconv.FormatBool(got != ""), "got": got}
-	for i, t := range want {
-		params["type"+string(rune('1'+i))] = t
-	}
-	return finding{problems.WrongType, params}
+	return finding{problems.WrongType, problems.WrongTypeParams(got, want...)}
 }
 
 func showList(items []any) string {

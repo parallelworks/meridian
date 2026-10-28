@@ -14,21 +14,6 @@ import (
 	"github.com/parallelworks/meridian/workerapi"
 )
 
-// The built-in actions the coordinator performs, as their steps' uses:
-// names them, which a worker asks it for (workerapi.PathAction), besides
-// checkout's (plan.CheckoutUses), whose tree it serves (checkout).
-const (
-	actionCancelJobs    = "parallelworks/cancel-jobs"
-	actionUpdateSession = "parallelworks/update-session"
-)
-
-// asksCoordinator reports whether a step whose uses: is uses asks the
-// coordinator for the action it uses, through version 3 of the worker API
-// (workerapi.PathAction): checkout, cancel-jobs or update-session.
-func asksCoordinator(uses string) bool {
-	return uses == plan.CheckoutUses || uses == actionCancelJobs || uses == actionUpdateSession
-}
-
 // actions is the coordinator's workerapisrv.Actions: it performs the
 // built-in action a step asks for, which it reads from the step in its
 // run's plan, never from the request.
@@ -46,9 +31,9 @@ func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (worker
 	switch step.Uses {
 	case plan.CheckoutUses:
 		return r.c.checkout(ctx, call, step)
-	case actionCancelJobs:
+	case plan.CancelJobsUses:
 		return r.c.cancelJobs(ctx, call, step)
-	case actionUpdateSession:
+	case plan.UpdateSessionUses:
 		return r.c.updateSession(ctx, call, step)
 	}
 	return workerapi.ActionAnswer{}, fmt.Errorf("%w: %q", workerapisrv.ErrNotAction, step.Uses)
