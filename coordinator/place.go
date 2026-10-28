@@ -714,11 +714,15 @@ func (c *Coordinator) group(ctx context.Context, run *store.Run, rj *plan.ReadyJ
 // to its own descendants alone, which end before it goes on, and never to
 // another job, which would still hold it when the caller did. A run has
 // as many callers as it is deep, a few at most (compile.CallLimits),
-// each read by its ID.
+// each read by its ID; a chain longer than its link's depth says is an
+// error, rather than a walk that never ends.
 func (c *Coordinator) demandOf(ctx context.Context, run *store.Run, rj *plan.ReadyJob) (backend.Demand, error) {
 	var parked []string
 	err := c.store.View(ctx, func(tx *store.Tx) error {
 		for r := run; r.Parent != nil; {
+			if len(parked) == run.Parent.Depth {
+				return fmt.Errorf("coordinator: run %s's callers go deeper than its depth, %d", run.ID, run.Parent.Depth)
+			}
 			parked = append(parked, r.Parent.Attempt)
 			var err error
 			if r, err = tx.Run(r.Parent.Run); err != nil {
