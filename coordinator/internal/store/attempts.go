@@ -204,6 +204,9 @@ func (tx *Tx) NewAttempt(n NewAttempt) (*Attempt, string, error) {
 			return nil, "", err
 		}
 	}
+	if err := tx.attemptsEnded(ended); err != nil {
+		return nil, "", err
+	}
 	var fence, number int64
 	if err := tx.queryRow("UPDATE meridian_jobs SET fence = fence + 1, attempts = attempts + 1 WHERE run_id = ? AND key = ? RETURNING fence, attempts",
 		run, n.Job).Scan(&fence, &number); err != nil {
@@ -547,7 +550,19 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 		return err
 	}
 	n, _ := runNumber(a.Run)
-	return tx.addEvent(n, EventAttemptEnded, a.Job, id, 0)
+	if err := tx.addEvent(n, EventAttemptEnded, a.Job, id, 0); err != nil {
+		return err
+	}
+	return tx.attemptsEnded([]string{id})
+}
+
+// attemptsEnded tells whoever opened the store, in tx, that tx ended the
+// attempts ids (Options.OnAttemptsEnded).
+func (tx *Tx) attemptsEnded(ids []string) error {
+	if len(ids) == 0 || tx.s.attemptsEnded == nil {
+		return nil
+	}
+	return tx.s.attemptsEnded(tx.ctx, tx, ids)
 }
 
 // digest returns the SHA-256 digest of a secret, as the store keeps a

@@ -326,7 +326,14 @@ type actionRig struct {
 // ends.
 func newActionRig(t *testing.T) *actionRig {
 	t.Helper()
-	c := open(t, Options{})
+	return newActionRigWith(t, Options{})
+}
+
+// newActionRigWith returns an actionRig whose coordinator is opened with
+// opts, as newActionRig does.
+func newActionRigWith(t *testing.T, opts Options) *actionRig {
+	t.Helper()
+	c := open(t, opts)
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: c.store, Logs: &runlogtest.Logs{}, Sealer: c.sealer, Readier: claimReadier{c}, Actions: actions{c}, Children: childAPI{c},
 		Wake: c.wakeWorkerJob,

@@ -198,17 +198,29 @@ func TestCreateChild(t *testing.T) {
 	if co := p.Jobs[0].Steps[2].Checkout; !ok || co == nil || *co != checkout || co.Commit != childCommit {
 		t.Errorf("the child's checkout is pinned to %+v, want the root's pin %+v", co, checkout)
 	}
-	// The child starts with the root's variables.
-	waitFor(t, func() bool { return storedRun(t, c, child).StartState != nil })
+	// The child starts with the root's variables, and its job is placed,
+	// its worker waiting to claim it.
+	waitFor(t, func() bool {
+		return storedRun(t, c, child).StartState != nil && c.store.View(t.Context(), func(tx *store.Tx) error {
+			_, err := tx.LatestAttempt(child, "main")
+			return err
+		}) == nil
+	})
 	if rec := storedRecord(t, c, child); rec == nil || rec.Run == nil || rec.Run.Env["FROM_VAR"] != "from-the-root-east" {
 		t.Errorf("the child's record holds %+v", rec)
 	}
 
-	// The root's job ends, and its finisher waits for the child.
+	// The root's job ends, which stops the child of its step, as the end
+	// of the attempt that called it does, and its finisher waits for the
+	// child, whose job's placement no worker has claimed yet, so it runs
+	// on until one does.
 	close(buildGo)
 	waitFor(t, func() bool { return !storedRun(t, c, root).WaitedAt.IsZero() })
 	if r := storedRun(t, c, root); r.State == store.RunEnded || storedRecord(t, c, root) == nil {
 		t.Errorf("the root ended before its child: %+v", r)
+	}
+	if r := storedRun(t, c, child); r.State == store.RunEnded || r.StopReason != plan.ReasonCancelled {
+		t.Errorf("the child of the ended attempt's step is %s, stopped for %q", r.State, r.StopReason)
 	}
 	// A step of an attempt that has ended gets no child.
 	if _, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: 1, With: req.With}); !errors.Is(err, ErrStepGone) {

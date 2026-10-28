@@ -131,8 +131,9 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 
 // stopTx stores, in tx, the stop record of the run id, which has started,
 // for reason, and tells the running attempts of its jobs that don't
-// outlive the stop, as paths says, to stop; and wakes the supervisors of
-// its readied jobs. It reports whether it stored the stop, which a run
+// outlive the stop, as paths says, to stop, and stops the children of
+// their steps that don't (tellStopTx); and wakes the supervisors of its
+// readied jobs. It reports whether it stored the stop, which a run
 // stopped already has, and returns the supervisors it woke that hopper
 // was running (waking). A run that has ended is store.ErrState.
 func (c *Coordinator) stopTx(ctx context.Context, tx *store.Tx, id string, reason plan.Reason, paths *cancelPaths) (bool, []*waking, error) {
@@ -144,14 +145,25 @@ func (c *Coordinator) stopTx(ctx context.Context, tx *store.Tx, id string, reaso
 	if err != nil {
 		return false, nil, err
 	}
+	var (
+		run   *store.Run
+		woken []*waking
+	)
 	for _, a := range live {
 		// A job readied meanwhile has its supervisor decide.
 		if outlives, known := paths.outlives[a.Job]; !known || outlives {
 			continue
 		}
-		if err := tellStop(tx, a.ID, reason); err != nil {
+		if run == nil {
+			if run, err = tx.Run(id); err != nil {
+				return false, nil, err
+			}
+		}
+		ws, err := c.tellStopTx(ctx, tx, run, a, reason)
+		if err != nil {
 			return false, nil, err
 		}
+		woken = append(woken, ws...)
 	}
 	jobs, err := tx.Jobs(id)
 	if err != nil {
@@ -161,7 +173,6 @@ func (c *Coordinator) stopTx(ctx context.Context, tx *store.Tx, id string, reaso
 	// readies its job once they have finished, as stopped. One of an
 	// instance waiting for its turn under max-parallel: is, and ends it at
 	// once (instanceStep).
-	var woken []*waking
 	for _, j := range jobs {
 		if j.Outcome == "" && (!j.ReadyAt.IsZero() || j.Instance >= 0) {
 			w, err := c.wakeJobTx(ctx, tx, id, j.Key)
@@ -434,10 +445,27 @@ func tellStop(tx *store.Tx, id string, reason plan.Reason) error {
 	return err
 }
 
-// tell asks the worker of the attempt id to stop its job, for reason, as
-// tellStop does, in a transaction of its own.
-func (c *Coordinator) tell(ctx context.Context, id string, reason plan.Reason) error {
-	return c.store.Tx(ctx, func(tx *store.Tx) error { return tellStop(tx, id, reason) })
+// tellStopTx asks, in tx, the worker of the attempt a, of run, to stop its
+// job, for reason, as tellStop does, and stops the children of the steps
+// of its job that the stop stops, as its worker would
+// (stopStepChildrenTx). It returns the supervisors it woke that hopper was
+// running (waking).
+func (c *Coordinator) tellStopTx(ctx context.Context, tx *store.Tx, run *store.Run, a *store.Attempt, reason plan.Reason) ([]*waking, error) {
+	if err := tellStop(tx, a.ID, reason); err != nil {
+		return nil, err
+	}
+	return c.stopStepChildrenTx(ctx, tx, run, a, reason)
+}
+
+// tell asks the worker of the attempt a, of run, to stop its job, for
+// reason, and stops its steps' children that stops, as tellStopTx does,
+// in a transaction of its own.
+func (c *Coordinator) tell(ctx context.Context, run *store.Run, a *store.Attempt, reason plan.Reason) error {
+	return c.store.Tx(ctx, func(tx *store.Tx) error {
+		woken, err := c.tellStopTx(ctx, tx, run, a, reason)
+		c.wakeAgainAfter(tx, woken)
+		return err
+	})
 }
 
 // liveAttempt looks at the job's live attempt a, placed, claimed or
@@ -485,7 +513,7 @@ func (c *Coordinator) liveAttempt(ctx context.Context, run *store.Run, job *stor
 func (c *Coordinator) stoppedAttempt(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	reason := run.StopReason
 	end := stopEnd(reason)
-	if err := c.tell(ctx, a.ID, reason); err != nil {
+	if err := c.tell(ctx, run, a, reason); err != nil {
 		return 0, err
 	}
 	if a.State != store.AttemptPlacing {
@@ -519,7 +547,7 @@ func (c *Coordinator) backstop(ctx context.Context, run *store.Run, job *store.J
 	if now.Before(due) {
 		return max(min(due.Sub(now), c.supervision.wait), time.Millisecond), nil
 	}
-	if err := c.tell(ctx, a.ID, plan.ReasonTimeout); err != nil {
+	if err := c.tell(ctx, run, a, plan.ReasonTimeout); err != nil {
 		return 0, err
 	}
 	if lapsed, err := c.leaseLapsed(ctx, a); err != nil || !lapsed {

@@ -207,6 +207,10 @@ type Coordinator struct {
 	// placed, if it is set, hears of each job a supervisor places, as it
 	// readied it, before the attempt's driver places it.
 	placed func(run *store.Run, attempt string, job *plan.ReadyJob)
+	// rewake, if it is set, is called with the supervisors a transaction
+	// that stopped children woke while hopper ran them, as it has them
+	// woken again once it commits (wakeAgainAfter).
+	rewake func([]*waking)
 	// beforeChildStore, if it is set, is called as CreateChild stores a
 	// child, between its Create and its transaction, as when a test races
 	// two asks.
@@ -290,7 +294,8 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	}
 	// The store asks c, as it stores a failed step's events, whether the
 	// try was the step's last (lastTry), and whether the job's retry: lists
-	// a reason (retriesFor), once c is filled in below; a reset of the
+	// a reason (retriesFor), and has it stop the children of the attempts
+	// it ends (attemptsEnded), once c is filled in below; a reset of the
 	// store's clock wakes the supervisors c knows of, once it is open;
 	// and a change to attempts' controls answers the polls c's server of
 	// the worker API holds of them (controlsChanged).
@@ -298,6 +303,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	var opened atomic.Pointer[Coordinator]
 	st, err := store.Open(ctx, opts.Database, &store.Options{
 		Log: log, LastTry: c.lastTry, RetriesFor: c.retriesFor, ReadOnly: opts.ReadOnly, Now: opts.now, MaxLead: timing.Grace,
+		OnAttemptsEnded: c.attemptsEnded,
 		OnClockReset: func(ctx context.Context) {
 			if c := opened.Load(); c != nil {
 				c.wakeReadied(ctx)
