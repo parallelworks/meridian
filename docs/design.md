@@ -2176,9 +2176,9 @@ and the worker API's paths for a child, served, and what a child's
 attempt's claim has of its tree, which its worker reads; and the worker's
 run of a calling step: it makes the child's directory, and cleans it as
 `clean-on-retry:` says on the machine the run started on, never on a
-host, never following a symbolic link, asks for the
-child, waits for it, stops it as the step is stopped, and ends the step as
-below; the coordinator's stop of a step's children, in the transaction
+host, never following a symbolic link, asks for the child, waits for it,
+stops it as the step is stopped, and ends the step as below; the
+coordinator's stop of a step's children, in the transaction
 that ends its attempt, however it ends, and in the one that stops its run,
 or its job, as the plan says of its `if:`; and the caller's attempt parked
 while it waits. The rest isn't built yet: `meridian run`, `status` and
