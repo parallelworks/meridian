@@ -257,7 +257,7 @@ func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *sto
 	var p backend.Placement
 	if err == nil {
 		p, err = chosen.driver.Place(ctx, chosen.member, backend.PlaceRequest{
-			Attempt: id, Name: "meridian-" + run.ID + "-" + job.Key, Coordinator: endpoint, BootstrapToken: token,
+			Attempt: id, Run: run.ID, Name: "meridian-" + run.ID + "-" + job.Key, Coordinator: endpoint, BootstrapToken: token,
 			TimeoutSeconds: cmp.Or(rj.TimeoutSeconds, chosen.fit.DefaultTimeoutSeconds),
 			Resources:      backend.Resources(rj.Resources), RunDir: run.RunDir,
 		})

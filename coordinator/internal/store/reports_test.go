@@ -169,8 +169,8 @@ func TestPlacementAndEnd(t *testing.T) {
 			return err
 		}
 		refusal := problems.WorkerDigestMismatch.Problem(problems.Params{"placed": "a", "claimed": "b"})
-		if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndLost, Problem: refusal}); err == nil {
-			t.Error("an attempt lost with a problem")
+		if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndSuperseded, Problem: refusal}); err == nil {
+			t.Error("an attempt superseded with a problem")
 		}
 		report := []byte(`{"seq":0,"result":{"outcome":"failure"},"reason":"setup-failed"}`)
 		if err := tx.EndAttempt(a.ID, AttemptEnd{

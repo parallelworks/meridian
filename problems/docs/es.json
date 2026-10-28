@@ -2433,6 +2433,45 @@
       "Si el resumen era distinto, ejecuta el trabajo de nuevo: Meridian vuelve a copiar el binario. Si vuelve a ser distinto, algo en el host o por el camino cambia el archivo."
     ]
   },
+  "ssh_host_missing": {
+    "title": "Miembro del backend ssh que no nombra ningún host",
+    "why": "Un miembro del backend ssh, como el que crea el ssh: de un trabajo de formato 1, ejecuta trabajos en el host que nombra su remoteHost. El remoteHost de este miembro está vacío o es null, así que no hay ningún host en el que ejecutar el trabajo.",
+    "fix": [
+      "Da al ssh: del trabajo un remoteHost, el nombre o la dirección de un host, o, si lo lee de una entrada, dale uno a la entrada."
+    ]
+  },
+  "ssh_unreachable": {
+    "title": "Host al que no se puede llegar",
+    "why": "Antes de colocar un trabajo en un host, Meridian se conecta a él, y lo intenta cuatro veces, como el formato 1, cada intento limitado por el ConnectTimeout del host, o 30 segundos. El formato 1 espera 2, 4 y 8 segundos entre sus intentos; Meridian espera alrededor de 1, 2 y 4, como hace antes de volver a marcar cualquier host al que no pudo llegar. El host no respondió, o la conexión falló cada vez: su nombre no se resuelve, nada escucha en su puerto, falló un host de salto o un ProxyCommand por el camino, o una red o una VPN intermedia está caída. El trabajo no se coloca allí, y falla, como falla el paso del formato 1.",
+    "fix": [
+      "Ejecuta ssh -v <host> desde la misma máquina, como el mismo usuario, para ver dónde falla la conexión.",
+      "Comprueba el nombre del host, su puerto y su host de salto, en el ssh: del flujo de trabajo y en tu configuración de SSH, y que la red hasta él funcione."
+    ]
+  },
+  "ssh_host_helper_failed": {
+    "title": "meridian host que se detuvo antes de responder",
+    "why": "Meridian ejecuta un trabajo en un host mediante meridian host, el binario propio de Meridian, que copia allí y que le responde en un protocolo propio por SSH. Esta vez meridian host se detuvo antes de responder, y dijo por qué en su salida de error estándar, como meridian dice un problema antes de ejecutar un comando: como hace uno cuyo binario no está compilado con el módulo FIPS 140-3, o no se ejecuta en el modo solo FIPS 140, que todo comando meridian exige.",
+    "fix": [
+      "Lee el motivo: es el mensaje propio de meridian, con su código, cuya página explica más.",
+      "Ejecuta el coordinador desde una versión publicada de Meridian, compilada con el módulo FIPS 140-3, para que el binario que copia al host también lo esté."
+    ]
+  },
+  "ssh_host_release_mismatch": {
+    "title": "meridian host de otra versión",
+    "why": "Meridian copia su propio binario a un host y maneja allí meridian host, que debe ser de la versión del coordinador, como lo es el binario que copió. meridian host dijo otra versión: el binario de la caché de binarios del host no es el que copió Meridian, o un binario descargado para el sistema del host es de otra versión.",
+    "fix": [
+      "Elimina la caché de binarios del host, el bin/ del directorio de caché de meridian allí, para que Meridian vuelva a copiar su binario.",
+      "Si el host es de otro sistema que el del coordinador, vuelve a descargar el binario de esta versión para él."
+    ]
+  },
+  "ssh_placement_elsewhere": {
+    "title": "Host cuya conexión llega a otro nodo que el de un worker",
+    "why": "El nombre de un host puede llevar a más de una máquina, como los nodos de acceso de un clúster tras un mismo nombre, cada uno con sus propios workers. Meridian colocó el worker en uno de ellos, y al volver a conectarse llegó a otro, que no sabe nada de él. Meridian da por hecho que ese worker sigue en ejecución durante un tiempo, como sobre una conexión caída, y después que se perdió, con este problema: el nodo en el que está puede estar caído, haber desaparecido o estar fuera de la rotación del nombre.",
+    "fix": [
+      "Comprueba si el nodo en el que se ejecutó el trabajo está activo y en la rotación del nombre.",
+      "Donde los nodos de acceso de un clúster comparten un nombre y sus trabajos deben llegar al mismo, nombra el propio nodo, en el ssh: del flujo de trabajo o en el archivo de clústeres."
+    ]
+  },
   "worker_token_not_taken": {
     "title": "Worker que no tomó su token",
     "why": "Donde el proceso que coloca un worker termina una vez que lo ha hecho, como meridian host en otro host, espera a que el worker tome su token de arranque, que entrega en un socket que solo hereda el worker. Este worker no lo tomó: terminó antes, como termina uno que systemd-run no pudo iniciar, cuando no se puede llegar a tu gestor de servicios o aún existe un scope con el mismo nombre, o no pidió su token en un minuto. Un worker sin su token no puede ejecutar el trabajo, así que Meridian lo detuvo y no colocó nada.",

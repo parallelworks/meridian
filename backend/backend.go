@@ -122,7 +122,11 @@ type Driver interface {
 	// stops heartbeating is checked here before it is declared lost. A
 	// check that can't decide, such as one over an SSH connection that is
 	// down, gives Unknown and an error that says why, and the attempt isn't
-	// lost.
+	// lost. An error that is a problem says the check can't decide for a
+	// cause that won't pass by itself, such as a host key that changed: the
+	// coordinator takes the worker to run for a while
+	// (coordinator.Timing.CheckGrace), and then loses the attempt with the
+	// problem.
 	Check(ctx context.Context, m *Member, p Placement) (Status, error)
 	// Cancel withdraws a placement: it removes a scheduler's job (scancel,
 	// qdel), deletes a pod, or stops a process. The coordinator tells a
@@ -218,6 +222,10 @@ type PlaceRequest struct {
 	// Image is the image the job's steps run in, as repository@sha256:
 	// and its digest, or "" for steps that run on the host.
 	Image string
+	// Run is the ID of the attempt's run, which, with the store's, names
+	// the run's directory on a member that chooses its own, as a host the
+	// ssh backend reaches does.
+	Run string
 	// RunDir is the run's directory on the member, where steps run by
 	// default.
 	RunDir string

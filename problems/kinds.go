@@ -518,6 +518,20 @@ var (
 	SSHWorkerBinaryUnverified = define(Error, "ssh_worker_binary_unverified", "Worker binary on a host that isn't the one copied", "host", "path", "digest", "found")
 )
 
+// The ssh backend's driver (backend/ssh): member is a member's name, and
+// host its host as it was named; reason why the host couldn't be reached,
+// as the system or ssh said, or what meridian host said on its standard
+// error; and op the operation of meridian host's that was asked for.
+var (
+	SSHHostMissing      = define(Error, "ssh_host_missing", "Member of the ssh backend that names no host", "member")
+	SSHUnreachable      = define(Error, "ssh_unreachable", "Host that can't be reached", "host", "reason")
+	SSHHostHelperFailed = define(Error, "ssh_host_helper_failed", "meridian host that stopped before it answered", "host", "op", "reason")
+	// release is the release meridian host says it is, and expected the
+	// coordinator's.
+	SSHHostReleaseMismatch = define(Error, "ssh_host_release_mismatch", "meridian host of another release", "host", "release", "expected")
+	SSHPlacementElsewhere  = define(Error, "ssh_placement_elsewhere", "Host whose connection reaches another node than a worker's", "host")
+)
+
 // The meridian command's directories. mode is a file's or directory's
 // permissions in octal, as 0755.
 var (

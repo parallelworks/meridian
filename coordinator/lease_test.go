@@ -284,6 +284,86 @@ func TestCheckUnknown(t *testing.T) {
 	}
 }
 
+// TestCheckProblem checks that a worker whose backend's check gives a
+// problem, a cause that won't pass by itself, counts as running for
+// CheckGrace from the first such check since the backend last decided,
+// and is then lost, with the problem: a check that decides meanwhile
+// starts the grace again, and one that can't decide for a cause that may
+// pass, as a connection that is down, neither ends it nor starts it again.
+func TestCheckProblem(t *testing.T) {
+	parallel(t)
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true}, []bool{true})
+	id, _ := startJob(t, c, oneJob, store.AttemptRunning)
+	clock.Advance(c.timing.Lease + time.Second)
+	elsewhere := problems.SSHPlacementElsewhere.Problem(problems.Params{"host": "farm"})
+	running := func(what string) {
+		t.Helper()
+		if wait := look(t, c, id); wait != c.timing.Heartbeat {
+			t.Fatalf("%s, the supervisor waits %v", what, wait)
+		}
+	}
+	d.says(backend.Status{State: backend.Unknown}, elsewhere)
+	running("at the first check that gives a problem")
+	clock.Advance(c.timing.CheckGrace - time.Second)
+	running("within the grace")
+	d.says(backend.Status{State: backend.Running}, nil)
+	running("once the backend decides")
+	d.says(backend.Status{State: backend.Unknown}, elsewhere)
+	running("at the first check that gives a problem since it decided")
+	clock.Advance(c.timing.CheckGrace - time.Second)
+	running("within the grace it started again")
+	d.says(backend.Status{State: backend.Unknown}, errors.New("the connection to the member is down"))
+	clock.Advance(time.Hour)
+	running("over a connection that is down")
+	d.says(backend.Status{State: backend.Unknown}, elsewhere)
+	if wait := look(t, c, id); wait != 0 {
+		t.Fatalf("past the grace, the supervisor waits %v", wait)
+	}
+	a := latestAttempt(t, c, id, "main")
+	if a.End.Kind != store.EndLost || a.End.Reason != plan.ReasonWorkerLost || a.End.Problem == nil || a.End.Problem.Code != problems.SSHPlacementElsewhere.Code() {
+		t.Errorf("the attempt ended %+v", a.End)
+	}
+	// The job that fails says why its worker was lost.
+	if j := storedJob(t, c, id, "main"); !slices.Equal(jobCodes(j), []string{"worker_lost", string(problems.SSHPlacementElsewhere.Code())}) {
+		t.Errorf("the job's diagnostics are %v", jobCodes(j))
+	}
+}
+
+// TestCheckProblemRenewed checks that a worker that comes back by itself,
+// renewing its lease, as one on a login node out of its name's rotation
+// for a while does, ends the grace of a problem its backend's check gave:
+// a problem at a later lapse starts a grace of its own.
+func TestCheckProblemRenewed(t *testing.T) {
+	parallel(t)
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true}, []bool{true})
+	id, a := startJob(t, c, oneJob, store.AttemptRunning)
+	d.mu.Lock()
+	credential := d.credentials[a.ID]
+	d.mu.Unlock()
+	elsewhere := problems.SSHPlacementElsewhere.Problem(problems.Params{"host": "farm"})
+	d.says(backend.Status{State: backend.Unknown}, elsewhere)
+	clock.Advance(c.timing.Lease + time.Second)
+	if wait := look(t, c, id); wait != c.timing.Heartbeat {
+		t.Fatalf("at the first check that gives a problem, the supervisor waits %v", wait)
+	}
+	// An hour of heartbeats, as the worker reaches the coordinator again.
+	for range int(time.Hour / c.timing.Heartbeat) {
+		clock.Advance(c.timing.Heartbeat)
+		if err := c.store.Tx(t.Context(), func(tx *store.Tx) error { _, err := tx.Renew(credential); return err }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.Advance(c.timing.Lease + time.Second)
+	if wait := look(t, c, id); wait != c.timing.Heartbeat {
+		t.Fatalf("at a later lapse, a check that gives a problem has the supervisor wait %v", wait)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.State != store.AttemptRunning {
+		t.Errorf("the attempt is %s, %+v", a.State, a.End)
+	}
+}
+
 // retryJob runs again once its worker is lost after a step starts.
 const retryJob = `
 jobs:

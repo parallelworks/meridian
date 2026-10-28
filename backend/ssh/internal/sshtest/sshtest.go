@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -65,7 +66,10 @@ type Server struct {
 	loggedIn map[string]bool
 	// commands are the exec requests' commands, in order.
 	commands []string
-	wg       sync.WaitGroup
+	// env is added to the environment of exec requests after
+	// Options.Env (SetEnv).
+	env []string
+	wg  sync.WaitGroup
 }
 
 // New starts a server, which stops when the test ends.
@@ -148,6 +152,16 @@ func (s *Server) Commands() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.commands...)
+}
+
+// SetEnv makes the server run the exec requests it gets from now on with
+// env over the environment Options.Env makes, as another host whose
+// connections reach the same address would, as a cluster's login nodes do
+// behind one name.
+func (s *Server) SetEnv(env ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.env = env
 }
 
 // Drop closes every connection, as a host that went away does.
@@ -418,8 +432,8 @@ func (f *forwards) closeAll() {
 }
 
 // session serves a session: an exec request runs its command with sh -c,
-// as the test's user, with the server's Env, and its exit status is sent.
-// Others are refused.
+// as the test's user, with the server's Env, and its exit status is sent
+// once it has ended. Others are refused.
 func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer ch.Close()
 	for req := range reqs {
@@ -437,12 +451,27 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		_ = req.Reply(true, nil)
 		s.mu.Lock()
 		s.commands = append(s.commands, p.Command)
+		env := slices.Concat(os.Environ(), s.opts.Env, s.env)
 		s.mu.Unlock()
 		cmd := exec.Command("sh", "-c", p.Command) //nolint:gosec,noctx // a test's command, run as the test's user, as sshd runs it
-		cmd.Env = append(os.Environ(), s.opts.Env...)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = ch, ch, ch.Stderr()
+		cmd.Env = env
+		cmd.Stdout, cmd.Stderr = ch, ch.Stderr()
+		// As with sshd, the session ends with its command, whether or not
+		// the client has closed the command's standard input: copying it
+		// isn't waited for.
+		stdin, err := cmd.StdinPipe()
+		if err == nil {
+			err = cmd.Start()
+		}
+		if err == nil {
+			go func() {
+				_, _ = io.Copy(stdin, ch)
+				_ = stdin.Close()
+			}()
+			err = cmd.Wait()
+		}
 		status := 0
-		if err := cmd.Run(); err != nil {
+		if err != nil {
 			status = 255
 			if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 				status = exit.ExitCode()

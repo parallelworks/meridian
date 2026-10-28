@@ -106,6 +106,13 @@ func (c *Coordinator) waitFor(d time.Duration) time.Duration {
 // asked, is lost once the grace has passed since its lease lapsed, or
 // since it was placed, for one not claimed: a failure before its first
 // step, member_gone, which places the job again, when none had started.
+//
+// A check that gives a problem, a cause that won't pass by itself, as a
+// host key that known_hosts doesn't have, counts as running, as one that
+// can't decide does, but for CheckGrace at most, from the first such
+// check since the backend last decided, or the attempt's lease was last
+// renewed, as the store records it (store.Tx.CheckProblem), whichever
+// replica checked: then the attempt is lost with the problem.
 func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, now time.Time) (time.Duration, error) {
 	cand, p, err := c.placedMember(ctx, run, job, a)
 	switch {
@@ -124,6 +131,29 @@ func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *stor
 	st := backend.Status{State: backend.Unknown}
 	if err == nil {
 		st, err = cand.driver.Check(ctx, cand.member, p)
+		if prob, ok := errors.AsType[*problem.Problem](err); ok {
+			var since time.Time
+			err := c.store.Tx(ctx, func(tx *store.Tx) error {
+				var err error
+				since, err = tx.CheckProblem(a)
+				return err
+			})
+			switch {
+			case errors.Is(err, store.ErrState):
+				// A heartbeat overtook the check: the worker reached the
+				// coordinator since.
+				return c.waitFor(c.timing.Heartbeat), nil
+			case err != nil:
+				return 0, err
+			}
+			if !now.Before(since.Add(c.timing.CheckGrace)) {
+				return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, prob)
+			}
+		} else if err == nil && !a.ProblemSince.IsZero() {
+			if err := c.store.Tx(ctx, func(tx *store.Tx) error { return tx.CheckDecided(a.ID) }); err != nil {
+				return 0, err
+			}
+		}
 		if err != nil {
 			if a.Private {
 				c.log.InfoContext(ctx, "coordinator: a backend couldn't say whether an attempt's worker runs, which counts as running", "attempt", a.ID)
@@ -198,23 +228,24 @@ func (c *Coordinator) placedMember(ctx context.Context, run *store.Run, job *sto
 // lose ends the attempt a, whose worker was lost, as st, its backend's
 // last word on it, says: with the reason timeout or out-of-memory when its
 // scheduler, or the kernel, ended it so; with worker-lost once a step has
-// started; and otherwise as a failure before the job's first step, with
-// early, or worker_ended_early for nil, which places the job again. The
+// started, with why, its problem, if it has one; and otherwise as a
+// failure before the job's first step, with why, or worker_ended_early
+// for nil, which places the job again. The
 // attempt must still be as a was, not claimed nor renewed meanwhile, as a
 // worker that reached the coordinator again would have it, or nothing is
 // ended. Either way, the supervisor looks again.
-func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Status, early *problem.Problem) error {
-	end := store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost}
+func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Status, why *problem.Problem) error {
+	end := store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost, Problem: why}
 	switch {
 	case st.End == backend.EndTimedOut:
 		end.Reason = plan.ReasonTimeout
 	case st.End == backend.EndOutOfMemory:
 		end.Reason = plan.ReasonOutOfMemory
 	case a.State != store.AttemptRunning:
-		if early == nil {
-			early = problems.WorkerEndedEarly.Problem(problems.Params{"job": a.Job})
+		if why == nil {
+			why = problems.WorkerEndedEarly.Problem(problems.Params{"job": a.Job})
 		}
-		end = store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: early}
+		end = store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: why}
 	}
 	ended := false
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
@@ -244,13 +275,20 @@ func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Sta
 // interval, twice as long for each before it, up to an hour; and each
 // attempt that started a step counts, as the new attempt's claim says
 // (workerapi.Claim.Retry). An attempt its scheduler, or the kernel, ended,
-// at its time limit or for its memory, fails the job with that reason.
+// at its time limit or for its memory, fails the job with that reason. A
+// job that fails so has the problem the attempt was lost with, if it has
+// one, among its diagnostics, as why.
 func (c *Coordinator) workerLost(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
 	failed := func(k *problems.Kind, params problems.Params) error {
 		params["job"] = job.Key
+		diags := problems.Diagnostics{diagnostic(k, params)}
+		if p := a.End.Problem; p != nil {
+			// Stored masked when where the job ran was private
+			// (store.Tx.EndAttempt).
+			diags = append(diags, problemDiagnostic(p))
+		}
 		return c.endJob(ctx, run.ID, job.Key, store.JobEnd{
-			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: a.End.Reason,
-			Diagnostics: problems.Diagnostics{diagnostic(k, params)},
+			Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: a.End.Reason, Diagnostics: diags,
 		}, done)
 	}
 	if a.End.Reason != plan.ReasonWorkerLost {
