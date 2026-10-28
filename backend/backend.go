@@ -148,6 +148,18 @@ type Demand struct {
 	// TimeoutSeconds is the job's timeout:, or 0 when it has none, and the
 	// member's default applies.
 	TimeoutSeconds int64
+	// Parked are the attempts parked for the job: its run's callers, the
+	// attempt whose step called the run, and that attempt's run's caller,
+	// up to the root, each of whose workers waits for the child run below
+	// it. Parked, each keeps its lease, but lends what it asked of its
+	// member to its own descendants, which end before it goes on, so that
+	// callers that wait don't starve their own children; never to another
+	// job, which would still hold it when the caller went on. A driver
+	// that counts what it placed against its member, as local does, leaves
+	// these out, and ignores the IDs of attempts it didn't place. One that
+	// can't release what a placement holds, as a batch scheduler's
+	// allocation, ignores them all.
+	Parked []string
 }
 
 // A Fit is what a member says of a job: whether it can run it, and how

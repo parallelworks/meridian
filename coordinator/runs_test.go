@@ -325,6 +325,9 @@ type workerDriver struct {
 	idle    func(req backend.PlaceRequest) bool
 	gate    <-chan struct{}
 	workers sync.WaitGroup
+	// ended, if it is set, is told of each attempt whose worker has
+	// ended.
+	ended func(attempt string)
 
 	mu         sync.Mutex
 	placements map[string]backend.Placement
@@ -382,6 +385,9 @@ func (d *workerDriver) Place(ctx context.Context, _ *backend.Member, req backend
 		err := worker.Run(ctx, worker.Config{Worker: workerapi.Worker{Version: "test", Digest: testDigest}, Environ: environ, Dir: dir})
 		if err != nil {
 			d.log("the worker of attempt %s: %v", req.Attempt, err)
+		}
+		if d.ended != nil {
+			d.ended(req.Attempt)
 		}
 	})
 	return p, nil
