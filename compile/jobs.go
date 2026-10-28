@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/jsonptr"
@@ -246,6 +247,7 @@ func (c *compiler) job(info *jobInfo) plan.Job {
 	j.RunsOn = c.value(at("runs-on"), plan.PhaseReady, info)
 	j.Resources = c.value(at("resources"), plan.PhaseReady, info)
 	j.SSH = c.value(at("ssh"), plan.PhaseReady, info)
+	c.checkDisconnectTimeout(at("ssh"))
 	j.Timeout = c.value(at("timeout"), plan.PhaseReady, info)
 	j.WorkingDirectory = c.value(at("working-directory"), plan.PhaseReady, info)
 	if retry, ok := def["retry"].(map[string]any); ok {
@@ -284,6 +286,7 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 	s.Env = c.values(at("env"), plan.PhaseStep, info)
 	s.WorkingDirectory = c.value(at("working-directory"), plan.PhaseStep, info)
 	s.SSH = c.value(at("ssh"), plan.PhaseStep, info)
+	c.checkDisconnectTimeout(at("ssh"))
 	s.Timeout = c.value(at("timeout"), plan.PhaseStep, info)
 	s.IgnoreErrors = c.value(at("ignore-errors"), plan.PhaseStep, info)
 	// A cleanup: runs once every step has, so it reads each one's outputs.
@@ -303,4 +306,31 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 		}
 	}
 	return s
+}
+
+// checkDisconnectTimeout warns of the disconnect-timeout of the format 1
+// ssh: at loc, a job's or a step's that the workflow writes as a mapping,
+// unless it is negative: Meridian doesn't honour it, and runs every step
+// on a host as a negative one asks, through a lost connection
+// (problems.SSHDisconnectTimeoutIgnored). One that an expression gives is
+// warned of too, since what it gives isn't known yet.
+func (c *compiler) checkDisconnectTimeout(loc []string) {
+	ssh, _ := lookup(c.doc.Value, loc).(map[string]any)
+	v, ok := ssh["disconnect-timeout"]
+	if !ok || negativeTimeout(v) {
+		return
+	}
+	c.reportAt(problems.SSHDisconnectTimeoutIgnored, appendPath(loc, "disconnect-timeout"), problems.Params{"value": problems.Show(v)})
+}
+
+// negativeTimeout reports whether v, a disconnect-timeout as a workflow
+// writes it, is negative: a number under 0, or text of one, alone or with
+// units after it, as Go writes a duration, such as -1, -5m or -1h30m.
+func negativeTimeout(v any) bool {
+	if n, ok := toNumber(v); ok {
+		return n < 0
+	}
+	s, _ := v.(string)
+	d, err := time.ParseDuration(strings.TrimSpace(s))
+	return err == nil && d < 0
 }

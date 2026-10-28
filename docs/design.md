@@ -1997,7 +1997,9 @@ pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded 
   expands a matrix that reads `needs`, and evaluates the job's `if:`, so a
   false `if:` skips it here. Otherwise it evaluates the rest of what was left
   for this point, such as a `runs-on:` that uses `needs`, and picks a member
-  of the job's group ([Placement](#placement)). The coordinator runs Ready
+  of the job's group ([Placement](#placement)). Ready's errors fail the
+  job, and its warnings, as `job_ssh_host_empty`, are kept with the job,
+  which runs. The coordinator runs Ready
   again whenever it needs the job, as when it places it and each time a
   worker claims it, with what the job was readied with kept: whether the
   run had been cancelled then, and which instance each `:any` need took. So
@@ -4073,13 +4075,20 @@ backend there through `meridian host`
   lost before it fails the step, 300 seconds by default, isn't honoured:
   a step keeps running through an outage, which is what a worker on the
   host is for, and a laptop that sleeps through it fails no remote step.
-  The compiler will warn of the key (`ssh_disconnect_timeout_ignored`);
-  none of the known workflows sets it.
+  Every step runs as a negative one asks, so the compiler warns, where
+  the workflow writes it, of one that isn't negative, as `-1` and `-5m`
+  are, and of one an expression gives, whose value it doesn't know yet
+  (`ssh_disconnect_timeout_ignored`); none of the known workflows sets
+  it.
 - **A job whose `ssh:` gives no `remoteHost`**, empty or null, runs as it
-  would without its `ssh:`, as format 1 runs it, and as a step's does
-  ([Running steps](#running-steps)). Ready doesn't do that yet: it places
-  such a job on a member with no host, which can't run it
-  (`ssh_host_missing`).
+  would without its `ssh:`, where its `runs-on:` says, or on the run's
+  default group, as format 1 runs it, and as a step's does
+  ([Running steps](#running-steps)): Ready gives it no inline group.
+  Format 1 notes it in the log of each step that runs so; Meridian keeps
+  Ready's warning with the job (`job_ssh_host_empty`), once however often
+  the job is readied, which its status and its end show, however it ends.
+  The common case is a `remoteHost` that reads a `compute-clusters`
+  input's `ip`, which is `""` for the workspace, this machine.
 - **A step whose `ssh:` names another host** fails
   (`step_ssh_not_supported`) until the worker can run a step on another
   host itself.

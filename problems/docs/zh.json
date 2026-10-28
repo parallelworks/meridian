@@ -712,6 +712,14 @@
       "减少该值的嵌套层级。"
     ]
   },
+  "ssh_disconnect_timeout_ignored": {
+    "title": "不遵循的 disconnect-timeout",
+    "why": "格式 1 会在与主机的连接断开达到 disconnect-timeout（默认 300 秒）时让该主机上的步骤失败，为负值时则从不失败。Meridian 在主机上运行一个工作进程，它在连接断开期间继续运行作业的步骤，并在连接恢复后报告它们，因此每个步骤都按负的 disconnect-timeout 所要求的方式运行。",
+    "fix": [
+      "删除 disconnect-timeout，或把它设为负值，例如 -1。",
+      "要限制步骤运行的时长，请给该步骤一个 timeout:。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on 不是运行位置",
     "why": "作业的 runs-on: 用于选择作业的运行位置，但其中的表达式得到的值没有指定任何位置。runs-on 接受执行组的名称（如 execution-groups 输入给出的值）、带有 execution-group: 的映射、带有 environment: 及其集群和名称的映射，或计算目标（如 compute-target 输入给出的值）。",
@@ -780,6 +788,13 @@
     "why": "工作目录按原样使用，没有 shell 会展开其中的变量，因此 $HOME 或 ${PW_JOB_DIR} 会成为同名的目录。格式 1 会改为让该步骤失败。",
     "fix": [
       "用表达式读取该值，例如 env.PW_JOB_DIR，或者直接写出路径。"
+    ]
+  },
+  "job_ssh_host_empty": {
+    "title": "未指定主机的作业 ssh:",
+    "why": "格式 1 中作业的 ssh: 会在其 remoteHost 指定的主机上运行该作业的步骤。为空或为 null 的 remoteHost 不指定任何主机，格式 1 会在没有 ssh: 时运行该作业的地方运行它，并在每个步骤的日志中留下说明。这通常是一个错误，例如某个输入被留空。Meridian 也在那里运行它，并在该作业上保留这条警告。",
+    "fix": [
+      "为 ssh: 指定 remoteHost，或删除它，让该作业在没有 ssh: 时运行的地方运行。"
     ]
   },
   "undefined_env": {

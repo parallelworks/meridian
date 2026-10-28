@@ -663,8 +663,7 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 	named := false
 	if rs.SSH != nil {
 		ssh, _ := rs.SSH.SSH.Get().(map[string]any)
-		host, given := ssh["remoteHost"]
-		named = !given || host != nil && host != ""
+		named = !plan.NoRemoteHost(ssh)
 	}
 	job := a.job.Target.Inline
 	switch {

@@ -100,6 +100,7 @@
   "older_always": "La palabra always es la forma antigua de escribir always(). Usa always().",
   "replaced_keyword": "La palabra {word} es el texto {text}, que siempre es verdadero. La palabra clave de if: que era ahora es {replacement}.",
   "value_too_deep": "El valor se anida demasiado para guardarse con la ejecución, que puede anidarse como máximo {max} niveles.",
+  "ssh_disconnect_timeout_ignored": "Meridian no respeta disconnect-timeout, aquí {value}: un paso en un host sigue ejecutándose mientras se pierde la conexión con el host, como con un disconnect-timeout negativo.",
 
   "runs_on_invalid": "El valor de runs-on debe ser el nombre de un grupo de ejecución, o un mapa que nombre un grupo de ejecución, un entorno o un destino de cómputo, no {value}.",
   "resources_invalid": "{key, select, cpu {Las CPU de resources deben ser un número de núcleos, como 4, 0.5 o 500m} memory {La memoria de resources debe ser un número de bytes, como 8Gi o 512Mi} gpu {Las GPU de resources deben ser un número entero} other {El valor de “{key}” en resources no es válido}}, no {value}.",
@@ -111,6 +112,7 @@
   "matrix_too_large": "La matriz tiene más de {limit} combinaciones, el máximo que puede tener una matriz.",
   "output_not_written": "{of, select, step {El paso “{owner}” no escribió ninguna salida “{name}”} other {El trabajo “{owner}” no tiene ninguna salida “{name}”}}, así que lo que la lee falla.",
   "working_directory_variable": "El directorio de trabajo conserva {variable} tal cual: las variables del shell no se expanden ahí. Usa en su lugar una expresión que lea env, como env.PW_JOB_DIR.",
+  "job_ssh_host_empty": "El ssh: del trabajo no da ningún remoteHost, así que el trabajo se ejecuta donde se ejecutaría sin su ssh:, como lo ejecuta el formato 1.",
   "undefined_env": "Leer env.{name} da “” aquí: ningún env: del flujo de trabajo, del trabajo o del paso la define, y el formato 1 no la da aquí.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
 
   "expression_empty": "La expresión está vacía.",

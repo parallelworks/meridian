@@ -712,6 +712,14 @@
       "Anida menos el valor."
     ]
   },
+  "ssh_disconnect_timeout_ignored": {
+    "title": "disconnect-timeout no respetado",
+    "why": "El formato 1 hace fallar un paso en un host una vez que su conexión con el host lleva perdida el tiempo de disconnect-timeout, 300 segundos por omisión, y nunca con uno negativo. Meridian ejecuta un worker en el host, que sigue ejecutando los pasos del trabajo mientras la conexión está perdida y los informa cuando vuelve, así que cada paso se ejecuta como pide un disconnect-timeout negativo.",
+    "fix": [
+      "Quita disconnect-timeout, o hazlo negativo, como -1.",
+      "Da al paso un timeout: para limitar cuánto tiempo se ejecuta."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",
@@ -780,6 +788,13 @@
     "why": "Un directorio de trabajo se usa tal cual, y ningún shell expande las variables que contiene, así que $HOME o ${PW_JOB_DIR} serían un directorio con ese nombre. El formato 1 hace fallar el paso en su lugar.",
     "fix": [
       "Lee el valor con una expresión, como env.PW_JOB_DIR, o escribe la ruta completa."
+    ]
+  },
+  "job_ssh_host_empty": {
+    "title": "ssh: del trabajo sin host",
+    "why": "El ssh: de un trabajo del formato 1 ejecuta los pasos del trabajo en el host que indica su remoteHost. Uno vacío o nulo no indica ninguno, y el formato 1 ejecuta el trabajo donde se ejecutaría sin ssh:, con una nota en el registro de cada paso, lo que a menudo es un error, como una entrada que se dejó vacía. Meridian también lo ejecuta ahí, y guarda esta advertencia con el trabajo.",
+    "fix": [
+      "Da al ssh: un remoteHost, o quítalo para ejecutar el trabajo donde se ejecuta sin él."
     ]
   },
   "undefined_env": {

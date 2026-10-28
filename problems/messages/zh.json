@@ -100,6 +100,7 @@
   "older_always": "单词 always 是 always() 的旧写法。请使用 always()。",
   "replaced_keyword": "单词 {word} 是文本 {text}，它始终为 true。它原来对应的 if: 关键字现在是 {replacement}。",
   "value_too_deep": "该值嵌套过深，无法随运行一起保存。运行的嵌套最多 {max} 层。",
+  "ssh_disconnect_timeout_ignored": "Meridian 不遵循 disconnect-timeout（这里是 {value}）：与负的 disconnect-timeout 一样，主机上的步骤在与该主机的连接断开期间会继续运行。",
 
   "runs_on_invalid": "runs-on 的值必须是执行组的名称，或指定执行组、环境或计算目标的映射，而不是 {value}。",
   "resources_invalid": "{key, select, cpu {resources 中的 CPU 必须是核心数，例如 4、0.5 或 500m，而不是 {value}。} memory {resources 中的内存必须是字节数，例如 8Gi 或 512Mi，而不是 {value}。} gpu {resources 中的 GPU 必须是整数，而不是 {value}。} other {resources 中“{key}”的值 {value} 无效。}}",
@@ -111,6 +112,7 @@
   "matrix_too_large": "矩阵的组合超过 {limit} 个，这是矩阵允许的最大数量。",
   "output_not_written": "{of, select, step {步骤“{owner}”没有写入输出“{name}”} other {作业“{owner}”没有输出“{name}”}}，因此读取它的表达式失败。",
   "working_directory_variable": "工作目录中原样保留了 {variable}：此处不会展开 shell 变量。请改用读取 env 的表达式，例如 env.PW_JOB_DIR。",
+  "job_ssh_host_empty": "该作业的 ssh: 没有给出 remoteHost，因此该作业在没有 ssh: 时会运行的地方运行，与格式 1 相同。",
   "undefined_env": "此处 env.{name} 读取为“”：工作流、作业和步骤的 env: 都没有定义它，格式 1 在此处也不提供它。{suggested, select, true {你是指“{suggestion}”吗？} other {}}",
 
   "expression_empty": "表达式为空。",

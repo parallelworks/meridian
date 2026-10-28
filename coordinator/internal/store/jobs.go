@@ -5,6 +5,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -54,7 +55,9 @@ type Job struct {
 	// couldn't answer as it was placed (PlaceTried).
 	Wake       int64
 	PlaceTries int
-	// Diagnostics are the job's problems: Ready's, or placement's.
+	// Diagnostics are the job's problems: the warnings Ready gave it as it
+	// was to run (NoteJob), and then its end's, as Ready's errors or
+	// placement's.
 	Diagnostics problems.Diagnostics
 	// Expansion is a matrix job's instances as run state holds them, once
 	// its supervisor expanded its matrix at Ready (SetExpansion), or nil.
@@ -230,8 +233,55 @@ type JobEnd struct {
 	Diagnostics problems.Diagnostics
 }
 
-// EndJob records how the run's job ended. A job that has ended already, or
-// that has an attempt that hasn't, is ErrState.
+// NoteJob adds diags, warnings that Ready gave the run's job as it was to
+// run, such as job_ssh_host_empty, to its problems, but for those it has
+// already, as when it is readied again for another attempt. Its end keeps
+// them, before its own (EndJob). Like an end's, they never show a value
+// made from a variable or a password. A job that has ended is ErrState.
+func (tx *Tx) NoteJob(run, key string, diags problems.Diagnostics) error {
+	j, err := tx.Job(run, key)
+	if err != nil {
+		return err
+	}
+	if j.Outcome != "" {
+		return fmt.Errorf("%w: run %s's job %q has ended", ErrState, run, key)
+	}
+	// A diagnostic is told from another by its encoding, as the store
+	// holds it, in which a param's number reads back as it was written.
+	had := map[string]bool{}
+	for _, d := range j.Diagnostics {
+		data, err := encodeDiagnostics(problems.Diagnostics{d})
+		if err != nil {
+			return err
+		}
+		had[string(data)] = true
+	}
+	all := j.Diagnostics
+	for _, d := range diags {
+		data, err := encodeDiagnostics(problems.Diagnostics{d})
+		if err != nil {
+			return err
+		}
+		if !had[string(data)] {
+			had[string(data)] = true
+			all = append(all, d)
+		}
+	}
+	if len(all) == len(j.Diagnostics) {
+		return nil
+	}
+	data, err := encodeDiagnostics(all)
+	if err != nil {
+		return err
+	}
+	n, _ := runNumber(run)
+	_, err = tx.exec("UPDATE meridian_jobs SET diagnostics = ? WHERE run_id = ? AND key = ?", data, n, key)
+	return err
+}
+
+// EndJob records how the run's job ended, with its end's problems after
+// those it has (NoteJob). A job that has ended already, or that has an
+// attempt that hasn't, is ErrState.
 func (tx *Tx) EndJob(run, key string, end JobEnd) error {
 	switch end.Result.Outcome {
 	case plan.OutcomeSuccess, plan.OutcomeFailure, plan.OutcomeCancelled, plan.OutcomeSkipped:
@@ -258,8 +308,8 @@ func (tx *Tx) EndJob(run, key string, end JobEnd) error {
 		return fmt.Errorf("%w: run %s's job %q has an attempt that hasn't ended", ErrState, run, key)
 	}
 	var diags []byte
-	if len(end.Diagnostics) > 0 {
-		if diags, err = encodeDiagnostics(end.Diagnostics); err != nil {
+	if all := slices.Concat(j.Diagnostics, end.Diagnostics); len(all) > 0 {
+		if diags, err = encodeDiagnostics(all); err != nil {
 			return err
 		}
 	}
