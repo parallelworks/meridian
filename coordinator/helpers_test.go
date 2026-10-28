@@ -59,11 +59,12 @@ var fastSupervision = supervision{
 }
 
 // testPollInterval is how often a test's idle hopper producers look for
-// work that no wake told them of, as what the coordinator's inserter adds,
-// or a wake that comes due: soon enough for a test not to wait long on
-// one, and seldom enough that the polls of the tests that run at once,
-// each a statement that the race detector makes costly, don't take much
-// of the CPU they share. At 10ms they took a tenth of the package's.
+// work that no notification told them of, as a job whose snooze comes due:
+// an insert or a retry in a transaction tells them as it commits. It is
+// soon enough for a test not to wait long on one, and seldom enough that
+// the polls of the tests that run at once, each a statement that the race
+// detector makes costly, don't take much of the CPU they share. At 10ms
+// they took a tenth of the package's.
 const testPollInterval = 50 * time.Millisecond
 
 // storeTemplate is a store that store.Open made, and migrated, once a test
