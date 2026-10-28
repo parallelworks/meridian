@@ -141,6 +141,17 @@ type Fake struct {
 	// a repeat of the request as it answered the first. An answer's Reason
 	// stands for a cancel of the step's job the action made.
 	Act func(req workerapi.ActionRequest) workerapi.ActionAnswer
+	// Child, if set, is called with each ask for a step's try's child that
+	// has none yet, with the Fake's lock held. It returns nil for the Fake
+	// to make it, child-1 and on, which runs until EndChild ends it; or the
+	// answer: a child the coordinator didn't make, which has ended, or, one
+	// with a Run, made, which has ended if it says so.
+	Child func(req workerapi.ChildRequest) *workerapi.Child
+	// OnChildStop, if set, is called with each stop of a child the Fake
+	// stores, with its lock held, and the child ends with the outcome it
+	// returns, as its run's stop ends it, unless that is "": then it runs
+	// on until EndChild ends it.
+	OnChildStop func(stop workerapi.ChildStop) plan.Outcome
 
 	t          testing.TB
 	mu         sync.Mutex
@@ -564,6 +575,18 @@ func (f *Fake) handleChild(w http.ResponseWriter, body []byte) {
 		f.children, f.ended = map[[2]int]string{}, map[string]workerapi.Child{}
 	}
 	id, ok := f.children[key]
+	if !ok && f.Child != nil {
+		if answer := f.Child(req); answer != nil {
+			if answer.Run != "" {
+				f.children[key] = answer.Run
+				if answer.Ended {
+					f.ended[answer.Run] = *answer
+				}
+			}
+			writeJSON(w, f.Claim.APIVersion, answer)
+			return
+		}
+	}
 	if !ok {
 		id = "child-" + strconv.Itoa(len(f.children)+1)
 		f.children[key] = id
@@ -624,11 +647,19 @@ func (f *Fake) handleChildStop(w http.ResponseWriter, body []byte) {
 		writeStatus(w, http.StatusBadRequest)
 		return
 	}
-	if _, ok := f.children[[2]int{stop.Step, stop.Try}]; !ok {
+	id, ok := f.children[[2]int{stop.Step, stop.Try}]
+	if !ok {
 		writeStatus(w, http.StatusNotFound)
 		return
 	}
 	f.childStops = append(f.childStops, stop)
+	if f.OnChildStop != nil {
+		if _, ended := f.ended[id]; !ended {
+			if outcome := f.OnChildStop(stop); outcome != "" {
+				f.ended[id] = workerapi.Child{Run: id, Ended: true, Outcome: outcome, Reason: stop.Reason}
+			}
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

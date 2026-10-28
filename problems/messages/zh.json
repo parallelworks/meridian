@@ -168,6 +168,8 @@
   "cancel_jobs_job_unknown": "该步骤取消“{job}”，但它不是该步骤的运行中步骤可以取消的作业，因此不会为它取消任何内容。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
   "cancel_jobs_other_run": "该步骤通过其 with: 中的“{key}”取消另一个运行的作业，而 Meridian 尚不支持这样做。",
   "cancel_jobs_run_missing": "该步骤的 with: 指定了要取消其运行的工作流，但没有指定格式 1 所需的运行：一个非负的编号。",
+  "child_request_failed": "该步骤调用了“{uses}”，而工作进程为其运行向协调器发出的请求失败了：{reason}",
+  "child_dir_unusable": "工作进程无法创建该步骤调用的运行的目录“{dir}”：{reason}",
   "step_ssh_not_supported": "该步骤的 ssh: 指定了运行它的另一台主机，而此工作进程尚不能在另一台主机上运行步骤。",
   "step_off_job_host": "该步骤的 ssh: 为 null 或没有给出 remoteHost，因此格式 1 会在其作业没有 ssh: 时运行的地方运行它，而此工作进程位于作业的 ssh: 指定的主机上，尚不能在那里运行它。",
   "ssh_host_empty": "该步骤的 ssh: 没有给出 remoteHost，因此该步骤在其作业运行的地方运行，与格式 1 相同。",

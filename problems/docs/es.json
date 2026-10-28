@@ -1151,6 +1151,22 @@
       "Si son de la misma versión, informa del error, con la razón y el registro del worker."
     ]
   },
+  "child_request_failed": {
+    "title": "Solicitud al coordinador de la ejecución de un flujo de trabajo llamado que falló",
+    "why": "Un paso cuyo uses: nombra un flujo de trabajo le pide al coordinador, a través de la API de workers, su ejecución, espera a que termine y la detiene cuando el paso se detiene. Una de esas solicitudes falló de forma definitiva: el coordinador la rechazó, o respondió con algo que el worker no puede leer, que la razón nombra por su código. Es un error del worker o del coordinador, o un worker y un coordinador de versiones que no coinciden en la API de workers, y no del flujo de trabajo. El paso falla y no se vuelve a intentar. Puede que la ejecución a la que llama se haya creado y siga en curso: su propio estado lo dice.",
+    "fix": [
+      "Inicia workers de la misma versión de Meridian que el coordinador.",
+      "Si son de la misma versión, informa del error, con la razón y el registro del worker."
+    ]
+  },
+  "child_dir_unusable": {
+    "title": "Directorio de un flujo de trabajo llamado que el worker no pudo crear",
+    "why": "Una ejecución a la que llama un paso tiene un directorio propio, subworkflows/<job>/step_<n> bajo el directorio de trabajo del paso, como en el formato 1, donde se ejecutan sus pasos. El worker que ejecuta el paso lo crea antes de pedir la ejecución, un directorio cada vez desde el directorio de su ejecución raíz, y nunca sigue un enlace simbólico por el camino, que uno de los pasos de la propia ejecución podría haber dejado allí para poner el flujo de trabajo llamado en otro sitio: un enlace se rechaza como demasiados niveles de enlaces simbólicos, y un archivo que no es un directorio como que no es un directorio. Con clean-on-retry:, que es true salvo que el flujo de trabajo diga otra cosa, el worker elimina el directorio, con lo que contiene, antes de cada intento después del primero, y tampoco sigue allí ningún enlace. El paso falla y no se vuelve a intentar.",
+    "fix": [
+      "Elimina el enlace simbólico, o el archivo, que nombra la razón, o haz que los pasos de la ejecución no creen uno allí.",
+      "Comprueba que el usuario con el que se ejecuta el trabajo puede crear el directorio, y escribir en él, en el host donde se colocó el trabajo."
+    ]
+  },
   "cancel_jobs_job_unknown": {
     "title": "Trabajo que un paso no puede cancelar",
     "why": "El jobs: de un paso parallelworks/cancel-jobs nombra los trabajos de su ejecución que hay que cancelar. Este nombre no es el de ningún trabajo de la ejecución, o es el de un trabajo con matriz, cuyas instancias el formato 1 conoce por otros nombres, así que no cancela ninguna. Como en el formato 1, el paso no hace nada por ese nombre y tiene éxito.",

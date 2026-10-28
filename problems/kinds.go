@@ -375,6 +375,8 @@ var (
 	CancelJobsJobUnknown  = define(Warning, "cancel_jobs_job_unknown", "Job a step can't cancel", "job", "suggested", "suggestion")
 	CancelJobsOtherRun    = define(Error, "cancel_jobs_other_run", "Cancel of another run's jobs", "key")
 	CancelJobsRunMissing  = define(Error, "cancel_jobs_run_missing", "Cancel of a workflow's run without its number")
+	ChildRequestFailed    = define(Error, "child_request_failed", "Request to the coordinator for a called workflow's run that failed", "uses", "reason")
+	ChildDirUnusable      = define(Error, "child_dir_unusable", "Called workflow's directory the worker couldn't make", "dir", "reason")
 	StepSSHNotSupported   = define(Error, "step_ssh_not_supported", "Step on another host")
 	StepOffJobHost        = define(Error, "step_off_job_host", "Step to run off its job's host")
 	SSHHostEmpty          = define(Warning, "ssh_host_empty", "Step's ssh: names no host")

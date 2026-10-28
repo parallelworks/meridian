@@ -168,6 +168,8 @@
   "cancel_jobs_job_unknown": "El paso cancela “{job}”, que no es un trabajo de su ejecución que un paso pueda cancelar, así que no se cancela nada por él.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",
   "cancel_jobs_other_run": "El paso cancela trabajos de otra ejecución, con “{key}” en su with:, algo que Meridian aún no hace.",
   "cancel_jobs_run_missing": "El with: del paso nombra un flujo de trabajo cuya ejecución hay que cancelar, pero ninguna ejecución de él, que el formato 1 necesita: un número que no sea negativo.",
+  "child_request_failed": "El paso llama a “{uses}”, y la solicitud del worker al coordinador para su ejecución falló: {reason}.",
+  "child_dir_unusable": "El worker no pudo crear el directorio “{dir}” de la ejecución a la que llama este paso: {reason}.",
   "step_ssh_not_supported": "El ssh: del paso indica otro host donde ejecutarlo, y este worker aún no puede ejecutar un paso en otro host.",
   "step_off_job_host": "El ssh: del paso es nulo o no da ningún remoteHost, así que el formato 1 lo ejecuta donde se ejecutaría su trabajo sin su ssh:, y este worker, en el host que indica el ssh: del trabajo, aún no puede ejecutarlo ahí.",
   "ssh_host_empty": "El ssh: del paso no da ningún remoteHost, así que el paso se ejecuta donde se ejecuta su trabajo, como lo ejecuta el formato 1.",
