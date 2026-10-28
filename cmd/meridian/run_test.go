@@ -442,6 +442,7 @@ func TestRunDetaches(t *testing.T) {
 // the coordinator's own socket can't be served, rather than go on with
 // the workers on hosts that nothing serves.
 func TestRunServeMembersFails(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
 	r := runTest(t, env, func(c *cli) {
