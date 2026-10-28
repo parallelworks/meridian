@@ -425,10 +425,37 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	if err := s.View(ctx, s.readID); err != nil {
 		return err
 	}
+	if err := s.Tx(ctx, func(tx *Tx) error { return tx.eraseDigests() }); err != nil {
+		return err
+	}
 	// A process that ended between a run's end and the checkpoint after it
-	// left the log holding the run's secret record.
+	// left the log holding the run's secret record; and the digests just
+	// erased are in it.
 	s.truncateWAL(ctx)
 	return nil
+}
+
+// noDigest is the digest the store overwrites a plain one with, as a
+// release before kept of an action's request: all zeros.
+const noDigest = "x'0000000000000000000000000000000000000000000000000000000000000000'"
+
+// eraseDigests erases the plain SHA-256 digests that releases before kept
+// of what can hold a secret, against which whoever holds the database
+// could test a guess at it: of attempts' ends, which the store no longer
+// keeps a digest of, and of actions' requests, whose digests it keys now
+// (Action.Keyed). The migration that stopped keeping them erased those
+// there were then; a release before it, still running on the database,
+// goes on writing them, so each process that opens the store erases them
+// again, and so does each run's end. Each finds only the rows that hold
+// one, by an index of them. The store's writes overwrite what they
+// replace with zeros (secure_delete), and the write-ahead log is truncated
+// after.
+func (tx *Tx) eraseDigests() error {
+	if _, err := tx.exec("UPDATE meridian_attempts SET complete_digest = NULL WHERE complete_digest IS NOT NULL"); err != nil {
+		return err
+	}
+	_, err := tx.exec("UPDATE meridian_actions SET digest = " + noDigest + " WHERE keyed = 0 AND digest <> " + noDigest)
+	return err
 }
 
 // checkSchema checks that a store just opened only to read it has

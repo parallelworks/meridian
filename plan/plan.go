@@ -24,11 +24,12 @@ import (
 // an addition among them, since decoding refuses a member it doesn't know
 // (docs/design.md, Plans across versions). It reads every version from 1,
 // as its schemas describe it (Schemas): version 1 is frozen, and version
-// 2, which child runs add to, is once a release writes it. A plan is
-// written at the lowest version that holds what it uses (MinVersion), so
-// that a release that reads only an earlier one can run it. Version 2 adds
-// what child runs need: Plan.Calls, Run.Parent, Run.TreeVariables,
-// Source.Remote and Record.Inherited.
+// 2, which child runs and checkouts add to, is once a release writes it.
+// A plan is written at the lowest version that holds what it uses
+// (MinVersion), so that a release that reads only an earlier one can run
+// it. Version 2 adds what child runs need: Plan.Calls, Run.Parent,
+// Run.TreeVariables, Source.Remote and Record.Inherited; and checkouts'
+// pins: Plan.Checkouts and Step.Checkout.
 const Version = 2
 
 // modulePath is Meridian's module.
@@ -84,6 +85,12 @@ type Plan struct {
 	// text of the workflow whose step names it, and the step's place in
 	// that text, in the order of the two. Version 2.
 	Calls []Call `json:"calls,omitzero"`
+	// Checkouts are the pins of the parallelworks/checkout steps of the
+	// workflows the run calls, down the tree (the run's own steps' are
+	// their Step.Checkout), as Calls are of their steps that call one: each
+	// by the digest of its workflow's text and its place in it, in the
+	// order of the two. Version 2.
+	Checkouts []CheckoutPin `json:"checkouts,omitzero"`
 }
 
 // A Call is the pin of the workflow that a step of a workflow the run
@@ -101,16 +108,17 @@ type Call struct {
 
 // MinVersion is the lowest version that holds what p uses, which a plan is
 // written at, and the run's secret record and start state with it: 2 for
-// one with Calls, a child run's, with a Parent, one with TreeVariables, and
-// one whose workflow or a step's has a Source with a Remote; and 1
+// one with Calls, a child run's, with a Parent, one with TreeVariables, one
+// whose workflow or a step's has a Source with a Remote, and one with a
+// checkout, of its own steps or of those of the workflows it calls; and 1
 // otherwise.
 func (p *Plan) MinVersion() int {
-	if len(p.Calls) > 0 || p.Run.Parent != nil || len(p.Run.TreeVariables) > 0 || len(p.Run.Source.Remote) > 0 {
+	if len(p.Calls) > 0 || p.Run.Parent != nil || len(p.Run.TreeVariables) > 0 || len(p.Run.Source.Remote) > 0 || len(p.Checkouts) > 0 {
 		return 2
 	}
 	for _, j := range p.Jobs {
 		for _, s := range j.Steps {
-			if s.Source != nil && len(s.Source.Remote) > 0 {
+			if s.Source != nil && len(s.Source.Remote) > 0 || s.Checkout != nil {
 				return 2
 			}
 		}
@@ -499,7 +507,12 @@ type Step struct {
 	// created from it, through the Sources resolver's Read, when the step
 	// runs, so the run and its reruns run the same text. It is nil for a
 	// built-in action.
-	Source           *Source          `json:"source,omitzero"`
+	Source *Source `json:"source,omitzero"`
+	// Checkout is the pin of a parallelworks/checkout step: its repository
+	// and revision, pinned to a commit as the run was created, which the
+	// step checks out, so that the run and its reruns check out the same
+	// tree. It is nil for any other step. Version 2.
+	Checkout         *Checkout        `json:"checkout,omitzero"`
 	With             Value            `json:"with,omitzero"`
 	Env              map[string]Value `json:"env,omitempty"`
 	Shell            string           `json:"shell,omitempty"`
@@ -676,6 +689,9 @@ func Decode(data []byte) (*Plan, error) {
 		return nil, fmt.Errorf("%w: the plan of version %d has what version %d adds", ErrMalformed, p.Version, p.MinVersion())
 	}
 	if err := p.checkCalls(); err != nil {
+		return nil, fmt.Errorf("%w: the plan: %w", ErrMalformed, err)
+	}
+	if err := p.checkCheckouts(); err != nil {
 		return nil, fmt.Errorf("%w: the plan: %w", ErrMalformed, err)
 	}
 	if err := p.Run.Parent.check(); err != nil {

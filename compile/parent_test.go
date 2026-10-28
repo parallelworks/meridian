@@ -265,6 +265,50 @@ func TestStartChild(t *testing.T) {
 	}
 }
 
+// A child run's Create pins its own checkouts as its root pinned them, by
+// the digest of its text and each step's place in it, and asks no
+// Sources; one whose repo is "" has no pin, as a root's own has none; and
+// another the root holds no pin of, or with a Parent that holds none, is
+// child_not_pinned.
+func TestCreateChildPinsCheckoutsFromRoot(t *testing.T) {
+	const text = "jobs:\n  main:\n    steps:\n      - uses: parallelworks/checkout\n        with: {repo: https://example.com/app.git, branch: main}\n      - uses: parallelworks/checkout\n        with: {repo: \"\", branch: main}\n"
+	for _, parent := range []*compile.Parent{
+		{Run: "7", Job: "j", Root: "3", Depth: 1},
+		{Run: "7", Job: "j", Root: "3", Depth: 1, Checkout: func(string, string) (plan.Checkout, bool) { return plan.Checkout{}, false }},
+	} {
+		_, diags, err := compile.Create(t.Context(), "w.yaml", []byte(text), nil, compile.Options{Parent: parent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if errs := diags.Errors(); len(errs) != 1 || errs[0].Code != problems.ChildNotPinned.Code() || errs[0].Path() != "/jobs/main/steps/0/uses" || errs[0].Params["uses"] != plan.CheckoutUses {
+			t.Errorf("a checkout its root pinned nothing for, with Checkout %v: %v", parent.Checkout != nil, diags)
+		}
+	}
+
+	pinned := plan.Checkout{Repo: "https://example.com/app.git", Revision: "main", Commit: pinnedCommit}
+	var asked [][2]string
+	parent := &compile.Parent{Run: "7", Job: "j", Root: "3", Depth: 1, Checkout: func(caller, step string) (plan.Checkout, bool) {
+		asked = append(asked, [2]string{caller, step})
+		return pinned, step == "/jobs/main/steps/0"
+	}}
+	sources := &testSources{}
+	c, diags, err := compile.Create(t.Context(), "w.yaml", []byte(text), nil, compile.Options{Parent: parent, Sources: sources})
+	if err != nil || c == nil || diags.HasErrors() {
+		t.Fatal(diags, err)
+	}
+	if len(sources.pinned) > 0 {
+		t.Errorf("a child's Create asked Sources to pin %v", sources.pinned)
+	}
+	steps := c.Plan.Jobs[0].Steps
+	if steps[0].Checkout == nil || *steps[0].Checkout != pinned || steps[1].Checkout != nil || len(c.Plan.Checkouts) != 0 {
+		t.Errorf("the child's checkouts are pinned as %+v and %+v, with the tree's %v", steps[0].Checkout, steps[1].Checkout, c.Plan.Checkouts)
+	}
+	// The root is asked for the one that names a repository.
+	if digest := asked[0][0]; !slices.Equal(asked, [][2]string{{digest, "/jobs/main/steps/0"}}) || !strings.HasPrefix(digest, "sha256:") {
+		t.Errorf("the root was asked for %q", asked)
+	}
+}
+
 // A child run's Create pins its own steps' workflows as its root pinned
 // them, by the digest of its text and each step's place in it, and asks no
 // Sources; a step whose pin the root doesn't hold is child_not_pinned.

@@ -663,6 +663,36 @@
       "在步骤的 uses: 中直接写出引用，并在其 with: 中直接写出文件和服务器。"
     ]
   },
+  "checkout_not_known": {
+    "title": "创建运行时未知的检出仓库或修订",
+    "why": "parallelworks/checkout 步骤的 repo 和 branch 在创建运行时通过 Sources 接口被固定到一个提交，以便由协调器而不是工作进程选择获取什么、使用谁的凭据，并让运行及其重新运行检出同一棵树。因此两者都必须直接写出，而不是像格式 1 允许的那样从表达式读取。",
+    "fix": [
+      "在该步骤的 with: 中直接写出仓库和分支。",
+      "要在多个仓库之间选择，请为每个仓库各写一个带 if: 的步骤。"
+    ]
+  },
+  "checkout_not_found": {
+    "title": "没有要检出的仓库或修订",
+    "why": "在创建运行时把 parallelworks/checkout 步骤的仓库和分支固定到一个提交的 Sources 接口没有找到这个修订，也没有说明原因。",
+    "fix": [
+      "检查仓库的 URL，以及该步骤指定的分支、标签或完整提交。"
+    ]
+  },
+  "checkout_repo_invalid": {
+    "title": "检出 Meridian 不获取的仓库",
+    "why": "parallelworks/checkout 步骤的 repo 由协调器在创建运行时使用 git 和运行者的凭据获取，因此 Meridian 只接受任意主机上的 https 或 ssh URL，或者 user@host:path 这样的类 scp URL，且其中不能包含凭据。其他传输方式，例如本地路径、file:// 或 ext::，会让协调器读取其主机上的文件或在那里运行命令；git:// 和 http:// 没有 TLS 或 SSH，因此获取的内容都不会经过认证；而 URL 中的用户名和密码或令牌会把秘密放进计划，而能看到该运行的每个人都能读取计划。",
+    "fix": [
+      "用 https:// 或 ssh:// URL，或者 user@host:path 来指定仓库。",
+      "通过 git 自己的配置（例如凭据助手或 ssh 密钥）提供凭据，而不要放在 URL 中。"
+    ]
+  },
+  "checkout_path_invalid": {
+    "title": "不是路径的稀疏检出条目",
+    "why": "Meridian 把 parallelworks/checkout 步骤的 sparse_checkout 中的每个条目读作从仓库根开始、指向文件或目录的字面路径，可以以斜杠结尾。为空、以斜杠开头、包含空名称、. 或 ..、包含通配符的 *、? 或 [、以格式 1 可能读作模式的 ! 开头，或包含控制字符的条目，都不是这样的路径。",
+    "fix": [
+      "按从仓库根开始的路径指定要检出的每个文件或目录，不要使用模式。"
+    ]
+  },
   "expression_failed": {
     "title": "表达式求值失败",
     "why": "表达式以 Meridian 未描述的方式求值失败。这是 Meridian 的问题。",

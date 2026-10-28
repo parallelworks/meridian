@@ -129,9 +129,6 @@ type AttemptEnd struct {
 	// Reason why it ended other than as its steps did, or "".
 	Outcome plan.Outcome
 	Reason  plan.Reason
-	// CompleteDigest is the SHA-256 digest of the worker's report that
-	// completed it, so that the same report repeated is known.
-	CompleteDigest []byte
 	// Report is the worker's report that completed it, a
 	// workerapi.Complete as the worker API encodes it, with only the part
 	// of its result that run state holds (plan.JobResult.Split), or nil
@@ -252,7 +249,7 @@ const attemptColumns = `a.id, a.run_id, a.job_key, a.number, a.fence, a.state, a
   a.self_fencing, a.lease_seconds, a.heartbeat_seconds, a.worker_version, a.worker_digest, a.api_version,
   a.grp, a.member, a.backend, a.placement_id, a.placed_digest, a.private_placement IS NOT NULL,
   a.created_at, a.claimed_at, a.renewed_at, a.step_started_at, a.problem_since,
-  a.end_kind, a.outcome, a.reason, a.complete_digest, a.report, a.problem, a.ended_at,
+  a.end_kind, a.outcome, a.reason, a.report, a.problem, a.ended_at,
   a.state <> 'ended' AND a.fence = j.fence AND j.outcome IS NULL`
 
 // attemptWhere returns the attempt where is true of: ErrNotFound if it is
@@ -276,7 +273,7 @@ WHERE `+where, args...).Scan(
 		&a.SelfFencing, &a.LeaseSeconds, &a.HeartbeatSeconds, &version, &wdigest, &api,
 		&group, &member, &backend, &pid, &placed, &a.Private,
 		&created, &claimed, &renewed, &started, &problemSince,
-		&kind, &outcome, &reason, &a.End.CompleteDigest, &a.End.Report, &prob, &ended, &a.Holds)
+		&kind, &outcome, &reason, &a.End.Report, &prob, &ended, &a.Holds)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -504,11 +501,8 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 		default:
 			return fmt.Errorf("store: an attempt completed with the outcome %q", end.Outcome)
 		}
-		if len(end.CompleteDigest) != sha256.Size {
-			return errors.New("store: an attempt completed without the digest of its report")
-		}
 	case EndSetupFailed, EndLost, EndSuperseded, EndWithdrawn:
-		if len(end.CompleteDigest) != 0 || end.Report != nil {
+		if end.Report != nil {
 			return fmt.Errorf("store: an attempt that ended %s with a report", end.Kind)
 		}
 	default:
@@ -541,9 +535,9 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.exec(`UPDATE meridian_attempts SET state = ?, end_kind = ?, outcome = ?, reason = ?, complete_digest = ?,
-  report = ?, problem = ?, ended_at = ? WHERE id = ?`,
-		AttemptEnded, end.Kind, nullString(string(end.Outcome)), nullString(string(end.Reason)), end.CompleteDigest,
+	_, err = tx.exec(`UPDATE meridian_attempts SET state = ?, end_kind = ?, outcome = ?, reason = ?, report = ?,
+  problem = ?, ended_at = ? WHERE id = ?`,
+		AttemptEnded, end.Kind, nullString(string(end.Outcome)), nullString(string(end.Reason)),
 		end.Report, prob, now, id)
 	if err != nil {
 		return err

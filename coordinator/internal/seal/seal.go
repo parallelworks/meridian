@@ -52,6 +52,17 @@
 // derived key seals one generation of one part, the parts take nothing
 // from the bound on the nonces under the data key.
 //
+// What the coordinator keeps a digest of in place of what can hold a
+// secret, as a request for an action, which a step's with: is part of, it
+// keeps keyed (Digest): an HMAC-SHA256 under a key that HKDF-SHA256
+// derives from the run's data key, with the info
+//
+//	purpose NUL storeID NUL runID NUL id
+//
+// so that whoever holds the store, but not what Keys wraps with, can't
+// test a guess at the secret against it, and no one can once the run's
+// data key is deleted.
+//
 // # Errors
 //
 // A caller tells what went wrong from the error alone:

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -162,8 +161,7 @@ func stressLoop(ctx context.Context, s *Store, p *plan.Plan, seed uint64, iters 
 				if err != nil {
 					return err
 				}
-				sum := sha256.Sum256([]byte(m.cred))
-				if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeSuccess, CompleteDigest: sum[:]}); err != nil {
+				if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeSuccess}); err != nil {
 					return err
 				}
 				return stressLog(tx, "end", a.Job, a.Fence)

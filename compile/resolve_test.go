@@ -60,11 +60,26 @@ func (g *testGroups) ComputeTarget(_ context.Context, c plan.ComputeTarget) (*ba
 }
 
 // testSources gives the workflows it has by their uses:, pinned to a
-// commit of their own, and err for the rest, ErrNotFound by default.
+// commit of their own, and err for the rest, ErrNotFound by default; and
+// pins the repositories and revisions it has, as repo@revision, to their
+// commits, and gives err for the rest, ErrNotFound by default.
 type testSources struct {
-	texts map[string]string
-	err   error
-	asked []plan.SourceRef
+	texts   map[string]string
+	commits map[string]string
+	err     error
+	asked   []plan.SourceRef
+	pinned  []string
+}
+
+func (s *testSources) Pin(_ context.Context, repo, revision string) (string, error) {
+	s.pinned = append(s.pinned, repo+"@"+revision)
+	if commit, ok := s.commits[repo+"@"+revision]; ok {
+		return commit, nil
+	}
+	if s.err != nil {
+		return "", s.err
+	}
+	return "", compile.ErrNotFound
 }
 
 func (s *testSources) Resolve(_ context.Context, ref plan.SourceRef) (*compile.Workflow, error) {
@@ -113,6 +128,10 @@ func (anySources) Resolve(_ context.Context, ref plan.SourceRef) (*compile.Workf
 
 func (anySources) Read(ctx context.Context, source plan.Source) (*compile.Workflow, error) {
 	return anySources{}.Resolve(ctx, source.Ref)
+}
+
+func (anySources) Pin(context.Context, string, string) (string, error) {
+	return "0123456789abcdef0123456789abcdef01234567", nil
 }
 
 // Create reads the variables the workflow reads through Variables, by
@@ -332,7 +351,8 @@ jobs:
 // Create resolves each workflow a step's uses: names, with the file and the
 // server its with: $yaml and $host name, pins it in the step, once for
 // each reference, however it is written (plan.SourceRef.Normal), and loads
-// it, whose errors are the run's. A built-in action names none.
+// it, whose errors are the run's. A built-in action names none, but a
+// checkout is pinned to its commit.
 func TestCreatePinsWorkflows(t *testing.T) {
 	src := `jobs:
   a:
@@ -353,10 +373,13 @@ func TestCreatePinsWorkflows(t *testing.T) {
 	s := &testSources{texts: map[string]string{
 		"github/acme/flows@main": "jobs:\n  x:\n    steps:\n      - run: echo\n",
 		"gitlab/team/flows":      "jobs:\n  x:\n    steps:\n      - run: echo\n",
-	}}
+	}, commits: map[string]string{"https://example.com/r.git@main": "fedcba9876543210fedcba9876543210fedcba98"}}
 	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Sources: s})
 	if err != nil || c == nil {
 		t.Fatal(diags, err)
+	}
+	if co := c.Plan.Jobs[0].Steps[3].Checkout; co == nil || co.Commit != "fedcba9876543210fedcba9876543210fedcba98" || c.Plan.Version != 2 {
+		t.Errorf("the checkout is pinned as %+v, in a plan of version %d", co, c.Plan.Version)
 	}
 	if want := []plan.SourceRef{{Uses: "github/acme/flows@main", Path: "sub/flow.yaml"}, {Uses: "gitlab/team/flows", Path: "w.yaml", Host: "git.example.com"}}; !slices.Equal(s.asked, want) {
 		t.Errorf("asked %+v, want %+v", s.asked, want)
@@ -524,4 +547,8 @@ func (s pinnedSources) Resolve(context.Context, plan.SourceRef) (*compile.Workfl
 
 func (pinnedSources) Read(context.Context, plan.Source) (*compile.Workflow, error) {
 	return nil, errors.New("not read as the run is created")
+}
+
+func (pinnedSources) Pin(context.Context, string, string) (string, error) {
+	return "", compile.ErrNotFound
 }

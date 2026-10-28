@@ -174,7 +174,7 @@ func TestPlacementAndEnd(t *testing.T) {
 		}
 		report := []byte(`{"seq":0,"result":{"outcome":"failure"},"reason":"setup-failed"}`)
 		if err := tx.EndAttempt(a.ID, AttemptEnd{
-			Kind: EndCompleted, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, CompleteDigest: make([]byte, 32), Report: report, Problem: refusal,
+			Kind: EndCompleted, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Report: report, Problem: refusal,
 		}); err != nil {
 			return err
 		}

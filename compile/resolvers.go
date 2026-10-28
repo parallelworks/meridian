@@ -75,7 +75,8 @@ type Groups interface {
 	ComputeTarget(ctx context.Context, target plan.ComputeTarget) (*backend.Group, error)
 }
 
-// Sources provides the workflows that a step's uses: names.
+// Sources provides the workflows that a step's uses: names, and the Git
+// repositories that a parallelworks/checkout step checks out.
 type Sources interface {
 	// Resolve finds the workflow that ref names now: a uses: such as
 	// github/org/repo@main, with the file its with: $yaml names in the
@@ -90,6 +91,14 @@ type Sources interface {
 	// its ref has moved since. It fails if the text it reads isn't the
 	// digest's. It gives the Workflow's Remote as Resolve gave it.
 	Read(ctx context.Context, source plan.Source) (*Workflow, error)
+	// Pin finds the commit that revision, a branch, a tag or a full
+	// commit, names now in the Git repository repo, as a
+	// parallelworks/checkout step's with: writes them out, repo one that
+	// plan.CheckRepo takes, and returns it, in full, as git writes it, so
+	// that the run and its reruns check out the same tree. It returns
+	// ErrNotFound, or a problem that wraps it, for a revision that names
+	// no commit there.
+	Pin(ctx context.Context, repo, revision string) (string, error)
 }
 
 // A Workflow is a workflow file that Sources gives.

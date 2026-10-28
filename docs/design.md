@@ -1491,6 +1491,34 @@ The coordinator encrypts and stores it.
   write that raced another, so the parts, however many a run's jobs and
   attempts make, take nothing from the bound on the data key's nonces
   (`seal.Sealer.SealPart`).
+- **Digests keyed, or none.** The store keeps nothing made from what can
+  hold a secret where it needn't: of an attempt's end, which holds the
+  job's outputs, it keeps no digest ([The worker API](#the-worker-api)).
+  Where it must know a value again, as a request for an action, which
+  holds a step's `with:`, is answered once, it keeps an HMAC-SHA256 of
+  it, never a plain SHA-256, against which whoever holds the store's file
+  could test a guess at a short secret. The HMAC's key is one that
+  HKDF-SHA256 derives from the run's data key, with no salt and the info
+  of the digest's purpose, a versioned label, as
+  `meridian/action-digest/1`, the store's ID, the run's, and the digest's
+  own ID among the run's of that purpose, as an action's attempt, step and
+  try, joined with NUL bytes (`seal.Sealer.Digest`). So the key is never
+  in the store, only the data key wrapped, and every replica derives it
+  again through Keys, after a restart and in `meridian resume` too. It
+  goes with the data key as the run ends, after which no one can check a
+  digest of the run, the coordinator included, and nothing needs to: a
+  request that a digest answers once is one of an attempt that still
+  holds its job. A key of the store's own, which Keys would wrap once,
+  would outlive every run, and so let a copy of the database, with that
+  key, test guesses at what runs long ended held, which the record's
+  erasure is there to prevent. Earlier releases kept plain SHA-256
+  digests of both, of ends and of actions' requests. The store erases
+  them as it is migrated, each time a process opens it, and each time a
+  run ends, so that those an earlier release still running on the
+  database goes on writing don't stay; an index of the rows that hold one
+  keeps each erase to them. An action whose digest an earlier release
+  kept can't be checked, and takes any request for its try as a repeat:
+  the attempt's worker, which alone holds its credential, sends one.
 - **Read in parts.** The coordinator reads it for Start and Ready, and gives
   each attempt, when it is claimed, the values its own job reads
   ([Variables and secrets](#variables-and-secrets)).
@@ -1608,10 +1636,13 @@ sees one version.
   (`Plan.Calls`), the variables the tree reads (`Run.TreeVariables`), each
   pin's remote context (`Source.Remote`), and a child run's link to its
   step (`Run.Parent`), with what its secret record holds of the step
-  (`Record.Inherited`), so a run that calls no workflow is of version 1. A
-  release reads every version up to its own, each by its own schemas,
-  under `plan/schema/<version>/`, and refuses what a later version added
-  in an earlier one's plan (`plan.ErrMalformed`).
+  (`Record.Inherited`); and the pins of `parallelworks/checkout` steps, a
+  run's own (`Step.Checkout`) and its called workflows'
+  (`Plan.Checkouts`). So a run that calls no workflow, and checks out
+  nothing, is of version 1. A release reads every version up to its own,
+  each by its own schemas, under `plan/schema/<version>/`, and refuses
+  what a later version added in an earlier one's plan
+  (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
@@ -2407,7 +2438,7 @@ that uses scheduler-agent or wait-for-agent with `action_needs_platform`
 already, and the coordinator does cancel-jobs. Until checkout and
 update-session are built, a step that uses one fails with
 `uses_not_supported`; what this section says of them is decided, and
-built next.
+built next, but for checkout's pins, which are built.
 
 - **checkout.**
   - **Pinned as the run is created.** Create pins each checkout's `repo`
@@ -2418,13 +2449,35 @@ built next.
     does. Both must be written out (`checkout_not_known`), so that the
     coordinator, not the worker, chooses what is fetched, with whose
     credentials. ACTIVATE reads the branch when the step runs. All 148
-    known checkouts write both out.
+    known checkouts write both out. A `repo` or `branch` written out as
+    `""` pins nothing, and the step checks out nothing and succeeds, as
+    format 1's does. The branch is a branch, a tag or a full commit;
+    another revision that format 1's whole checkout takes, as `git
+    checkout` does, such as a short commit or `HEAD~1`, isn't built yet,
+    and fails the run as it is created (`source_revision_not_found`). No
+    known checkout names one. A full commit the copy doesn't hold is
+    fetched by itself, which the server must allow, as Git's protocol
+    version 2 does. The pin is the step's in the plan
+    (`Step.Checkout`), and the pins of the checkouts of the workflows a
+    run calls, down the tree, are its root's (`Plan.Checkouts`), by the
+    digest of their workflow's text and the step's place in it, as calls'
+    are, so that a child run's Create reads them rather than pin them
+    again; each repository and revision is asked once for the tree. A
+    plan that holds a pin is of version 2. A written-out `sparse_checkout`
+    entry is checked as the run is created (below); one an expression
+    gives, as the step runs. The local Sources keeps a copy of each
+    repository by the SHA-256 digest of its URL as the step writes it, and
+    pins a full commit it holds without the network.
   - **Fetched by the coordinator.** Git runs on the coordinator's host,
     through Sources: with the user's own Git configuration, credential
     helpers and SSH agent where `meridian` runs, and a platform's linked
     accounts on a platform; and never prompting. A `repo` is any
-    `https://` or `ssh://` URL, or an scp-like `user@host:path`, on any
-    host, as format 1 takes; a platform's Sources may take fewer. Two are
+    `https://` or `ssh://` URL, or an scp-like `user@host:path`, with an
+    IPv6 address in brackets too, on any host, as format 1 takes; a
+    platform's Sources may take fewer. Whatever URL Git ends up at,
+    through a redirect or the user's `insteadOf`, it fetches only over
+    https and ssh (`protocol.allow`), for `uses:` workflows too, unless
+    the user's own configuration allows another transport by name. Two are
     refused as the run is created (`checkout_repo_invalid`), differences
     from format 1: another transport, as `file://` or `ext::`, so that a
     workflow can't have the coordinator read its host's files, or run a
@@ -3428,10 +3481,11 @@ and a platform that embeds Meridian serve the same API.
   `with:` as Step evaluated it, and its answer says how the action ended:
   success or failure, with its problems. The coordinator reads which
   action it is from the plan, never from the request. It does the action
-  once for a step's try, and keeps the answer, with a SHA-256 digest of
-  the whole request, never the `with:` itself, which can hold a secret: a
-  repeat is given the answer, and another request for the same try is
-  fenced. The answers outlive their attempt in the store, which enforces
+  once for a step's try, and keeps the answer, with a keyed digest of the
+  whole request, an HMAC-SHA256 ([The secret record](#the-secret-record)),
+  never the `with:` itself, which can hold a secret, nor a plain digest of
+  it: a repeat is given the answer, and another request for the same try
+  is fenced. The answers outlive their attempt in the store, which enforces
   no foreign keys, so nothing deletes them with it: whatever comes to
   delete attempts, as a retention of runs, deletes their answers too. A
   step whose `if:` doesn't outlive its job's cancellation, as the
@@ -3454,7 +3508,18 @@ and a platform that embeds Meridian serve the same API.
   action only a platform provides (`action_needs_platform`).
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
-  (`plan.JobResult`).
+  (`plan.JobResult`). The same end again, as a worker sends after a
+  dropped connection, is answered as the first was, and so is any other
+  end of an attempt that completed, which changes nothing: the end stored
+  first is the attempt's. The coordinator keeps nothing made from an end
+  to tell a repeat from another end, since an end can hold a secret, as
+  an output, which a digest of it would let whoever holds the store test
+  a guess at ([The secret record](#the-secret-record)); and it needn't,
+  since the attempt's worker, which alone holds its credential, sends one
+  end. Another coordinator that keeps what tells them apart may fence
+  another end instead, as the conformance suite allows. An end of an
+  attempt that ended otherwise, as withdrawn, lost or superseded, is
+  fenced.
 
 Every write is idempotent and carries a sequence number, so a worker
 retrying after a dropped connection can't apply a report twice. A write
@@ -4307,7 +4372,9 @@ Meridian's must (`internal/fipsmode`).
   A platform's Keys interface wraps the data keys with its own key
   management, and the local one with AES-256-GCM under a key in a file.
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
-  digests are SHA-256.
+  digests are SHA-256, and a digest of what can hold a secret, as an
+  action's request, is an HMAC-SHA256 under a key that HKDF-SHA256
+  derives from its run's data key ([The secret record](#the-secret-record)).
 - **External tools** that Meridian runs (`git`, container runtimes,
   schedulers) run in processes of their own, outside Meridian's module.
   Their TLS and SSH are the host's cryptography, which a FIPS host

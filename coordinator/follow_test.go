@@ -360,7 +360,7 @@ func (h *heldFollow) reported(step int) bool {
 func (h *heldFollow) end() map[string]int {
 	h.t.Helper()
 	if err := h.c.store.Tx(h.t.Context(), func(tx *store.Tx) error {
-		if err := tx.EndAttempt(h.attempt, store.AttemptEnd{Kind: store.EndCompleted, Outcome: plan.OutcomeSuccess, CompleteDigest: make([]byte, 32)}); err != nil {
+		if err := tx.EndAttempt(h.attempt, store.AttemptEnd{Kind: store.EndCompleted, Outcome: plan.OutcomeSuccess}); err != nil {
 			return err
 		}
 		if err := tx.EndJob(h.id, "main", store.JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeSuccess}}); err != nil {

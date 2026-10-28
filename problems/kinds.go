@@ -251,6 +251,23 @@ var (
 	// written out, though the workflow its uses: names is pinned as the
 	// run is created.
 	SourceNotKnown = define(Error, "source_not_known", "Workflow's place not known when the run is created", "key")
+	// CheckoutNotKnown is a parallelworks/checkout step's with: repo or
+	// branch, key, that isn't written out, though the step is pinned to a
+	// commit as the run is created.
+	CheckoutNotKnown = define(Error, "checkout_not_known", "Checkout's repository or revision not known when the run is created", "key")
+	// CheckoutNotFound is a revision of a repository a
+	// parallelworks/checkout step names that the Sources resolver doesn't
+	// have, without saying why.
+	CheckoutNotFound = define(Error, "checkout_not_found", "No such repository or revision to check out", "repo", "revision")
+	// CheckoutRepoInvalid is a parallelworks/checkout step's with: repo that
+	// Meridian doesn't fetch: repo is it as a problem shows it, with no
+	// credential, and reason why, transport, credential or form
+	// (plan.CheckRepo).
+	CheckoutRepoInvalid = define(Error, "checkout_repo_invalid", "Checkout of a repository Meridian doesn't fetch", "repo", "reason")
+	// CheckoutPathInvalid is an entry of a parallelworks/checkout step's
+	// with: sparse_checkout, path, that isn't a literal path from the
+	// repository's root (plan.CheckCheckoutPath).
+	CheckoutPathInvalid = define(Error, "checkout_path_invalid", "Sparse checkout entry that isn't a path", "path")
 )
 
 // Running a workflow: what the phases after Start evaluate, and the

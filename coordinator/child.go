@@ -223,7 +223,7 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 		Parent: &compile.Parent{
 			Run: link.Run, Job: link.Job, Step: link.Step, Try: link.Try, Root: link.Root, Depth: link.Depth,
 			Env: req.Env, Private: privateNames(req.WithPrivate, req.EnvPrivate), Secrets: privateNames(req.WithSecrets, req.EnvSecrets),
-			Masked: req.Masked, Pin: rootPlan.FindCall,
+			Masked: req.Masked, Pin: rootPlan.FindCall, Checkout: rootPlan.FindCheckout,
 		},
 	})
 	if err != nil || created == nil {
