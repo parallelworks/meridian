@@ -8,12 +8,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,27 +26,25 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
-// stalledHostJobs are as many jobs as the coordinator works at once
-// (sharedWorkers), each on the host farm.
-var stalledHostJobs = func() string {
+// hostJobs are n jobs, each on the host farm.
+func hostJobs(n int) string {
 	var b strings.Builder
 	b.WriteString("jobs:\n")
-	for i := range sharedWorkers {
+	for i := range n {
 		fmt.Fprintf(&b, "  j%d:\n    ssh:\n      remoteHost: farm\n    steps:\n      - run: \"true\"\n", i)
 	}
 	return b.String()
-}()
+}
 
-// TestStalledHostHoldsNoWorkers checks that a host that doesn't answer,
-// as one whose network drops what it is sent, doesn't hold the workers
-// that every run's supervisors share while the jobs placed on it are
-// probed: another run, on the local backend, is placed and ends at once
-// meanwhile, rather than once the host's probes have each tried it in
-// full, which, before, held every worker for as long as they took.
-func TestStalledHostHoldsNoWorkers(t *testing.T) {
-	parallel(t)
+// farmDriver returns the ssh backend's driver, which reaches the host farm
+// at addr, as the SSH config it reads says, with a connect timeout of 2
+// seconds, and whose known_hosts has server's keys for it, if there is
+// a server.
+func farmDriver(t *testing.T, addr string, server *sshtest.Server) *backendssh.Driver {
+	t.Helper()
 	if _, err := osexec.LookPath("ssh"); err != nil {
 		t.Skip("no ssh client to read the SSH config with")
 	}
@@ -52,22 +52,23 @@ func TestStalledHostHoldsNoWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := ssh.NewSignerFromKey(k)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := sshtest.New(t, sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}})
-	server.Stall()
-	t.Cleanup(server.Resume)
 	client := t.TempDir()
 	block, err := ssh.MarshalPrivateKey(k, "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownHostsLines := ""
+	if server != nil {
+		knownHostsLines = server.KnownHosts("")
+	}
 	keyFile, knownHosts, config := filepath.Join(client, "id_ecdsa"), filepath.Join(client, "known_hosts"), filepath.Join(client, "config")
 	for path, data := range map[string][]byte{
 		keyFile:    pem.EncodeToMemory(block),
-		knownHosts: []byte(server.KnownHosts("")),
+		knownHosts: []byte(knownHostsLines),
 		config: fmt.Appendf(nil, `Host farm
   HostName %s
   Port %s
@@ -77,7 +78,7 @@ func TestStalledHostHoldsNoWorkers(t *testing.T) {
   UserKnownHostsFile %s
   GlobalKnownHostsFile /dev/null
   ConnectTimeout 2
-`, server.Host(), server.Port(), keyFile, knownHosts),
+`, host, port, keyFile, knownHosts),
 	} {
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			t.Fatal(err)
@@ -85,13 +86,28 @@ func TestStalledHostHoldsNoWorkers(t *testing.T) {
 	}
 	key := make([]byte, backendssh.MinKeyLen)
 	_, _ = rand.Read(key)
-	sshDriver := backendssh.New(backendssh.Options{
+	d := backendssh.New(backendssh.Options{
 		ConfigFile: config, Home: client, User: "tester", Getenv: func(string) string { return "" },
 		Version: "test", Binaries: t.TempDir(), Store: "teststore", Key: key,
 	})
-	t.Cleanup(func() { _ = sshDriver.Close() })
+	t.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+// TestStalledHostHoldsNoWorkers checks that a host that doesn't answer,
+// as one whose network drops what it is sent, doesn't hold the workers
+// that every run's supervisors share while the jobs placed on it are
+// probed: another run, on the local backend, is placed and ends at once
+// meanwhile, rather than once the host's probes have each tried it in
+// full, which, before, held every worker for as long as they took.
+func TestStalledHostHoldsNoWorkers(t *testing.T) {
+	parallel(t)
+	server := sshtest.New(t, sshtest.Options{})
+	server.Stall()
+	t.Cleanup(server.Resume)
+	sshDriver := farmDriver(t, server.Addr(), server)
 	c := open(t, Options{Drivers: map[string]backend.Driver{testBackend: newTestDriver(), "ssh": sshDriver}})
-	stalled, _ := create(t, c, stalledHostJobs, nil, nil)
+	stalled, _ := create(t, c, hostJobs(sharedWorkers), nil, nil)
 	serve(t, c)
 	// The stalled host's jobs are being placed, each probing the host.
 	waitFor(t, func() bool { return !storedRun(t, c, stalled).StartedAt.IsZero() })
@@ -218,5 +234,94 @@ func TestCancelLater(t *testing.T) {
 			t.Fatalf("the placement wasn't cancelled, asked %d times", asked)
 		}
 		time.Sleep(20 * time.Millisecond) //nolint:forbidigo // the cancel in the background, which nothing signals
+	}
+}
+
+// TestJobsGiveUpTogether checks that jobs waiting on a host that refuses
+// every connection give up on it together, each once it has seen four
+// failures to reach it, its own tries and those for the others alike, as
+// format 1 gives each step four tries: not one after another, as each
+// waited its turn to try it four times itself, which took about four
+// tries for each job in all.
+func TestJobsGiveUpTogether(t *testing.T) {
+	parallel(t)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var tries atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			tries.Add(1)
+			_ = c.Close()
+		}
+	}()
+	const jobs = 5
+	c := open(t, Options{Drivers: map[string]backend.Driver{testBackend: newTestDriver(), "ssh": farmDriver(t, ln.Addr().String(), nil)}})
+	// As many looks that couldn't answer as the coordinator allows by
+	// default, more than the driver's tries.
+	c.supervision.tries = defaultSupervision.tries
+	began := time.Now()
+	id, _ := create(t, c, hostJobs(jobs), nil, nil)
+	serve(t, c)
+	for deadline := time.Now().Add(2 * time.Minute); storedRun(t, c, id).State != store.RunEnded; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the run hasn't ended after %d tries of the host", tries.Load())
+		}
+		time.Sleep(50 * time.Millisecond) //nolint:forbidigo // what is waited for has no signal
+	}
+	for i := range jobs {
+		j := storedJob(t, c, id, fmt.Sprintf("j%d", i))
+		if j.Outcome != plan.OutcomeFailure || len(j.Diagnostics) < 2 || j.Diagnostics[1].Code != problems.SSHUnreachable.Code() {
+			t.Errorf("job j%d ended %s, with %v", i, j.Outcome, j.Diagnostics)
+		}
+	}
+	// Four for each job's first look, which counts one try of its own,
+	// and those after, which each job sees.
+	if n := tries.Load(); n > 4+jobs {
+		t.Errorf("the jobs gave up after %d tries of the host, in all", n)
+	}
+	t.Logf("%d jobs gave up after %d tries of the host, in %v", jobs, tries.Load(), time.Since(began))
+}
+
+// TestProbeCounted checks how a job's look counts a member's failures to
+// be reached (backend.FailedError): its first look sees none it can count,
+// as one that comes to a host another job's tries have just given up on,
+// which a host that comes back then runs, but for its own try that failed,
+// which counts once; each look after counts the failures since the
+// previous one's, its own among them, once; and each job and member
+// counts for itself.
+func TestProbeCounted(t *testing.T) {
+	c := open(t, Options{})
+	wait := fmt.Errorf("test: %w", backend.ErrNotYet)
+	failed := errors.New("test: refused")
+	retry := time.Now().Add(time.Minute)
+	for i, tc := range []struct {
+		key     string
+		err     error
+		counted int
+		notYet  bool
+	}{
+		{"b", &backend.FailedError{Failed: 4, RetryAt: retry, Err: wait}, 0, true},
+		{"b", &backend.FailedError{Failed: 4, Err: wait}, 0, true},
+		{"b", &backend.FailedError{Failed: 5, Err: failed}, 1, false},
+		{"b", &backend.FailedError{Failed: 7, Err: wait}, 2, false},
+		{"b", &backend.FailedError{Failed: 7, Err: failed}, 1, false},
+		{"c", &backend.FailedError{Failed: 9, Err: failed}, 1, false},
+		{"c", &backend.FailedError{Failed: 2, Err: wait}, 0, true},
+		{"c", &backend.FailedError{Failed: 3, Err: wait}, 1, false},
+		{"d", wait, 0, true},
+		{"d", failed, 1, false},
+	} {
+		counted, notYet, retryAt := c.probeCounted(tc.key, tc.err)
+		fe, isFailed := errors.AsType[*backend.FailedError](tc.err)
+		if counted != tc.counted || notYet != tc.notYet || isFailed && !retryAt.Equal(fe.RetryAt) {
+			t.Errorf("%d, %s: counted %d, not yet %v, retry at %v; want %d, %v", i, tc.key, counted, notYet, retryAt, tc.counted, tc.notYet)
+		}
 	}
 }

@@ -58,12 +58,13 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// Tries is how many of a job's own tries to connect to a host fail, in a
-// row, before Probe says the member can't run the job
-// (problems.SSHUnreachable), as format 1 gives each step four. Each Probe
-// makes one try at most, so that the tries are spread over the looks of
-// the job's supervisor, which waits longer before each (reach), as the
-// pool does before it dials a host again that it failed to reach.
+// Tries is how many failures to connect to a host a job sees, its own
+// tries and those for jobs that wait on the host with it, before Probe
+// says the member can't run the job (problems.SSHUnreachable), as format
+// 1 gives each step four tries. Each Probe makes one try at most, so that
+// the tries are spread over the looks of the jobs' supervisors (reach),
+// and the pool waits longer before each, as it does before it dials any
+// host again that it failed to reach.
 const Tries = 4
 
 // connectBudget is how long a call of the driver's waits for a connection
@@ -236,31 +237,47 @@ func (d *Driver) connect(ctx context.Context, t sshconn.Target) (*sshconn.Conn, 
 	return d.Pool.Get(ctx, t)
 }
 
-// reach connects to t for Probe of a job that has failed to reach a
-// member tries times in a row (backend.Demand.Tries), with one try at
-// most: a problem, as a host key known_hosts doesn't have, is the
-// member's. A host the pool is dialing for another, or waits to dial again
-// after failing to, the job hasn't tried: that is backend.ErrNotYet,
-// which the coordinator asks about again soon, without counting it. A try
-// of the job's that fails, or hasn't answered within connectBudget, is
-// the job's: the Tries-th in a row is problems.SSHUnreachable; one before
-// is an error that isn't a problem, which the coordinator counts, and
-// asks about again, later each time.
+// reach connects to t for Probe of a job that has seen tries failures to
+// reach a member, in all, since it was last placed, as the coordinator
+// counts them (backend.Demand.Tries), with one try at most: a problem, as
+// a host key known_hosts doesn't have, is the member's. Otherwise, a job
+// that has seen Tries failures, or whose own try is the Tries-th, can't
+// run on the member (problems.SSHUnreachable). Any other answer is a
+// *backend.FailedError, with the pool's failures to reach t in all, by
+// which the coordinator counts the failures since the job's previous
+// look, so that every job waiting on a host that doesn't answer gives up
+// after as many as it has seen: the job's own try that failed, or one
+// that hasn't answered within connectBudget, which counts once it fails;
+// or, wrapping backend.ErrNotYet, a host the pool is dialing for another,
+// or waits to dial again until RetryAt, which the job hasn't tried.
 func (d *Driver) reach(ctx context.Context, t sshconn.Target, tries int) (*sshconn.Conn, error) {
 	conn, err := d.connect(ctx, t)
 	if err == nil || asProblem(err) != nil || ctx.Err() != nil {
 		return conn, err
 	}
-	if de, ok := errors.AsType[*sshconn.DialError](err); ok && de.Waiting {
-		return nil, fmt.Errorf("%w: %w", backend.ErrNotYet, err)
+	de, dialed := errors.AsType[*sshconn.DialError](err)
+	own := dialed && !de.Waiting
+	reason := err
+	switch {
+	case dialed:
+		reason = de.Err
+	case errors.Is(err, context.DeadlineExceeded):
+		reason = fmt.Errorf("ssh: %s: %w", t.Host, errNoAnswer)
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		err = fmt.Errorf("ssh: %s: %w", t.Host, errNoAnswer)
+	if tries >= Tries || own && tries+1 >= Tries {
+		return nil, problems.SSHUnreachable.Problem(problems.Params{"host": t.Host, "reason": reason.Error()})
 	}
-	if tries+1 >= Tries {
-		return nil, problems.SSHUnreachable.Problem(problems.Params{"host": t.Host, "reason": err.Error()})
+	fe := &backend.FailedError{Failed: d.Pool.Failed(t), Err: err}
+	switch {
+	case own:
+		fe.Failed = de.Failed
+	case dialed:
+		fe.Failed, fe.RetryAt, fe.Err = de.Failed, de.RetryAt, fmt.Errorf("%w: %w", backend.ErrNotYet, err)
+	default:
+		// The job's own try, which goes on: it counts once it fails.
+		fe.Err = fmt.Errorf("%w: %w", backend.ErrNotYet, reason)
 	}
-	return nil, err
+	return nil, fe
 }
 
 // errNoAnswer is a try to connect to a host that hasn't answered within

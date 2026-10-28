@@ -4377,21 +4377,29 @@ local backend there through `meridian host`
   between the tries; Meridian waits about 1, 2 and 4, as it does before
   it dials any host again that it failed to reach. Then its member can't
   run the job (`ssh_unreachable`), and the job fails
-  (`placement_impossible`), as format 1's step does. The tries are the
-  job's own, as format 1 gives each step four, and spread over the looks
-  of the job's supervisor, never made in one: a host that doesn't answer
-  must not hold the workers that every run's supervisors share. A probe
-  makes one try at most, and waits 5 seconds at most for it, the try going
-  on without it, bounded by 5 minutes in all; one that hasn't answered by
-  then counts as failed. While the host is being tried for another, or
-  before the wait after a try that failed has passed, a probe, or a check,
-  answers at once that the host hasn't been tried yet, which the
-  supervisor asks about again soon, without counting it as a try of the
-  job's (`backend.ErrNotYet`): a job that comes to a host that another's
-  tries have just given up on tries it itself, once the wait has passed.
-  The coordinator counts a job's looks that a backend couldn't answer, and
-  gives a probe the count (`backend.Demand.Tries`). A cancel the driver
-  can't make for now is made again in the background.
+  (`placement_impossible`), as format 1's step does. A job counts the
+  failures it sees: its own tries, and those made for the jobs waiting on
+  the host with it, since its first look, so that every job waiting on a
+  host that doesn't answer gives up after the four failures it has seen,
+  together, as format 1's steps do, rather than one after another. The
+  tries are spread over the looks of the jobs' supervisors, never made in
+  one: a host that doesn't answer must not hold the workers that every
+  run's supervisors share. A probe makes one try at most, and waits 5
+  seconds at most for it, the try going on without it; while the host is
+  being tried, or before the wait after a try that failed has passed, a
+  probe, or a check, answers at once that the host hasn't been tried for
+  the job, with how many tries of it have failed in all
+  (`backend.FailedError`), and the supervisor asks again when it will be
+  tried, counting the failures since its previous look
+  (`backend.Demand.Tries`). A job's first look counts none but its own, so
+  a job that comes to a host just after other jobs' tries gave up on it
+  tries it again, and runs there if it is back. The coordinator keeps
+  what each job's latest look saw in memory; one that restarts counts from
+  the next look. A dial is bounded in all: `ssh -G` by twice the connect
+  timeout, and the whole by twice the host's connect timeout for it and
+  each hop there can be, 5 minutes at least; one that reaches it has
+  failed. A cancel the driver can't make for now is made again in the
+  background.
 - **Format 1's keys.** `remoteUser` and `jumpNodeUser` are the user's
   config's `User` for the host where they're empty, or else the local
   user; format 1's "your pw username" is the local user here. A

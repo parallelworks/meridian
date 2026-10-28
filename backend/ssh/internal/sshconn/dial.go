@@ -91,7 +91,11 @@ func (d *Dialer) localUser() string {
 // key, the algorithms the host offers, or the login is a
 // *problem.Problem, of one of the kinds this package reports: trying again
 // won't help until the user changes something. Any other error, as a host
-// that doesn't answer, may pass.
+// that doesn't answer, may pass. Its every part is bounded, by itself, as
+// connecting is by the connect timeout, or by Dial: ssh -G by twice the
+// Dialer's connect timeout, as the user's config can have it run commands
+// that don't end, and the whole by dialTimeout, as a jump host can stall
+// once its own handshake is done.
 func (d *Dialer) Dial(ctx context.Context, t Target) (*Conn, error) {
 	if err := t.check(); err != nil {
 		return nil, err
@@ -101,10 +105,14 @@ func (d *Dialer) Dial(ctx context.Context, t Target) (*Conn, error) {
 	if given {
 		host, port = h, p
 	}
-	c, err := d.resolve(ctx, host, port, t.User)
+	rctx, cancel := context.WithTimeout(ctx, 2*d.connectTimeout(&hostConfig{}))
+	c, err := d.resolve(rctx, host, port, t.User)
+	cancel()
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel = context.WithTimeout(ctx, d.dialTimeout(c))
+	defer cancel()
 	if given {
 		// host:port is where to connect, as format 1 takes it: not the
 		// config's HostName, nor its ProxyJump or ProxyCommand.
@@ -237,6 +245,18 @@ func (d *Dialer) through(ctx context.Context, c *hostConfig) (*hostConfig, error
 		hc.proxyJump, hc.proxyCommand = rest, ""
 	}
 	return hc, nil
+}
+
+// DefaultDialTimeout is the least that bounds a dial in all
+// (dialTimeout).
+const DefaultDialTimeout = 5 * time.Minute
+
+// dialTimeout bounds a dial of the host whose config is c in all: twice
+// the host's connect timeout, for connecting and the handshake, for the
+// host and each hop on the way to it there can be (maxHops), or
+// DefaultDialTimeout, whichever is longer.
+func (d *Dialer) dialTimeout(c *hostConfig) time.Duration {
+	return max(DefaultDialTimeout, 2*d.connectTimeout(c)*(maxHops+1))
 }
 
 func (d *Dialer) connectTimeout(c *hostConfig) time.Duration {

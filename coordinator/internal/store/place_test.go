@@ -77,11 +77,17 @@ func TestChoosePlace(t *testing.T) {
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
-		if tries, err := tx.PlaceTried(id, "build"); err != nil || tries != 1 {
+		if tries, err := tx.PlaceTried(id, "build", 1); err != nil || tries != 1 {
 			t.Errorf("PlaceTried = %d, %v", tries, err)
 		}
-		if tries, err := tx.PlaceTried(id, "build"); err != nil || tries != 2 {
+		if tries, err := tx.PlaceTried(id, "build", 1); err != nil || tries != 2 {
 			t.Errorf("PlaceTried again = %d, %v", tries, err)
+		}
+		if tries, err := tx.PlaceTried(id, "build", 3); err != nil || tries != 5 {
+			t.Errorf("PlaceTried by 3 = %d, %v", tries, err)
+		}
+		if _, err := tx.PlaceTried(id, "build", 0); err == nil {
+			t.Error("PlaceTried by 0 succeeded")
 		}
 		a, token, err := tx.NewAttempt(NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
 		if err != nil {
@@ -200,10 +206,10 @@ func TestChoosePlace(t *testing.T) {
 		if err := tx.EndJob(id, "build", JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeFailure}}); err != nil {
 			return err
 		}
-		if _, err := tx.PlaceTried(id, "build"); !errors.Is(err, ErrState) {
+		if _, err := tx.PlaceTried(id, "build", 1); !errors.Is(err, ErrState) {
 			t.Errorf("PlaceTried of an ended job = %v, want ErrState", err)
 		}
-		if _, err := tx.PlaceTried(id, "deploy"); !errors.Is(err, ErrNotFound) {
+		if _, err := tx.PlaceTried(id, "deploy", 1); !errors.Is(err, ErrNotFound) {
 			t.Errorf("PlaceTried of no job = %v, want ErrNotFound", err)
 		}
 		return nil
@@ -265,7 +271,7 @@ func TestPlaceFailed(t *testing.T) {
 	p := problems.PlacementUnanswered.Problem(problems.Params{"job": "build", "tries": 10})
 	n := NewAttempt{Run: id, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10}
 	inTx(t, s, func(tx *Tx) error {
-		if _, err := tx.PlaceTried(id, "build"); err != nil {
+		if _, err := tx.PlaceTried(id, "build", 1); err != nil {
 			return err
 		}
 		a, err := tx.PlaceFailed(n, 0, p)

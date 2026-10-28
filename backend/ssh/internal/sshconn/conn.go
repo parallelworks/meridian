@@ -1,7 +1,6 @@
 package sshconn
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -291,10 +290,9 @@ func (c *Conn) ListenUnix(path string) (net.Listener, error) {
 // Get answers at once that it can't yet (DialError).
 type Pool struct {
 	Dialer *Dialer
-	// DialTimeout bounds a dial in all, whatever its parts' own bounds
-	// leave out, as ssh -G that doesn't end, or a jump host that stalls
-	// after its handshake: DefaultDialTimeout for 0. A dial that reaches
-	// it has failed.
+	// DialTimeout bounds a dial in all, over the bounds the Dialer gives
+	// each of its parts and the whole (Dialer.Dial), or 0 for none of the
+	// pool's own. A dial that reaches it has failed.
 	DialTimeout time.Duration
 
 	mu      sync.Mutex
@@ -302,21 +300,21 @@ type Pool struct {
 	closed  bool
 	// dials are the dials going on, which Close waits for.
 	dials sync.WaitGroup
+	// dialed, which a test sets, is called once a dial has ended, and
+	// what it made, or how it failed, is recorded.
+	dialed func()
 }
 
-// DefaultDialTimeout bounds a pool's dial in all, by default: room for a
-// connect timeout for each of a few hops, and the user's ssh -G.
-const DefaultDialTimeout = 5 * time.Minute
-
 // An entry is a pool's connection to a target, or how it last failed to
-// make one: after how many failures in a row, with what error, and when
-// it may try again; and, while it dials one, what closes once it is done,
-// and what ends the dial.
+// make one: after how many failures in a row, and how many in all, with
+// what error, and when it may try again; and, while it dials one, what
+// closes once it is done, and what ends the dial.
 type entry struct {
 	conn     *Conn
 	dialing  chan struct{}
 	cancel   context.CancelFunc
 	failures int
+	failed   int
 	lastErr  error
 	retryAt  time.Time
 }
@@ -326,15 +324,19 @@ type entry struct {
 var ErrDialing = errors.New("sshconn: the host is being connected to")
 
 // A DialError is a pool's answer for a target it has no connection to:
-// the error of its last dial of it, or ErrDialing before one has failed,
-// and how many of its dials in a row have failed. Waiting is set where
-// Get didn't dial, as another user is dialing the target, or the pool is
-// waiting to dial it again after failing to reach it: what the caller
-// asks of the host is to be asked again later.
+// the error of its last dial of it, or ErrDialing before one has failed;
+// how many of its dials in a row have failed, Failures, and how many in
+// all, Failed, which only grows, so that what failed since a caller last
+// asked is the difference. Waiting is set where Get didn't dial, as
+// another user is dialing the target, or the pool is waiting to dial it
+// again after failing to reach it, until RetryAt: what the caller asks of
+// the host is to be asked again later.
 type DialError struct {
 	Err      error
 	Failures int
+	Failed   int
 	Waiting  bool
+	RetryAt  time.Time
 }
 
 func (e *DialError) Error() string { return e.Err.Error() }
@@ -382,12 +384,18 @@ func (p *Pool) Get(ctx context.Context, t Target) (*Conn, error) {
 		if err == nil {
 			err = ErrDialing
 		}
-		de := &DialError{Err: err, Failures: e.failures, Waiting: true}
+		de := &DialError{Err: err, Failures: e.failures, Failed: e.failed, Waiting: true}
+		if e.dialing == nil {
+			de.RetryAt = e.retryAt
+		}
 		p.mu.Unlock()
 		return nil, de
 	}
 	done := make(chan struct{})
-	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cmp.Or(p.DialTimeout, DefaultDialTimeout))
+	dctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	if p.DialTimeout > 0 {
+		dctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), p.DialTimeout)
+	}
 	e.dialing, e.cancel = done, cancel
 	p.dials.Add(1)
 	p.mu.Unlock()
@@ -405,7 +413,17 @@ func (p *Pool) Get(ctx context.Context, t Target) (*Conn, error) {
 	case e.conn != nil && e.lastErr == nil:
 		return e.conn, nil
 	}
-	return nil, &DialError{Err: e.lastErr, Failures: e.failures}
+	return nil, &DialError{Err: e.lastErr, Failures: e.failures, Failed: e.failed}
+}
+
+// Failed returns how many of the pool's dials of t have failed, in all.
+func (p *Pool) Failed(t Target) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e := p.entries[t.key()]; e != nil {
+		return e.failed
+	}
+	return 0
 }
 
 // dial dials t for the entry e, with ctx, which only DialTimeout and the
@@ -413,6 +431,9 @@ func (p *Pool) Get(ctx context.Context, t Target) (*Conn, error) {
 // the entry's dialing once it has.
 func (p *Pool) dial(ctx context.Context, e *entry, t Target) {
 	defer p.dials.Done()
+	if p.dialed != nil {
+		defer p.dialed()
+	}
 	conn, err := p.Dialer.Dial(ctx, t)
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		err = fmt.Errorf("sshconn: %s: %w", t.Host, errDialTimeout)
@@ -433,6 +454,7 @@ func (p *Pool) dial(ctx context.Context, e *entry, t Target) {
 		e.conn, e.failures, e.lastErr, e.retryAt = conn, 0, nil, time.Time{}
 	default:
 		e.failures++
+		e.failed++
 		e.lastErr = err
 		e.retryAt = time.Now().Add(redialAfter(e.failures))
 	}
