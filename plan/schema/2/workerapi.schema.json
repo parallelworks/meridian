@@ -146,6 +146,10 @@
         "runDir": {
           "type": "string"
         },
+        "runDirOnMember": {
+          "description": "Added in worker API version 3. Set when the member chose the run's directory itself, as a host the ssh backend reaches does, apart from the run's directory where the run started: format 1's copy of it on a host, where a step never cleans the directory of a run it calls.",
+          "type": "boolean"
+        },
         "env": {
           "type": "object",
           "additionalProperties": {
@@ -198,7 +202,7 @@
           "type": "string"
         },
         "rootDir": {
-          "description": "Added in worker API version 3. The root run's directory, which the job's steps read as PW_PARENT_JOB_DIR.",
+          "description": "Added in worker API version 3. The root run's directory on the worker's host, in which the run's is, which the job's steps read as PW_PARENT_JOB_DIR.",
           "type": "string"
         },
         "workflowName": {
@@ -486,7 +490,7 @@
           "items": {"type": "string"}
         },
         "workingDirectory": {
-          "description": "Added in worker API version 3. The step's working directory, which the child's directory is in.",
+          "description": "Added in worker API version 3. The step's own working-directory:, relative to its run's directory or absolute, which is the child's directory; or none, and then the child's is subworkflows/<job>/step_<n> in its run's.",
           "type": "string"
         }
       },

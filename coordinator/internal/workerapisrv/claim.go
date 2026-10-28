@@ -56,8 +56,11 @@ type Ready struct {
 	Tree *workerapi.Tree
 	// RunDir is the run's directory where the attempt runs, where its
 	// member chose it (store.Placement.RunDir, or what a private
-	// placement holds sealed), or "" for the run's.
-	RunDir string
+	// placement holds sealed), or "" for the run's; and RunDirOnMember
+	// whether its member chose it, apart from the run's directory where
+	// the run started (workerapi.Claim.RunDirOnMember).
+	RunDir         string
+	RunDirOnMember bool
 }
 
 // serveClaim claims the attempt the bootstrap token is for, and answers
@@ -359,17 +362,22 @@ func (s *Server) claim(ctx context.Context, run *store.Run, a *store.Attempt) (*
 	}); err != nil {
 		return nil, err
 	}
-	// What a child run's attempt has of its tree is given only in an
-	// attempt of version 3 or later, which such an attempt needs.
-	var tree *workerapi.Tree
+	// What a child run's attempt has of its tree, and whether its run's
+	// directory is its member's own, which a step that calls a workflow
+	// reads, are given only in an attempt of version 3 or later, which
+	// such an attempt needs.
+	var (
+		tree     *workerapi.Tree
+		onMember bool
+	)
 	if a.APIVersion >= workerapi.Version3 {
-		tree = ready.Tree
+		tree, onMember = ready.Tree, ready.RunDirOnMember
 	}
 	return &workerapi.Claim{
 		RunID: run.ID, AttemptID: a.ID, APIVersion: a.APIVersion, PlanVersion: run.PlanVersion, Job: job,
 		Attempt: a.Number, Group: a.Placement.Group, Member: a.Placement.Member,
 		LeaseSeconds: a.LeaseSeconds, HeartbeatSeconds: a.HeartbeatSeconds, SelfFencing: a.SelfFencing,
 		Run: ready.Run, Needs: ready.Needs, RunDir: cmp.Or(ready.RunDir, run.RunDir), Env: ready.Env, Retry: retry, Container: ready.Container,
-		Control: control, Tree: tree,
+		Control: control, Tree: tree, RunDirOnMember: onMember,
 	}, nil
 }

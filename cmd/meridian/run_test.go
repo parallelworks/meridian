@@ -171,6 +171,13 @@ var startedRE = regexp.MustCompile(`^run (\d+) started \(run directory (.+)\)\n`
 // worker uploaded it.
 func stepLog(t *testing.T, env map[string]string, id string) string {
 	t.Helper()
+	return stepLogAt(t, env, id, 0)
+}
+
+// stepLogAt returns the log of the first try of the step at index step of
+// the job main of the run id, as stepLog does of its first.
+func stepLogAt(t *testing.T, env map[string]string, id string, step int) string {
+	t.Helper()
 	dirs := local.Dirs{State: env[local.EnvStateDir]}
 	db, err := dirs.Database()
 	if err != nil {
@@ -186,7 +193,7 @@ func stepLog(t *testing.T, env map[string]string, id string) string {
 		t.Fatal(err)
 	}
 	defer logs.Close()
-	data, ended, err := logs.Read(t.Context(), coordinator.LogKey{Run: id, Job: "main", Attempt: 1, Part: workerapi.LogStep}, 0, 1<<10)
+	data, ended, err := logs.Read(t.Context(), coordinator.LogKey{Run: id, Job: "main", Attempt: 1, Part: workerapi.LogStep, Step: step}, 0, 1<<10)
 	if err != nil || !ended {
 		t.Fatalf("the step's log is %q, ended %v: %v", data, ended, err)
 	}

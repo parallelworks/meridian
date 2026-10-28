@@ -78,11 +78,12 @@ type called struct {
 // runChild runs a try of the step rs, whose uses: names a workflow, whose
 // log is key, as a run of its own (docs/design.md, Workflows a step
 // calls). What s watches stops the try from its start, as a command's: a
-// timer of the step's runs from then. It makes the child's directory
-// (childDir), cleaned first when clean is set, asks the coordinator for
-// the child with exactly what childRequest builds, of Step's env and vars,
-// the variables the worker defines for the step, and waits for the
-// child's end, heartbeating, as the attempt does throughout (awaitChild).
+// timer of the step's runs from then. It makes the child's directory,
+// cleaned first when clean is set where it may be (makeChildDir), asks
+// the coordinator for the child with exactly what childRequest builds, of
+// Step's env and vars, the variables the worker defines for the step, and
+// waits for the child's end, heartbeating, as the attempt does throughout
+// (awaitChild).
 // A try stopped before it asked asks for no child. The step's log holds
 // note, if there is one, and the problems the coordinator gave of a child
 // it didn't make, and nothing else: the child's logs are its own run's. A
@@ -288,12 +289,16 @@ func (c called) end(rs, first *plan.ReadyStep, last bool, timedOut func(limit in
 
 // makeChildDir makes dir, the directory of the run a step calls, and
 // cleans it first when clean is set, as the step's clean-on-retry: says,
-// unless it is the attempt's run directory or holds it, which format 1
-// never cleans. It makes it in the directory of the step's root run,
-// where the coordinator puts it (plan.ChildDir), a directory at a time
-// from there, never following a symbolic link, which the run's own steps
-// could have left in the way (makeDirIn). A directory outside the root's
-// it leaves for the coordinator, which refuses it (child_dir_outside).
+// but never where it is the attempt's run directory or holds it, nor in
+// a run directory its member chose (workerapi.Claim.RunDirOnMember):
+// format 1 cleans a called run's directory only on the machine the run
+// started on, never its copy on a host, and never its root's directory,
+// which, as the attempt's is in its root's, this spares too. It makes it
+// in the directory of the step's root run, where the coordinator puts it
+// (plan.ChildDir), a directory at a time from there, never following a
+// symbolic link, which the run's own steps could have left in the way
+// (makeDirIn). A directory outside the root's it leaves for the
+// coordinator, which refuses it (child_dir_outside).
 func (a *attempt) makeChildDir(dir string, clean bool) error {
 	root := a.claim.RunDir
 	if tree := a.claim.Tree; tree != nil {
@@ -303,7 +308,7 @@ func (a *attempt) makeChildDir(dir string, clean bool) error {
 	if !ok {
 		return nil
 	}
-	return makeDirIn(root, rel, clean && !inside(dir, a.claim.RunDir))
+	return makeDirIn(root, rel, clean && !a.claim.RunDirOnMember && !inside(dir, a.claim.RunDir))
 }
 
 // inDir returns the path of dir relative to root, and whether dir is in

@@ -335,7 +335,8 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 
 // Place starts a worker for the attempt on m's host, through meridian host,
 // which starts it detached, as the host requires, in the run's directory
-// on the host, which it chooses, by the run's and the store's IDs; and
+// on the host, which it chooses, by the run's and the store's IDs, and
+// for a child run by its root's, with the child's path in it; and
 // hands the worker its bootstrap token, written on the session's standard
 // input once meridian host has hardened itself, never in an argument or
 // the environment, before it returns the placement.
@@ -349,7 +350,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 			Attempt: req.Attempt, Name: req.Name,
 			Coordinator:    hostproto.Endpoint{Address: req.Coordinator.Address, KeyHash: req.Coordinator.KeyHash},
 			BootstrapToken: req.BootstrapToken, TimeoutSeconds: req.TimeoutSeconds, Resources: req.Resources,
-			TraceParent: req.TraceParent, Run: req.Run, Store: d.Store,
+			TraceParent: req.TraceParent, Run: req.Run, Store: d.Store, Root: req.Root, Path: req.Path,
 		}}, nil
 	})
 	if err != nil {

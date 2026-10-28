@@ -239,6 +239,11 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     one, which fails the step that calls it when it runs: a directory
     outside its root's run directory, and a value of its `env:` that
     reads its own name ([Workflows a step calls](#workflows-a-step-calls));
+  - a step's `clean-on-retry:`, which never cleans its own run's
+    directory, nor one that holds it, where format 1 spares only the
+    root's ([Failures and retries](#failures-and-retries)), and, for a
+    caller on a host, never cleans its child's directory on the machine
+    the run started on ([Workflows a step calls](#workflows-a-step-calls));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
   - how a job's `ssh:` reaches its host, where its run's directory is
@@ -2170,9 +2175,10 @@ variables, and the root's finisher, which waits for every run of its tree;
 and the worker API's paths for a child, served, and what a child's
 attempt's claim has of its tree, which its worker reads; and the worker's
 run of a calling step: it makes the child's directory, and cleans it as
-`clean-on-retry:` says, never following a symbolic link, asks for the
-child, waits for it, stops it as the step is stopped, and ends the step as
-below; the coordinator's stop of a step's children, in the transaction
+`clean-on-retry:` says on the machine the run started on, never on a
+host, never following a symbolic link, asks for the child, waits for it,
+stops it as the step is stopped, and ends the step as below; the
+coordinator's stop of a step's children, in the transaction
 that ends its attempt, however it ends, and in the one that stops its run,
 or its job, as the plan says of its `if:`; the caller's attempt parked
 while it waits; and what people see of a tree, below. The rest isn't built
@@ -2310,38 +2316,62 @@ the host but runs the child where its caller runs, as some known calls do.
   (`SourceRef.CallName`). The child's plan links it to its step's try,
   and to its root, by run ID, with how far below the root it is
   (`Run.Parent`), which its attempts' identity is given from.
-- **Its directory** is the caller's run directory's (`PW_JOB_DIR`'s)
-  `subworkflows/<job>/step_<n>/`, as in format 1, whose workflows read
-  files their children leave there: `<job>` is the calling job's name, or,
-  for an instance of a matrix job, its name, a hyphen and the instance's
-  index, from 0, in the order the combinations are made (`build-0`), and
-  `<n>` the step's place in its job's `steps:` as written, from 0,
-  counting steps that are skipped. A step's `working-directory:` is the
-  child's directory instead, as in format 1: relative to the caller's run
-  directory, or, absolute, as it is. A child's directory outside its
-  root's run directory isn't built yet: a child's directory isn't made
-  private, as a root's is, since what holds it is, which one elsewhere
-  wouldn't be. The step fails when it runs, as its child would be created
-  (`child_dir_outside`), never as the root is created, since an `if:` may
-  skip it; none of the 270 known calls sets `working-directory:`. A
-  child's directory is on the coordinator's machine, under its caller's
-  run directory there, even where the step runs on a host, as format 1
-  prepares a subworkflow on the machine the run started on, resolving
-  the step's `working-directory:` there before it maps the run's
-  directory to the host's: a working directory a worker on a host gives
-  inside its run's directory there, as one `PW_JOB_DIR` gives, is the same
-  place in the run's directory on the coordinator's machine. A step's
-  `clean-on-retry:` cleans it before the step's next try (below). The
-  step's worker makes it, and cleans it, a directory at a time from its
+- **Its directory** is format 1's: the step's own `working-directory:`,
+  relative to the caller's run directory (`PW_JOB_DIR`), or, absolute, as
+  it is; or, for a step without one, or whose `working-directory:` is
+  null, the caller's run directory's `subworkflows/<job>/step_<n>/`, whose
+  workflows read files their children leave there (`plan.ChildDir`).
+  `<job>` is the calling job's name, or, for an instance of a matrix job,
+  its name, a hyphen and the instance's index, from 0, in the order the
+  combinations are made (`build-0`), and `<n>` the step's place in its
+  job's `steps:` as written, from 0, counting steps that are skipped. The
+  job's `working-directory:` doesn't move it, as it doesn't in format 1:
+  22 of the 270 known calls are in a job with one, and have none of their
+  own. A step's `working-directory:` that puts the child outside its
+  root's run directory, an absolute one elsewhere or a relative one that
+  leaves it with `..`, isn't built yet, where format 1 runs the child
+  there: anywhere on the machine the run started on, and under the home
+  on a host. A child's directory isn't made private, as a root's is,
+  since what holds it is, which one elsewhere wouldn't be. The step fails
+  when it runs, as its child would be created (`child_dir_outside`), never
+  as the root is created, since an `if:` may skip it; none of the 270
+  known calls sets `working-directory:`.
+- **Its directory is in the same place on each machine**, as format 1
+  lays a tree out. Format 1 prepares a subworkflow on the machine the run
+  started on, even for a step on a host, resolving the step's
+  `working-directory:` there, and maps each directory of the tree to the
+  same place under its jobs directory on each host its jobs run on. So a
+  child's run directory is in its root's on the coordinator's machine,
+  and a working directory that a worker on a host gives inside its root's
+  run directory there, as one `PW_JOB_DIR` or `PW_PARENT_JOB_DIR` gives,
+  is the same place in the root's run directory on the coordinator's
+  machine. A child's job that runs on a host runs in the same place in
+  its root's run directory there, which `meridian host` makes if none of
+  the root's jobs ran on the host (`backend.PlaceRequest.Path`), and
+  reads the host's as `PW_JOB_DIR` and `PW_PARENT_JOB_DIR`. Every try of
+  a step's child shares its directory, and a later step on that host
+  finds what the child wrote there: 5 known calls read their child's
+  files so, and 3 more through a nested call, and 3 of them resume, on a
+  step's next try, from what its last try left there. Every one of the
+  263 known calls whose workflow is known has a child with jobs on a
+  host. A child's job on another host than its caller's has its own copy
+  of the directory there, without its caller's files, as in format 1.
+- **The calling step's worker makes it**, where the step runs, and cleans
+  it before the step's next try as its `clean-on-retry:` says, but only
+  on the machine the run started on: a worker on a host never cleans it,
+  as format 1 never cleans a host's copy of a directory, which is where
+  those 3 calls' tries leave what the next resumes from
+  (`workerapi.Claim.RunDirOnMember`, [Failures and
+  retries](#failures-and-retries)). Format 1 cleans its copy on the
+  machine the run started on even for a caller on a host, where its
+  child's jobs that run there keep their files; a worker on a host can't
+  reach that copy, so Meridian leaves it, and none of the 9 known calls on
+  a host with a `retry:` has a child with a job anywhere but on a host.
+  The worker makes it, and cleans it, a directory at a time from its
   root's run directory, and never follows a symbolic link on the way,
   which a step of the run could leave there to put the child elsewhere:
   the step fails instead (`child_dir_unusable`), and so does the child's
-  job, as its worker makes it again (`run_dir_unusable`). A worker on a
-  host makes and cleans the same place under its run's directory there,
-  which the child doesn't use, and the child's job, where it runs on the
-  coordinator's machine, makes the child's directory there: which side
-  makes and cleans a child's directory, for a caller on a host, isn't
-  settled yet.
+  job, as its worker makes it again (`run_dir_unusable`).
 - **Its variables** are its root's: the root's Start reads the variables
   every workflow in the tree reads (`Run.TreeVariables`, which the root's
   Create finds in each pinned workflow's expressions), once, into the
@@ -2729,10 +2759,20 @@ not assumed idempotent.
   `clean-on-retry:` is true unless the workflow says otherwise, as in
   format 1, or an expression, which Step reads as format 1 does: true or
   false, text or a number that reads as one, and true for anything else
-  (`plan.ReadyStepRetry.CleanOnRetry`). As in format 1, it cleans only a
-  `uses:` step's directory before its next try, and never one that is the
-  parent run's directory or log directory, or holds either; a worker that
-  runs `uses:` steps forces it off for those.
+  (`plan.ReadyStepRetry.CleanOnRetry`). It cleans only a `uses:` step's
+  directory before its next try, and only on the machine the run started
+  on, by a caller that runs there: never a host's copy, as in format 1,
+  nor, for a caller on a host, the copy where the run started, which
+  format 1 cleans ([Workflows a step calls](#workflows-a-step-calls)).
+  It never cleans the caller's run directory, or one that holds it, and
+  so never the root run's, which holds the caller's, as format 1 never
+  does; a run's logs aren't in a run's directory, so format 1's log
+  directory has nothing to match. That is stricter than format 1 in one
+  place: format 1 spares only the root's directory, and would clean, for
+  a call in a child, a `working-directory:` that names the child's own
+  directory, with what its steps keep there for its later steps, which
+  no workflow could mean. That differs only for such a step, and none of
+  the 270 known calls sets a `working-directory:`.
 - **Batch schedulers don't rerun jobs either.** Jobs are submitted with
   `--no-requeue` (Slurm) or `-r n` (PBS), so the scheduler doesn't rerun one
   behind Meridian's back. That holds for jobs with a `retry:` too: Meridian
@@ -4035,7 +4075,8 @@ that a job's `ssh:` placed on a host; one that uses an action only a
 platform provides fails saying so (`action_needs_platform`, [Built-in
 actions](#built-in-actions)). A step that `uses:` a workflow runs it as a
 run of its own ([Workflows a step calls](#workflows-a-step-calls)), whose
-directory its `clean-on-retry:` cleans. Its events are kept in memory
+directory its `clean-on-retry:` cleans on the machine the run started
+on, never on a host. Its events are kept in memory
 while the coordinator is unreachable, since each is small but for a step's
 outputs, which are capped.
 
@@ -4409,7 +4450,10 @@ Where format 1, as ACTIVATE runs it, does otherwise:
 - **A run's directory on a host** is in Meridian's state directory there,
   `~/.local/state/meridian/runs` by default, `localhost`'s too, not
   ACTIVATE's `~/pw/jobs/<workflow>/<number>`, or for `localhost` the same
-  under `~/remote_pw`, which a few known workflows derive paths from.
+  under `~/remote_pw`, which a few known workflows derive paths from. A
+  child run's is in its root's there, in the same place as on the
+  coordinator's machine, as in ACTIVATE
+  ([Workflows a step calls](#workflows-a-step-calls)).
 - **Outages.** Steps run through one, and their reports arrive after it.
   ACTIVATE fails a step once its connection has been lost for
   `disconnect-timeout`, and leaves its process running.

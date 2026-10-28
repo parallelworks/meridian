@@ -33,9 +33,9 @@ type ChildRequest struct {
 	// strings the worker masks for the step.
 	WithPrivate, WithSecrets, EnvPrivate, EnvSecrets []string
 	Masked                                           []string
-	// WorkingDirectory is the step's working directory, as Step gave it
-	// (plan.ReadyStep.WorkingDirectory): "" for its run's directory, or a
-	// path relative to it, or absolute.
+	// WorkingDirectory is the step's own working-directory:, as Step gave
+	// it (plan.ReadyStep.WorkingDirectory): "" for none, or a path relative
+	// to its run's directory, or absolute.
 	WorkingDirectory string
 }
 
@@ -82,13 +82,16 @@ func (e *StepStoppedError) Error() string {
 //     once for the whole tree (treeVariables). Its own steps' workflows are
 //     those the root pinned for them (plan.Plan.FindCall). Create's
 //     problems are the child's: it gives them, and stores no run.
-//   - Its directory is subworkflows/<job>/step_<n> in the step's working
-//     directory, as format 1's is, where <job> is the step's job's name, a
-//     hyphen and the instance's index for a matrix job's: one outside its
-//     root's run directory is child_dir_outside. It is on the
-//     coordinator's machine, under its caller's run directory there, even
-//     where the step runs on a host, as format 1 prepares a subworkflow on
-//     the machine the run started on (childPlace).
+//   - Its directory is format 1's: the step's own working-directory:, in
+//     its caller's run directory or absolute, or else
+//     subworkflows/<job>/step_<n> in that, where <job> is the step's job's
+//     name, a hyphen and the instance's index for a matrix job's
+//     (plan.ChildDir). One outside its root's run directory is
+//     child_dir_outside. The run's directory is on the machine the run
+//     started on, even where the step runs on a host, as format 1
+//     prepares a subworkflow there (childPlace); a member that chooses a
+//     run's directory itself, as a host does, places the child's jobs in
+//     the same place in its root's there (backend.PlaceRequest.Path).
 //   - It runs in the group the step's attempt was placed in, or, for one
 //     whose placement is private, or is on the host a format 1 ssh:
 //     names, its run's default group (childPlace).
@@ -204,7 +207,7 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 		}
 		text = w.Text
 	}
-	wd, group, err := c.childPlace(ctx, parent, attempt, req.WorkingDirectory)
+	wd, group, err := c.childPlace(ctx, parent, root, attempt, req.WorkingDirectory)
 	if err != nil {
 		return "", nil, err
 	}
@@ -313,18 +316,19 @@ func privateNames(with, env []string) []string {
 }
 
 // childPlace returns where the child of a step of the attempt a, of run,
-// is prepared, as format 1 prepares a subworkflow: the step's working
-// directory, wd, as the step's worker gives it, as the child's directory
-// takes it (plan.ChildDir), and the group the child runs in.
+// whose tree's root is root, is prepared, as format 1 prepares a
+// subworkflow: the step's own working directory, wd, as the step's worker
+// gives it, as the child's directory takes it (plan.ChildDir), and the
+// group the child runs in.
 //
 //   - Format 1 prepares a subworkflow on the machine the run started on,
 //     even for a step on a host, and so resolves the step's
 //     working-directory: there, before it maps the run's directory to the
 //     host's. A worker on a host gives a working directory on the host,
-//     which, where it is inside the attempt's run directory there
-//     (attemptRunDir), as one that PW_JOB_DIR gives is, is taken relative
-//     to it: the child's directory is the same place under the run's
-//     directory on the coordinator's machine. One elsewhere is as it is.
+//     which, where it is inside the root's run directory there
+//     (memberDirs), as one that PW_JOB_DIR or PW_PARENT_JOB_DIR gives is,
+//     is taken to the same place in the root's run directory on the
+//     coordinator's machine. One elsewhere is as it is.
 //   - The child runs in the group the attempt was placed in, as the
 //     group's other members can run its jobs, but for one placed in the
 //     group of one member that a format 1 ssh: makes (plan.Target.Inline),
@@ -333,16 +337,18 @@ func privateNames(with, env []string) []string {
 //     group, as format 1 runs a subworkflow's jobs where their own ssh:
 //     says, or else on the machine the run started on, and never on its
 //     caller's host because the caller ran there.
-func (c *Coordinator) childPlace(ctx context.Context, run *store.Run, a *store.Attempt, wd string) (string, string, error) {
+func (c *Coordinator) childPlace(ctx context.Context, run, root *store.Run, a *store.Attempt, wd string) (string, string, error) {
 	if filepath.IsAbs(wd) {
-		memberDir, err := c.attemptRunDir(ctx, run, a)
+		dirs, err := c.memberDirs(ctx, run, root, a)
 		if err != nil {
 			return "", "", err
 		}
-		if memberDir != "" && within(memberDir, wd) {
-			if wd, err = filepath.Rel(memberDir, wd); err != nil {
+		if dirs.own && within(dirs.root, wd) {
+			rel, err := filepath.Rel(dirs.root, wd)
+			if err != nil {
 				return "", "", err
 			}
+			wd = filepath.Join(root.RunDir, rel)
 		}
 	}
 	group := a.Placement.Group

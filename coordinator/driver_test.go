@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -84,7 +85,8 @@ type testDriver struct {
 	members    []string
 	placements map[string]backend.Placement
 	// runDir is the run's directory its placements say their members
-	// chose (backend.Placement.RunDir), or "".
+	// chose (backend.Placement.RunDir), or "": a root's, in which a
+	// child's is at its path (backend.PlaceRequest.Path), as a host's are.
 	runDir   string
 	connects int
 	// cancelled are the placements Cancel cancelled.
@@ -144,6 +146,9 @@ func (d *testDriver) Place(ctx context.Context, m *backend.Member, req backend.P
 		}
 	}
 	p := backend.Placement{Attempt: req.Attempt, ID: "test-" + req.Attempt, WorkerDigest: testDigest, RunDir: d.runDir}
+	if p.RunDir != "" && req.Path != "" {
+		p.RunDir = filepath.Join(p.RunDir, req.Path)
+	}
 	d.mu.Lock()
 	d.placements[req.Attempt] = p
 	d.mu.Unlock()

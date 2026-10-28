@@ -474,41 +474,9 @@ jobs:
 // run: with the execution groups in the config, the local group among
 // them, and the workflows uses: names, which it fetches and pins.
 func TestValidateChecksConfig(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git isn't installed")
-	}
-	// The workflow uses: names is in a repository here, which Git reaches
-	// for github.com's.
-	origins := t.TempDir()
-	repo := filepath.Join(origins, "acme", "flows.git")
-	if err := os.MkdirAll(repo, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	git := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@example.com")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
 	// And for a GitLab server's that sources.yaml registers, and one's
-	// that it doesn't, which Git is never asked for. The user's own
-	// configuration may allow the file transport, as this one does, which
-	// Meridian allows only https and ssh of otherwise.
-	gitConfig := writeFile(t, "gitconfig", "[url \"file://"+filepath.ToSlash(origins)+"/\"]\n\tinsteadOf = https://github.com/\n\tinsteadOf = https://git.example.com/\n\tinsteadOf = https://other.example.com/\n[protocol \"file\"]\n\tallow = always\n")
-	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	git("init", "--quiet", "--initial-branch=main")
-	if err := os.MkdirAll(filepath.Join(repo, "flows"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "flows", "run.yaml"), []byte("jobs:\n  x:\n    steps:\n      - run: echo\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	git("add", ".")
-	git("commit", "--quiet", "-m", "flows")
+	// that it doesn't, which Git is never asked for.
+	flowsRepo(t, map[string]string{"flows/run.yaml": "jobs:\n  x:\n    steps:\n      - run: echo\n"}, "git.example.com", "other.example.com")
 
 	env := emptyEnv(t)
 	env[local.EnvCacheDir] = filepath.Join(t.TempDir(), "cache")
@@ -551,6 +519,54 @@ func TestValidateChecksConfig(t *testing.T) {
 			t.Errorf("meridian validate with %s, %s and %q = %+v, want exit status %d and %s", tc.group, tc.uses, tc.host, r, tc.code, tc.want)
 		}
 	}
+}
+
+// flowsRepo makes a Git repository of files, by their paths in it, on its
+// branch main, which Git reaches for github.com's acme/flows, and for each
+// of hosts' as acme/flows there: a workflow that uses: names, which
+// meridian fetches and pins. The user's own configuration may allow the
+// file transport, as this one does, which Meridian allows only https and
+// ssh of otherwise. It sets the process's environment, so the test can't
+// be parallel.
+func flowsRepo(t *testing.T, files map[string]string, hosts ...string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git isn't installed")
+	}
+	origins := t.TempDir()
+	repo := filepath.Join(origins, "acme", "flows.git")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	var config strings.Builder
+	config.WriteString("[url \"file://" + filepath.ToSlash(origins) + "/\"]\n\tinsteadOf = https://github.com/\n")
+	for _, host := range hosts {
+		config.WriteString("\tinsteadOf = https://" + host + "/\n")
+	}
+	config.WriteString("[protocol \"file\"]\n\tallow = always\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", writeFile(t, "gitconfig", config.String()))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	git("init", "--quiet", "--initial-branch=main")
+	for name, text := range files {
+		path := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("add", ".")
+	git("commit", "--quiet", "-m", "flows")
 }
 
 func TestValidateGroups(t *testing.T) {

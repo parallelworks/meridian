@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
@@ -96,40 +97,39 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	case res.Job == nil:
 		return nil, fmt.Errorf("coordinator: run %s's job %q readies again as no job to run", run.ID, a.Job)
 	}
-	tree, err := r.tree(ctx, run, p)
+	root, err := c.rootOf(ctx, run)
 	if err != nil {
 		return nil, err
 	}
-	runDir, err := c.attemptRunDir(ctx, run, a)
+	dirs, err := c.memberDirs(ctx, run, root, a)
 	if err != nil {
 		return nil, err
 	}
-	return &workerapisrv.Ready{Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs), Tree: tree, RunDir: runDir}, nil
+	tree, err := r.tree(ctx, run, root, dirs.root, p)
+	if err != nil {
+		return nil, err
+	}
+	return &workerapisrv.Ready{
+		Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs), Tree: tree,
+		RunDir: dirs.run, RunDirOnMember: dirs.own,
+	}, nil
 }
 
 // tree returns what an attempt of the child run run, of the plan p, has of
-// its tree (workerapi.Tree): its root's identity, format 1's name for the
-// call, and the strings the worker of the step that called it masked,
-// from its secret record (plan.Inherited.Masked); or nil for a run no step
-// called.
-func (r claimReadier) tree(ctx context.Context, run *store.Run, p *plan.Plan) (*workerapi.Tree, error) {
+// its tree (workerapi.Tree): its root's identity, and its root's
+// directory, rootDir, where the attempt runs (memberDirs), format 1's name
+// for the call, and the strings the worker of the step that called it
+// masked, from its secret record (plan.Inherited.Masked); or nil for a run
+// no step called.
+func (r claimReadier) tree(ctx context.Context, run, root *store.Run, rootDir string, p *plan.Plan) (*workerapi.Tree, error) {
 	if run.Parent == nil {
 		return nil, nil
 	}
-	c := r.c
-	var root *store.Run
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		root, err = tx.Run(run.Parent.Root)
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	rec, err := c.openRecord(ctx, run.ID)
+	rec, err := r.c.openRecord(ctx, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	tree := &workerapi.Tree{JobID: root.ID, RootDir: root.RunDir, WorkflowName: p.Run.Source.Ref.CallName()}
+	tree := &workerapi.Tree{JobID: root.ID, RootDir: rootDir, WorkflowName: p.Run.Source.Ref.CallName()}
 	if rec.Inherited != nil {
 		tree.Masked = rec.Inherited.Masked
 	}
@@ -158,6 +158,100 @@ func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attemp
 		}
 	}
 	return 1, nil
+}
+
+// rootOf returns the root of run's tree: run itself, for a run no step
+// called.
+func (c *Coordinator) rootOf(ctx context.Context, run *store.Run) (*store.Run, error) {
+	if run.Parent == nil {
+		return run, nil
+	}
+	var root *store.Run
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		root, err = tx.Run(run.Parent.Root)
+		return err
+	})
+	return root, err
+}
+
+// treePath returns the path of the directory of run, of the tree whose
+// root is root, relative to the root's, as filepath.Rel gives it: "." for
+// a root, or a child whose directory is its root's. A child's is always
+// in its root's, as CreateChild makes it (child_dir_outside).
+func treePath(root, run *store.Run) (string, error) {
+	path, err := filepath.Rel(root.RunDir, run.RunDir)
+	if err != nil || !filepath.IsLocal(path) {
+		return "", fmt.Errorf("coordinator: run %s's directory isn't in its root's, run %s's", run.ID, root.ID)
+	}
+	return path, nil
+}
+
+// placeTree returns the root, and the path in its directory, that a
+// PlaceRequest gives of an attempt of run (backend.PlaceRequest.Root and
+// Path): its tree's root's ID and treePath, or "" and "" for a root.
+func (c *Coordinator) placeTree(ctx context.Context, run *store.Run) (string, string, error) {
+	if run.Parent == nil {
+		return "", "", nil
+	}
+	root, err := c.rootOf(ctx, run)
+	if err != nil {
+		return "", "", err
+	}
+	path, err := treePath(root, run)
+	return root.ID, path, err
+}
+
+// A memberDirs is where the directories of an attempt's run, and of its
+// tree's root, are on the member the attempt runs on (memberDirs).
+type memberDirs struct {
+	// run is the run's directory there, and root its root's, the run's
+	// own for a root.
+	run, root string
+	// own is set when the member chose them itself
+	// (backend.Placement.RunDir), apart from the run's directory where
+	// the run started, as a host the ssh backend reaches does: format
+	// 1's copy of the tree there.
+	own bool
+}
+
+// memberDirs returns where the directories of the attempt a's run, run,
+// and of its root, root, are on the member where a runs: the run's as its
+// member chose it (attemptRunDir), and its root's, which is that without
+// the run's path in its root's (treePath), as a member that chooses a
+// child's directory places it in its root's there
+// (backend.PlaceRequest.Path); or the run's and the root's own where the
+// member took the run's directory as it was, or gave none. A member's
+// directory that isn't so is an error, which names no directory of the
+// member, which a private placement keeps sealed.
+func (c *Coordinator) memberDirs(ctx context.Context, run, root *store.Run, a *store.Attempt) (memberDirs, error) {
+	dir, err := c.attemptRunDir(ctx, run, a)
+	if err != nil {
+		return memberDirs{}, err
+	}
+	// A member that gives the run's own directory took it as it was, as
+	// the local backend does. One that chose its own gives another path:
+	// a host's is in its state directory, named by the run's and the
+	// store's IDs, where the meridian command makes a run's in the
+	// system's temporary directory, or where its --run-dir says. Barring
+	// a --run-dir that names a host's very path, the two are one path only
+	// where they are one directory, on the machine the run started on,
+	// where format 1 cleans a child's.
+	if dir == "" || dir == run.RunDir {
+		return memberDirs{run: run.RunDir, root: root.RunDir}, nil
+	}
+	path, err := treePath(root, run)
+	if err != nil {
+		return memberDirs{}, err
+	}
+	rootDir := filepath.Clean(dir)
+	if path != "." {
+		var ok bool
+		if rootDir, ok = strings.CutSuffix(rootDir, string(filepath.Separator)+path); !ok || rootDir == "" {
+			return memberDirs{}, fmt.Errorf("coordinator: attempt %s's member placed run %s's directory outside its root's there, at another path than %s", a.ID, run.ID, path)
+		}
+	}
+	return memberDirs{run: dir, root: rootDir, own: true}, nil
 }
 
 // attemptRunDir returns the run's directory where the attempt a runs,

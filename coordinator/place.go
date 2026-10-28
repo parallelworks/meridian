@@ -265,10 +265,16 @@ func (c *Coordinator) openPlaces(ctx context.Context, runID string, wrapped []by
 // placeAttempt asks chosen's driver to place the attempt id of the run's
 // job, with its bootstrap token, and records the placement it gives.
 // A problem from the driver fails the attempt before its first step, and
-// any other error is a backend that couldn't answer.
+// any other error is a backend that couldn't answer. The request gives a
+// child run's root, and its directory's path in the root's, for a member
+// that chooses run directories itself (backend.PlaceRequest.Path).
 func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *store.Job, id, token string, rj *plan.ReadyJob, chosen *candidate, private bool) (time.Duration, error) {
 	if c.placed != nil {
 		c.placed(run, id, rj)
+	}
+	root, path, err := c.placeTree(ctx, run)
+	if err != nil {
+		return 0, err
 	}
 	endpoint, err := c.connect(ctx, chosen.driver, chosen.member)
 	var key string
@@ -280,7 +286,7 @@ func (c *Coordinator) placeAttempt(ctx context.Context, run *store.Run, job *sto
 		p, err = chosen.driver.Place(ctx, chosen.member, backend.PlaceRequest{
 			Attempt: id, Run: run.ID, Name: "meridian-" + run.ID + "-" + job.Key, Coordinator: endpoint, BootstrapToken: token,
 			TimeoutSeconds: cmp.Or(rj.TimeoutSeconds, chosen.fit.DefaultTimeoutSeconds),
-			Resources:      backend.Resources(rj.Resources), RunDir: run.RunDir,
+			Resources:      backend.Resources(rj.Resources), RunDir: run.RunDir, Root: root, Path: path,
 		})
 	}
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
