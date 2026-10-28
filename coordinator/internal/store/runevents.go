@@ -112,10 +112,10 @@ type RunHead struct {
 }
 
 // TreeHeads returns the head of each run of the tree the run run is of,
-// its root's and those of every run below the root, by their IDs, in one
-// query: what a follower of many runs of a tree reads first, to read the
-// events of only those with new ones, or that have ended. It returns none
-// for a run the store hasn't.
+// its root's and those of every run below the root, step runs among them,
+// by their IDs, in one query: what a follower of many runs of a tree reads
+// first, to read the events of only those with new ones, or that have
+// ended. It returns none for a run the store hasn't.
 func (tx *Tx) TreeHeads(run string) (map[string]RunHead, error) {
 	n, ok := runNumber(run)
 	if !ok {

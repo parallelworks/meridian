@@ -157,8 +157,9 @@ func (c *Coordinator) newFollower(id string, callers []Caller, opts FollowOption
 // reports whether it read any, and has done with the run once it has
 // reported its end (done). top is set for the run Follow follows, whose
 // end it reports after the ends of the runs of its tree. It reads the
-// store only for the runs that heads say have something new there, or
-// that heads say nothing of (follower.heads).
+// store only for the runs that heads say have something new there, that
+// heads say nothing of (follower.heads), or that it has yet to read
+// (follower.news).
 func (f *follower) poll(ctx context.Context, top bool, heads map[string]store.RunHead) (bool, error) {
 	read := false
 	if !f.done {
@@ -191,6 +192,7 @@ func (f *follower) poll(ctx context.Context, top bool, heads map[string]store.Ru
 			case err != nil:
 				return false, err
 			}
+			f.read = true
 		}
 		for _, e := range events {
 			f.after = e.Seq
@@ -252,10 +254,13 @@ func (f *follower) heads(ctx context.Context) (map[string]store.RunHead, error) 
 // news reports whether heads say that the store may have something new of
 // the follower's run, past what it reported: an event, or its end, which
 // a run that ended before its events were kept has none of; or whether
-// they say nothing of it.
+// they say nothing of it; or whether the follower has yet to read the run.
+// A run that can't be read, as one whose start state doesn't decode, may
+// never start, nor have an event, nor end: its first poll reads it, and
+// fails, rather than wait for it.
 func (f *follower) news(heads map[string]store.RunHead) bool {
 	h, ok := heads[f.run]
-	return !ok || h.LastEvent > f.after || h.Ended
+	return !f.read || !ok || h.LastEvent > f.after || h.Ended
 }
 
 // pollChildren polls the followers of the runs the follower's run's steps
@@ -287,15 +292,17 @@ func (f *follower) finished() bool {
 }
 
 // A follower is what Follow keeps of a run as it follows it: the steps'
-// tries that called it, from the run Follow follows down; the last of its
-// events it reported, and whether it has reported its end; the logs it
-// follows, in the order it began to; the attempts that have ended; and
-// the followers of the runs its steps called (FollowOptions.Tree).
+// tries that called it, from the run Follow follows down; whether it has
+// read the run, the last of its events it reported, and whether it has
+// reported its end; the logs it follows, in the order it began to; the
+// attempts that have ended; and the followers of the runs its steps called
+// (FollowOptions.Tree).
 type follower struct {
 	c        *Coordinator
 	run      string
 	callers  []Caller
 	opts     FollowOptions
+	read     bool
 	after    int64
 	done     bool
 	logs     []*followedLog

@@ -563,37 +563,122 @@ func TestFollowStored(t *testing.T) {
 	}
 }
 
+// calledRoot returns a run, started, with an attempt of its job, and child,
+// which stores a run that the try try of the job's step calls, returning
+// its ID: a run, not started, with no event, of the root's plan.
+func calledRoot(t testing.TB, c *Coordinator) (root string, child func(try int) string) {
+	t.Helper()
+	root, created := create(t, c, "jobs:\n  main:\n    steps:\n      - run: echo\n", nil, nil)
+	if _, err := c.startRun(t.Context(), root, nil); err != nil {
+		t.Fatal(err)
+	}
+	var attempt *store.Attempt
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		var err error
+		attempt, _, err = tx.NewAttempt(store.NewAttempt{Run: root, Job: "main", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return root, func(try int) string {
+		t.Helper()
+		var id string
+		if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+			var err error
+			if id, err = tx.NewRunID(); err != nil {
+				return err
+			}
+			var workflow hopper.JobID
+			workflow[13], workflow[14], workflow[15] = 0xfd, byte(try>>8), byte(try)
+			link := store.Link{Run: root, Job: "main", Attempt: attempt.ID, Step: 0, Try: try, Root: root, Depth: 1}
+			return tx.InsertRun(store.NewRun{ID: id, Plan: created.Plan, DefaultGroup: "local", RunDir: "/runs/" + id, WorkflowID: workflow, Parent: &link})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+}
+
+// TestFollowUnreadableChild checks that Follow fails with the error of a
+// run a step called that the store can't read, as one whose start state
+// doesn't decode, as it first follows it: such a run may never start, nor
+// have an event, nor end, so Follow would wait for it for ever. The run is
+// stored as Follow follows another of the tree, so that the heads Follow
+// reads next have it, with no event, not ended.
+func TestFollowUnreadableChild(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{})
+	root, child := calledRoot(t, c)
+	first := child(0)
+	var second string
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err := c.Follow(ctx, root, FollowOptions{Tree: true, Event: func(e Event) error {
+		if e.Kind == ChildCreated && e.Child == first {
+			second = child(1)
+			exec(t, c, "UPDATE meridian_runs SET start_state = CAST('{' AS BLOB) WHERE id = "+second)
+		}
+		return nil
+	}})
+	if !errors.Is(err, store.ErrMalformed) || !strings.Contains(err.Error(), "run "+second+",") {
+		t.Errorf("Follow = %v, want the error of run %s, whose start state doesn't decode", err, second)
+	}
+}
+
+// TestFollowStaleHeads checks that an event a run of the tree stores after
+// a round of Follow's has read the tree's heads, and before it polls the
+// run, which the heads say has nothing new, is reported the round after.
+func TestFollowStaleHeads(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{})
+	root, child := calledRoot(t, c)
+	called := child(0)
+	var events []Event
+	f := c.newFollower(root, nil, FollowOptions{Tree: true, Event: func(e Event) error {
+		events = append(events, e)
+		return nil
+	}})
+	round := func(between func()) {
+		t.Helper()
+		heads, err := f.heads(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if between != nil {
+			between()
+		}
+		if _, err := f.poll(t.Context(), true, heads); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The first round reads the root's events, and follows, and reads, the
+	// run its step called.
+	round(nil)
+	if len(f.children) != 1 {
+		t.Fatalf("the root's follower follows %d runs", len(f.children))
+	}
+	round(func() {
+		if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+			return tx.StartRun(called, &compile.StartState{Version: 1, Run: plan.RunValues{Format: 1}}, nil)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	round(nil)
+	if !slices.ContainsFunc(events, func(e Event) bool { return e.Run == called && e.Kind == RunStarted }) {
+		t.Errorf("the start of run %s, stored between a round's heads and its poll, wasn't reported the round after: %+v", called, events)
+	}
+}
+
 // BenchmarkFollowTree polls, as Follow does on each wake and each tick, a
 // root whose steps called 200 children, none of which has anything new:
 // the round's reads of the store, once the tree is followed.
 func BenchmarkFollowTree(b *testing.B) {
 	const children = 200
 	c := open(b, Options{})
-	root, created := create(b, c, "jobs:\n  main:\n    steps:\n      - run: echo\n", nil, nil)
-	if _, err := c.startRun(b.Context(), root, nil); err != nil {
-		b.Fatal(err)
-	}
-	var attempt *store.Attempt
-	if err := c.store.Tx(b.Context(), func(tx *store.Tx) error {
-		var err error
-		attempt, _, err = tx.NewAttempt(store.NewAttempt{Run: root, Job: "main", LeaseSeconds: 60, HeartbeatSeconds: 10})
-		return err
-	}); err != nil {
-		b.Fatal(err)
-	}
+	root, child := calledRoot(b, c)
 	for i := range children {
-		if err := c.store.Tx(b.Context(), func(tx *store.Tx) error {
-			id, err := tx.NewRunID()
-			if err != nil {
-				return err
-			}
-			var workflow hopper.JobID
-			workflow[13], workflow[14], workflow[15] = 0xfd, byte(i>>8), byte(i)
-			link := store.Link{Run: root, Job: "main", Attempt: attempt.ID, Step: 0, Try: i, Root: root, Depth: 1}
-			return tx.InsertRun(store.NewRun{ID: id, Plan: created.Plan, DefaultGroup: "local", RunDir: "/runs/" + id, WorkflowID: workflow, Parent: &link})
-		}); err != nil {
-			b.Fatal(err)
-		}
+		child(i)
 	}
 	f := c.newFollower(root, nil, FollowOptions{Tree: true, Stored: true, Event: func(Event) error { return nil }})
 	round := func() bool {
