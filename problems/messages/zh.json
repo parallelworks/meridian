@@ -294,6 +294,7 @@
   "workflow_nested_too_deep": "工作流 {chain} 在运行之下超过 {max} 层相互调用，这是工作流能够相互调用的最大深度。",
   "workflows_too_many": "该运行调用了超过 {max} {what, select, calls {次（按从它出发的每条调用路径计数）} other {个不同的工作流}}，这是一个运行所能调用的上限。",
   "workflows_too_large": "该运行调用的工作流的文本合计超过 {max} 字节，这是一个运行的工作流所能包含的上限。",
+  "child_input_missing": "工作流 {chain} 依次调用下一个，最后一个的输入“{input}”需要一个值，而调用它的步骤的 with: 没有给出。",
   "child_not_pinned": "该步骤调用 {uses}，但它没有随所在运行的树一起被固定和保存：该运行是由不固定运行整棵树的版本创建的。",
   "child_dir_outside": "该步骤的工作目录使它调用的运行位于 {dir}，而该目录不在其根运行的目录中。",
   "child_not_created": "该步骤调用的工作流的运行未被创建：其问题如下。",

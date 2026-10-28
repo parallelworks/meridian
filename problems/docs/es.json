@@ -2090,6 +2090,14 @@
       "O pide a quien ejecuta el flujo de trabajo que suba el límite."
     ]
   },
+  "child_input_missing": {
+    "title": "Falta una entrada obligatoria de un flujo de trabajo llamado",
+    "why": "Un paso cuyo uses: nombra un flujo de trabajo le da sus entradas en su with:. Meridian fija todo el árbol al crear la ejecución y, como hace el formato 1, rechaza una ejecución en la que alguna llamada omite una entrada que el flujo de trabajo llamado exige: una sin default:, que no es opcional, oculta ni ignorada, ni booleana. Comprueba lo que with: escribe; un valor que da una expresión, y una entrada cuyo hidden:, ignore: u optional: es una expresión, se comprueban al crear la ejecución hija. El mensaje nombra el camino de llamadas, desde el flujo de trabajo propio de la ejecución.",
+    "fix": [
+      "Da un valor a la entrada en el with: del paso que llama al flujo de trabajo.",
+      "O, si el flujo de trabajo llamado es tuyo, dale a la entrada un default: o hazla optional: true."
+    ]
+  },
   "child_not_pinned": {
     "title": "Flujo de trabajo llamado no fijado con el árbol de su ejecución",
     "why": "Meridian fija cada flujo de trabajo al que llama una ejecución, por todo su árbol, al crear la ejecución, y guarda su texto con la ejecución, para que cada ejecución hija ejecute el texto con el que se creó su raíz. Esta ejecución se creó antes de que Meridian lo hiciera, así que el flujo de trabajo al que llama este paso no está entre ellos.",

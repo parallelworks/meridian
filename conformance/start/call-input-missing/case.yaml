@@ -1,0 +1,18 @@
+description: >-
+  A run any of whose calls leaves out of its with: an input that the
+  workflow it calls requires, one with no default: that isn't optional nor
+  a boolean, isn't created, as format 1 refuses it. The problem is at the
+  uses: of the run's own step that the path of calls starts at. What an
+  expression in a with: gives is checked as the step runs.
+source: ACTIVATE's filling of a called workflow's defaults
+repositories: [github/conformance/inputs]
+expect:
+  diagnostics:
+    - severity: error
+      code: child_input_missing
+      path: /jobs/main/steps/0/uses
+      line: 10
+      column: 15
+      params:
+        input: cluster (Cluster)
+        chain: '"workflow.yaml", "github.com/conformance/inputs/called.yaml"'

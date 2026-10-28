@@ -1799,6 +1799,13 @@
       "Or have whoever runs the workflow raise the limit."
     ]
   },
+  "child_input_missing": {
+    "why": "A step whose uses: names a workflow gives it its inputs in its with:. Meridian pins the whole tree as the run is created, and, as format 1 does, refuses a run any of whose calls leaves out an input that the called workflow requires: one with no default:, that isn't optional, hidden or ignored, nor a boolean. It checks what with: writes out; a value that an expression gives, and an input whose hidden:, ignore: or optional: is an expression, are checked as the child run is created. The message names the path of calls, from the run's own workflow.",
+    "fix": [
+      "Give the input a value in the with: of the step that calls the workflow.",
+      "Or, if the called workflow is yours, give the input a default: or make it optional: true."
+    ]
+  },
   "child_not_pinned": {
     "why": "Meridian pins every workflow a run calls, down its tree, as the run is created, and keeps their text with the run, so that each child run runs the text its root was created with. This run was created before Meridian did, so the workflow this step calls isn't among them.",
     "fix": [

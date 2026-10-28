@@ -206,7 +206,9 @@ func (c *compiler) callsOf(ctx context.Context, t *tree, n node) ([]node, error)
 				continue
 			}
 			t.found[callKey{n.pin.source.Digest, jsonptr.Format(loc)}] = *p.source
-			next = append(next, node{pin: p, keys: append(slices.Clone(n.keys), key), chain: append(slices.Clone(n.chain), p.source.Location), root: n.root})
+			chain := append(slices.Clone(n.chain), p.source.Location)
+			c.checkCallInputs(t, n.root, chain, n.pin.doc, loc, step, p.doc)
+			next = append(next, node{pin: p, keys: append(slices.Clone(n.keys), key), chain: chain, root: n.root})
 		}
 	}
 	return next, nil

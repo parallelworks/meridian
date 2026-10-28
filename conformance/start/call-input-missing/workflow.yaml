@@ -1,0 +1,17 @@
+on:
+  execute:
+    inputs:
+      cluster:
+        type: string
+        optional: true
+jobs:
+  main:
+    steps:
+      - uses: github/conformance/inputs@main
+        with:
+          $yaml: called.yaml
+          size: 2
+      - uses: github/conformance/inputs@main
+        with:
+          $yaml: called.yaml
+          cluster: ${{ inputs.cluster }}
