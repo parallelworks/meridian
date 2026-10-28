@@ -116,5 +116,5 @@ func (s *MapSources) workflow(ref plan.SourceRef) (*compile.Workflow, error) {
 
 // notFound is the error of a workflow or a revision s doesn't have.
 func (s *MapSources) notFound() error {
-	return cmp.Or(s.Err, error(compile.ErrNotFound))
+	return cmp.Or(s.Err, compile.ErrNotFound)
 }
