@@ -86,8 +86,8 @@ test-386: ## Run tests on 32-bit x86, where an int is 32 bits, if this machine r
 bench: ## Run each benchmark once, to check that it still runs
 	$(FIPS) go test -run='^$$' -bench=. -benchtime=1x ./...
 
-# Under the race detector on a hosted runner, the coordinator package's tests
-# take close to go test's default 10 minutes, so the limit is 15.
+# On a slow hosted runner, the slowest packages under the race detector take
+# over half of go test's default 10 minutes, so the limit is 15.
 .PHONY: test-race
 test-race: ## Run tests with the race detector (needs cgo and a C compiler on Linux)
 	$(FIPS) CGO_ENABLED=1 go test -race -shuffle=on -timeout=15m ./...
