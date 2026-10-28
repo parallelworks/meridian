@@ -1082,13 +1082,63 @@ func TestSourceRefNormal(t *testing.T) {
 		{Uses: "github/o/r", Path: "//a/w.yaml"}: {Uses: "github/o/r", Path: "a/w.yaml"},
 		{Uses: "gitlab/g/p", Path: "//a/w.yaml"}: {Uses: "gitlab/g/p", Path: "/a/w.yaml", Host: "gitlab.com"},
 		{Uses: "github/o/r", Path: "/"}:          {Uses: "github/o/r", Path: ""},
-		{Uses: "workflow/w", Path: "x"}:          {Uses: "workflow/w", Path: "x"},
-		{Uses: "marketplace/m"}:                  {Uses: "marketplace/m"},
+		// A workflow a platform stores is named by its uses: alone, as
+		// ACTIVATE ignores a $yaml and a $host. A marketplace workflow's
+		// version follows the slug's first slash, or else its first @, and
+		// is the latest when there is none.
+		{Uses: "workflow/w", Path: "x", Host: "h"}:     {Uses: "workflow/w"},
+		{Uses: "workflow/w/v@x "}:                      {Uses: "workflow/w/v@x "},
+		{Uses: "marketplace/m"}:                        {Uses: "marketplace/m/latest"},
+		{Uses: "marketplace/m/", Path: "x", Host: "h"}: {Uses: "marketplace/m/latest"},
+		{Uses: "marketplace/m@"}:                       {Uses: "marketplace/m/latest"},
+		{Uses: "marketplace/m@v1.2"}:                   {Uses: "marketplace/m/v1.2"},
+		{Uses: "marketplace/m/v1.2"}:                   {Uses: "marketplace/m/v1.2"},
+		{Uses: "marketplace/m/latest"}:                 {Uses: "marketplace/m/latest"},
+		{Uses: "marketplace/m/v1@x/y"}:                 {Uses: "marketplace/m/v1@x/y"},
+		{Uses: "marketplace/m@v1/x"}:                   {Uses: "marketplace/m@v1/x"},
+		{Uses: "marketplace/m@v1@x"}:                   {Uses: "marketplace/m/v1@x"},
+		{Uses: "marketplace/ m "}:                      {Uses: "marketplace/ m /latest"},
+		{Uses: "marketplace/"}:                         {Uses: "marketplace/"},
+		{Uses: "marketplace/", Path: "x"}:              {Uses: "marketplace/"},
 	} {
 		if got := ref.Normal(); got != want {
 			t.Errorf("%+v.Normal() = %+v, want %+v", ref, got, want)
 		}
+		if !strings.HasPrefix(ref.Uses, "marketplace/") && !strings.HasPrefix(ref.Uses, "workflow/") {
+			continue
+		}
+		// A platform's reference is normal once Normal has read it, and
+		// reads as the same call name, and, for a marketplace workflow,
+		// as the same item, by slug and version, as ACTIVATE reads it.
+		if got := ref.Normal().Normal(); got != ref.Normal() {
+			t.Errorf("%+v.Normal().Normal() = %+v, want %+v", ref, got, ref.Normal())
+		}
+		if got, want := ref.Normal().CallName(), ref.CallName(); got != want {
+			t.Errorf("%+v.Normal().CallName() = %q, want %q", ref, got, want)
+		}
+		if strings.HasPrefix(ref.Uses, "marketplace/") && ref.Uses != "marketplace/" {
+			slug, version := activateItem(ref.Uses)
+			if gotSlug, gotVersion := activateItem(ref.Normal().Uses); gotSlug != slug || gotVersion != version {
+				t.Errorf("%q names the item %q at %q, but its normal %q names %q at %q", ref.Uses, slug, version, ref.Normal().Uses, gotSlug, gotVersion)
+			}
+		}
 	}
+}
+
+// activateItem is the marketplace item a uses: names, as ACTIVATE reads
+// it: what follows marketplace/, split at its first slash, or, without
+// one, at its first @, into a slug and a version, latest when that is
+// empty.
+func activateItem(uses string) (slug, version string) {
+	parts := strings.SplitN(strings.TrimPrefix(uses, "marketplace/"), "/", 2)
+	if len(parts) < 2 {
+		parts = strings.SplitN(parts[0], "@", 2)
+	}
+	version = "latest"
+	if len(parts) > 1 && parts[1] != "" {
+		version = parts[1]
+	}
+	return parts[0], version
 }
 
 // A plan is of the lowest version that holds what it uses: 1 without
