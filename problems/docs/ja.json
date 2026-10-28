@@ -720,6 +720,13 @@
       "ステップの実行時間を制限するには、ステップに timeout: を指定してください。"
     ]
   },
+  "ssh_disconnect_timeout_invalid": {
+    "title": "形式 1 が読めない disconnect-timeout",
+    "why": "形式 1 は disconnect-timeout を、秒数か、300、5m、-1 のように d、h、m、s のいずれかを後ろに付けた整数として読みます。1h30m、1.5h、300ms のようなほかの値は読めず、そのような値を持つホスト上のステップを失敗させます。Meridian はこのキーに従わないため、それでもステップを実行します。",
+    "fix": [
+      "disconnect-timeout を削除するか、ホストへの接続をあきらめないステップには -1 のように、形式 1 が読める形で書いてください。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on が実行場所ではない",
     "why": "ジョブの runs-on: はジョブを実行する場所を選びますが、その中の式が、どの場所も示さない値になりました。runs-on に指定できるのは、execution-groups 入力が返すような実行グループの名前、execution-group: を持つマッピング、environment: とそのクラスターと名前を持つマッピング、または compute-target 入力が返すようなコンピュートターゲットです。",

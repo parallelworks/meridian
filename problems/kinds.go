@@ -216,6 +216,11 @@ var (
 	// with a negative disconnect-timeout. value is the key's value, as the
 	// workflow writes it.
 	SSHDisconnectTimeoutIgnored = define(Warning, "ssh_disconnect_timeout_ignored", "disconnect-timeout not honoured", "value")
+	// SSHDisconnectTimeoutInvalid is a format 1 ssh:'s disconnect-timeout
+	// that format 1 can't read, as 1h30m, for which it fails the step:
+	// Meridian ignores the key, and runs it. value is the key's value, as
+	// the workflow writes it.
+	SSHDisconnectTimeoutInvalid = define(Warning, "ssh_disconnect_timeout_invalid", "disconnect-timeout format 1 can't read", "value")
 )
 
 // Creating and starting a run: what the caller gives the compiler, and

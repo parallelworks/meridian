@@ -720,6 +720,13 @@
       "要限制步骤运行的时长，请给该步骤一个 timeout:。"
     ]
   },
+  "ssh_disconnect_timeout_invalid": {
+    "title": "格式 1 无法读取的 disconnect-timeout",
+    "why": "格式 1 把 disconnect-timeout 读作秒数，或后面带 d、h、m、s 之一的整数，例如 300、5m 或 -1。它无法读取其他值，例如 1h30m、1.5h 或 300ms，并会让带有这种值的主机上的步骤失败。Meridian 不遵循此键，因此仍会运行该步骤。",
+    "fix": [
+      "删除 disconnect-timeout，或按格式 1 能读取的方式书写，例如对从不放弃其主机的步骤写 -1。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on 不是运行位置",
     "why": "作业的 runs-on: 用于选择作业的运行位置，但其中的表达式得到的值没有指定任何位置。runs-on 接受执行组的名称（如 execution-groups 输入给出的值）、带有 execution-group: 的映射、带有 environment: 及其集群和名称的映射，或计算目标（如 compute-target 输入给出的值）。",

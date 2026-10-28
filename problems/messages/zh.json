@@ -101,6 +101,7 @@
   "replaced_keyword": "单词 {word} 是文本 {text}，它始终为 true。它原来对应的 if: 关键字现在是 {replacement}。",
   "value_too_deep": "该值嵌套过深，无法随运行一起保存。运行的嵌套最多 {max} 层。",
   "ssh_disconnect_timeout_ignored": "Meridian 不遵循 disconnect-timeout（这里是 {value}）：与负的 disconnect-timeout 一样，主机上的步骤在与该主机的连接断开期间会继续运行。",
+  "ssh_disconnect_timeout_invalid": "该 ssh: 的 disconnect-timeout 为 {value}，格式 1 无法读取它，因而会让该步骤失败。Meridian 忽略此键，并运行该步骤。",
 
   "runs_on_invalid": "runs-on 的值必须是执行组的名称，或指定执行组、环境或计算目标的映射，而不是 {value}。",
   "resources_invalid": "{key, select, cpu {resources 中的 CPU 必须是核心数，例如 4、0.5 或 500m，而不是 {value}。} memory {resources 中的内存必须是字节数，例如 8Gi 或 512Mi，而不是 {value}。} gpu {resources 中的 GPU 必须是整数，而不是 {value}。} other {resources 中“{key}”的值 {value} 无效。}}",

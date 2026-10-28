@@ -618,6 +618,12 @@
       "Give the step a timeout: to bound how long it runs."
     ]
   },
+  "ssh_disconnect_timeout_invalid": {
+    "why": "Format 1 reads a disconnect-timeout as a number of seconds, or a whole number with one of d, h, m or s after it, such as 300, 5m or -1. It can't read any other, such as 1h30m, 1.5h or 300ms, and fails the step on a host that has one. Meridian doesn't honour the key, so it runs the step all the same.",
+    "fix": [
+      "Remove disconnect-timeout, or write it as format 1 reads it, such as -1 for a step that never gives up on its host."
+    ]
+  },
   "runs_on_invalid": {
     "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
     "fix": [

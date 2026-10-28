@@ -4075,9 +4075,11 @@ backend there through `meridian host`
   lost before it fails the step, 300 seconds by default, isn't honoured:
   a step keeps running through an outage, which is what a worker on the
   host is for, and a laptop that sleeps through it fails no remote step.
-  Every step runs as a negative one asks, so the compiler warns, where
-  the workflow writes it, of one that isn't negative, as `-1` and `-5m`
-  are, and of one an expression gives, whose value it doesn't know yet
+  Every step runs as a negative one asks. Format 1 reads one as a number
+  of seconds, or a whole number with one of `d`, `h`, `m` or `s` after
+  it, so `-1`, `-5m` and `-2d` are negative. The compiler warns, where the
+  workflow writes it, of one that isn't negative, and of one an
+  expression gives, whose value it doesn't know yet
   (`ssh_disconnect_timeout_ignored`); none of the known workflows sets
   it.
 - **A job whose `ssh:` gives no `remoteHost`**, empty or null, runs as it
@@ -4117,6 +4119,10 @@ Where format 1, as ACTIVATE runs it, does otherwise:
 - **Outages.** Steps run through one, and their reports arrive after it.
   ACTIVATE fails a step once its connection has been lost for
   `disconnect-timeout`, and leaves its process running.
+- **A `disconnect-timeout` format 1 can't read**, such as `1h30m`, `1.5h`
+  or `300ms`, fails the step in ACTIVATE. Meridian ignores the key,
+  whatever its value, and runs the step, with a warning
+  (`ssh_disconnect_timeout_invalid`).
 - **Cancelling during an outage** reaches the worker once the connection
   is back. ACTIVATE tries for 10 seconds, and leaves the process running.
 - **One worker runs a job's steps**, so they share its session, and a

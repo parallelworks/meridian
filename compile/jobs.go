@@ -3,6 +3,7 @@ package compile
 import (
 	"errors"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -313,24 +314,74 @@ func (c *compiler) step(info *jobInfo, loc []string) plan.Step {
 // unless it is negative: Meridian doesn't honour it, and runs every step
 // on a host as a negative one asks, through a lost connection
 // (problems.SSHDisconnectTimeoutIgnored). One that an expression gives is
-// warned of too, since what it gives isn't known yet.
+// warned of too, since what it gives isn't known yet. One that format 1
+// can't read, and so fails the step for, is warned of as that
+// (problems.SSHDisconnectTimeoutInvalid): Meridian ignores it, and runs
+// the step.
 func (c *compiler) checkDisconnectTimeout(loc []string) {
 	ssh, _ := lookup(c.doc.Value, loc).(map[string]any)
 	v, ok := ssh["disconnect-timeout"]
-	if !ok || negativeTimeout(v) {
+	if !ok {
 		return
 	}
-	c.reportAt(problems.SSHDisconnectTimeoutIgnored, appendPath(loc, "disconnect-timeout"), problems.Params{"value": problems.Show(v)})
+	k := problems.SSHDisconnectTimeoutIgnored
+	if s, isText := v.(string); !isText || !hasTemplate(s) {
+		negative, valid := disconnectTimeout(v)
+		switch {
+		case !valid:
+			k = problems.SSHDisconnectTimeoutInvalid
+		case negative:
+			return
+		}
+	}
+	c.reportAt(k, appendPath(loc, "disconnect-timeout"), problems.Params{"value": problems.Show(v)})
 }
 
-// negativeTimeout reports whether v, a disconnect-timeout as a workflow
-// writes it, is negative: a number under 0, or text of one, alone or with
-// units after it, as Go writes a duration, such as -1, -5m or -1h30m.
-func negativeTimeout(v any) bool {
-	if n, ok := toNumber(v); ok {
-		return n < 0
+// disconnectTimeout reads v, a disconnect-timeout as a workflow writes it,
+// as format 1 reads one, as text: a number of seconds, or a whole number
+// with one of d, h, m or s after it, with space around it or not, or
+// nothing, for its default. It reports whether format 1 can read it, and
+// whether it is negative, which never gives up: a number under 0, or a
+// whole number under 0 with a unit, once multiplied out to nanoseconds as
+// format 1 does, as -1, -5m or -2d. 1h30m, 1.5h and 300ms aren't read.
+func disconnectTimeout(v any) (negative, valid bool) {
+	switch v := v.(type) {
+	case nil:
+		return false, true
+	case int64:
+		return v < 0, true
+	case float64:
+		return v < 0, !math.IsNaN(v) && !math.IsInf(v, 0)
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return false, true
+		}
+		if n, err := strconv.ParseFloat(s, 64); err == nil && !math.IsNaN(n) && !math.IsInf(n, 0) {
+			return n < 0, true
+		}
+		if len(s) < 2 {
+			return false, false
+		}
+		n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+		if err != nil {
+			return false, false
+		}
+		// As format 1 multiplies, in int64, which can wrap.
+		const second = int64(time.Second)
+		switch s[len(s)-1] {
+		case 'd':
+			n *= 24 * 60 * 60 * second
+		case 'h':
+			n *= 60 * 60 * second
+		case 'm':
+			n *= 60 * second
+		case 's':
+			n *= second
+		default:
+			return false, false
+		}
+		return n < 0, true
 	}
-	s, _ := v.(string)
-	d, err := time.ParseDuration(strings.TrimSpace(s))
-	return err == nil && d < 0
+	return false, false
 }

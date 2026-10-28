@@ -104,6 +104,7 @@
   "replaced_keyword": "The word {word} is the text {text}, which is always true. The if: keyword it was is now {replacement}.",
   "value_too_deep": "The value nests too deeply to be kept with the run, which can nest at most {max} levels.",
   "ssh_disconnect_timeout_ignored": "Meridian doesn't honour disconnect-timeout, {value} here: a step on a host keeps running while the connection to the host is lost, as with a negative disconnect-timeout.",
+  "ssh_disconnect_timeout_invalid": "Format 1 can't read the ssh:'s disconnect-timeout, {value}, and would fail the step for it. Meridian ignores the key, and runs the step.",
 
   "runs_on_invalid": "The value of runs-on must be an execution group's name, or a mapping that names an execution group, an environment or a compute target, not {value}.",
   "resources_invalid": "{key, select, cpu {The CPUs in resources must be a number of cores, such as 4, 0.5 or 500m} memory {The memory in resources must be a number of bytes, such as 8Gi or 512Mi} gpu {The GPUs in resources must be a whole number} other {The value of \"{key}\" in resources isn't valid}}, not {value}.",

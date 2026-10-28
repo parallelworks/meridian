@@ -720,6 +720,13 @@
       "Da al paso un timeout: para limitar cuánto tiempo se ejecuta."
     ]
   },
+  "ssh_disconnect_timeout_invalid": {
+    "title": "disconnect-timeout que el formato 1 no puede leer",
+    "why": "El formato 1 lee un disconnect-timeout como un número de segundos, o un número entero seguido de una de d, h, m o s, como 300, 5m o -1. No puede leer ningún otro, como 1h30m, 1.5h o 300ms, y hace fallar el paso en un host que tenga uno. Meridian no respeta la clave, así que ejecuta el paso de todos modos.",
+    "fix": [
+      "Quita disconnect-timeout, o escríbelo como lo lee el formato 1, como -1 para un paso que nunca se rinde con su host."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",

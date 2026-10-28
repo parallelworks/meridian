@@ -17,7 +17,11 @@ jobs:
       - run: hostname
         ssh:
           remoteHost: login.example.org
-          disconnect-timeout: -1h30m
+          disconnect-timeout: -5m
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: -2d
       - run: hostname
         ssh:
           remoteHost: login.example.org
@@ -26,3 +30,11 @@ jobs:
         ssh:
           remoteHost: login.example.org
           disconnect-timeout: ${{ inputs.timeout }}
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: -1h30m
+      - run: hostname
+        ssh:
+          remoteHost: login.example.org
+          disconnect-timeout: 300ms
