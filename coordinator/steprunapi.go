@@ -29,6 +29,19 @@ func (k childAPI) StepRun(ctx context.Context, run *store.Run, a *store.Attempt,
 	case step == nil:
 		return nil, fmt.Errorf("%w: job %q has no step %d", workerapisrv.ErrNotStepRun, a.Job, req.Step)
 	}
+	// The state holds the result of each step before the try's, or of
+	// every step, for a cleanup's, which evaluating the step reads.
+	_, j, err := c.planJob(run, a)
+	if err != nil {
+		return nil, err
+	}
+	want := req.Step
+	if req.Cleanup {
+		want = len(j.Steps)
+	}
+	if len(req.State.Steps) != want {
+		return nil, fmt.Errorf("%w: a state of %d steps' results, not %d", workerapisrv.ErrNotStepRun, len(req.State.Steps), want)
+	}
 	state, err := stepRunStateData(req.State)
 	if err != nil {
 		return nil, err
@@ -59,9 +72,11 @@ func (k childAPI) StepRun(ctx context.Context, run *store.Run, a *store.Attempt,
 
 // StepRunEnd returns how the step run id, which has ended, ended
 // (stepRunEnd); but one whose step wrote more than a worker reads of
-// $OUTPUTS (workerapi.MaxOutputs), as a step run's worker that doesn't
-// keep to it reports, failed, with outputs_too_large at its step, and
-// none of them, as a step of the caller's own job would.
+// $OUTPUTS (workerapi.MaxOutputs), failed, with outputs_too_large at its
+// step, and none of them, as a step of the caller's own job would. The
+// server refuses such an end of a step run's attempt, so only a store
+// that holds one otherwise, as a release before that check stored, has
+// one.
 func (k childAPI) StepRunEnd(ctx context.Context, id string) (*workerapi.StepRun, error) {
 	end, err := k.c.stepRunEnd(ctx, id)
 	if err != nil {
@@ -70,7 +85,7 @@ func (k childAPI) StepRunEnd(ctx context.Context, id string) (*workerapi.StepRun
 	if !end.Ended {
 		return &workerapi.StepRun{Run: id}, nil
 	}
-	if size := outputsSize(end.Outputs); size > workerapi.MaxOutputs {
+	if size := workerapi.OutputsSize(end.Outputs); size > workerapi.MaxOutputs {
 		path, err := k.c.stepRunPath(ctx, id)
 		if err != nil {
 			return nil, err
@@ -85,15 +100,6 @@ func (k childAPI) StepRunEnd(ctx context.Context, id string) (*workerapi.StepRun
 		Run: id, Ended: true, Outcome: end.Outcome, Reason: end.Reason, ExitCode: end.ExitCode,
 		Outputs: end.Outputs, Private: end.Private, Secrets: end.Secrets, Diagnostics: end.Diagnostics,
 	}, nil
-}
-
-// outputsSize returns how many bytes outputs come to as name=value lines.
-func outputsSize(outputs map[string]string) int {
-	size := 0
-	for name, value := range outputs {
-		size += len(name) + len(value) + 2
-	}
-	return size
 }
 
 // stepRunPath returns the path, in its caller's workflow, of the step the
@@ -135,9 +141,13 @@ func stepRunStateData(state workerapi.StepRunState) (plan.Data, error) {
 
 // stepRunClaim returns what an attempt of the step run run has of the try
 // of the step it runs (workerapi.Claim.StepRun), from its link and its
-// secret record, and rj, the job it runs, with only that step, and no
-// outputs:, which the step's own job has: the step without its cleanup:,
-// which a step run of its own runs, or its cleanup's, alone.
+// secret record, and rj, the job it runs, with that step alone of its
+// steps whole, at its own index, and no outputs:, which the step's own job
+// has. The steps before it are there by their id alone, which evaluating
+// the step reads, as steps.<id>, and none after it: the step's cleanup:
+// is cleared, which a step run of its own runs. A cleanup's step run has
+// every step so, but that one, whose cleanup: it runs, which reads the
+// job's steps and cleanups as they ended.
 func (c *Coordinator) stepRunClaim(ctx context.Context, run *store.Run, rj *plan.ReadyJob) (*workerapi.StepRunClaim, *plan.ReadyJob, error) {
 	rec, err := c.openRecord(ctx, run.ID)
 	if err != nil {
@@ -160,11 +170,19 @@ func (c *Coordinator) stepRunClaim(ctx context.Context, run *store.Run, rj *plan
 	if l.Step >= len(rj.Steps) {
 		return nil, nil, fmt.Errorf("coordinator: step run %s's job has no step %d", run.ID, l.Step)
 	}
-	step := rj.Steps[l.Step]
+	n := l.Step + 1
+	if l.Cleanup {
+		n = len(rj.Steps)
+	}
+	steps := make([]plan.Step, n)
+	for i := range steps {
+		steps[i] = plan.Step{ID: rj.Steps[i].ID, Path: rj.Steps[i].Path}
+	}
+	steps[l.Step] = rj.Steps[l.Step]
 	if !l.Cleanup {
-		step.Cleanup = plan.Value{}
+		steps[l.Step].Cleanup = plan.Value{}
 	}
 	j := *rj
-	j.Steps, j.Outputs = []plan.Step{step}, nil
+	j.Steps, j.Outputs = steps, nil
 	return &workerapi.StepRunClaim{Step: l.Step, Try: l.Try, Cleanup: l.Cleanup, State: state}, &j, nil
 }

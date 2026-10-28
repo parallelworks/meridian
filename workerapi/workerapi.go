@@ -344,11 +344,31 @@ const MaxStepRunRequest = 4 << 20
 // all, which the step run's secret record keeps.
 const MaxStepRunMasked = 1 << 20
 
-// MaxOutputs is the most bytes of a step's $OUTPUTS that a worker reads
-// (docs/design.md, Outputs), and so the most of what a step run's step
-// wrote there that its end gives (StepRun.Outputs), each output counted
-// as its name=value line.
+// MaxStepRunMasks is the most strings a StepRunRequest's Masked hold:
+// each is masked in every line the step run's worker logs, and in each of
+// its step's outputs, which one masked makes a secret.
+const MaxStepRunMasks = 10_000
+
+// MaxOutputs is the most bytes of a step's $OUTPUTS file that a worker
+// reads (docs/design.md, Outputs), as the file holds them; and the most of
+// what a step run's step wrote there that the coordinator stores, and its
+// end gives (StepRun.Outputs), counted as name=value lines of the values
+// the worker read (OutputsSize), which are never more than the file's
+// bytes. The caller's worker, which appends them to its own file escaped,
+// a newline, a tab or a carriage return as two bytes, can so hold more
+// than the coordinator counted, which its own cap on the file then reads
+// as it reads any step's.
 const MaxOutputs = 1 << 20
+
+// OutputsSize returns how many bytes outputs come to as name=value lines,
+// as MaxOutputs counts them.
+func OutputsSize(outputs map[string]string) int {
+	size := 0
+	for name, value := range outputs {
+		size += len(name) + len(value) + 2
+	}
+	return size
+}
 
 // The query parameters of PathControl and PathLogs.
 const (
@@ -635,6 +655,17 @@ type StepRunState struct {
 	// MaxRetries is the step's retry:'s, as its first try evaluated it,
 	// for the retry counters, or 0 for a step without one.
 	MaxRetries int `json:"maxRetries,omitzero"`
+	// IfAlways is set when the step's if:, as its first try evaluated it,
+	// gave the word always, which reads an output that nothing wrote as ""
+	// in the step (plan.ReadyStep.IfAlways): the step run's worker
+	// evaluates the step without its if:, which the caller's decided.
+	IfAlways bool `json:"ifAlways,omitzero"`
+	// JobRetry and JobAttempt are the job's retry counter and the number
+	// of its attempt, as the caller's claim gave them (Claim.Retry and
+	// Claim.Attempt), which the step reads as its job's, rather than the
+	// step run's own attempt's.
+	JobRetry   int `json:"jobRetry,omitzero"`
+	JobAttempt int `json:"jobAttempt,omitzero"`
 }
 
 // A StepRunResult is how a step of a job ended, as a later step of it
@@ -987,8 +1018,8 @@ type Child struct {
 // is null or names no host, which the coordinator evaluates itself and
 // refuses the request where they differ; the state of the job at the try
 // (StepRunState); and the strings the worker masks at the try, which the
-// step run's worker masks too, of MaxStepRunMasked bytes at most. Every
-// member is of version 3.
+// step run's worker masks too, MaxStepRunMasks of them, of
+// MaxStepRunMasked bytes, at most. Every member is of version 3.
 type StepRunRequest struct {
 	Step    int          `json:"step,omitzero"`
 	Try     int          `json:"try,omitzero"`

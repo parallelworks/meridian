@@ -331,6 +331,11 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	case end.Problem != nil && (result.Outcome != plan.OutcomeFailure || end.Reason != plan.ReasonSetupFailed):
 		s.badRequest(w, r, "an end with a problem, but not one before its first step")
 		return
+	case run.StepRun && workerapi.OutputsSize(result.Outputs) > workerapi.MaxOutputs:
+		// What a step run's step wrote to $OUTPUTS, which a worker reads
+		// no more of, and its caller is given (workerapi.StepRun.Outputs).
+		s.badRequest(w, r, "a step run's end with more outputs than a worker reads")
+		return
 	}
 	if ok := s.checkSeq(w, r, a, end.Seq); !ok {
 		return

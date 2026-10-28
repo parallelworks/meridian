@@ -608,6 +608,22 @@
           "type": "integer",
           "minimum": -2147483648,
           "maximum": 2147483647
+        },
+        "ifAlways": {
+          "description": "Added in worker API version 3. Whether the step's if:, as its first try evaluated it, gave the word always, which reads an output that nothing wrote as empty in the step.",
+          "type": "boolean"
+        },
+        "jobRetry": {
+          "description": "Added in worker API version 3. The job's retry counter, as the caller's claim gave it.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "jobAttempt": {
+          "description": "Added in worker API version 3. The number of the job's attempt, as the caller's claim gave it.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         }
       },
       "required": [],

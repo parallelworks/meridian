@@ -183,6 +183,8 @@ type rigChildren struct {
 
 	mu    sync.Mutex
 	stops map[string][]workerapi.ChildStop
+	// stopped are the runs StopChild stopped, in order.
+	stopped []string
 }
 
 func (k *rigChildren) Child(ctx context.Context, run *store.Run, a *store.Attempt, req *workerapi.ChildRequest) (*workerapi.Child, error) {
@@ -193,7 +195,7 @@ func (k *rigChildren) Child(ctx context.Context, run *store.Run, a *store.Attemp
 	if req.Step >= len(ready.Job.Steps) {
 		return nil, fmt.Errorf("%w: step %d", workerapisrv.ErrNotChild, req.Step)
 	}
-	id, err := k.child(ctx, run, a, &store.Link{Run: run.ID, Job: a.Job, Attempt: a.ID, Step: req.Step, Try: req.Try, Root: run.ID, Depth: 1})
+	id, err := k.child(ctx, run, a, &store.Link{Run: run.ID, Job: a.Job, Attempt: a.ID, Step: req.Step, Try: req.Try, Root: run.ID, Depth: 1}, false)
 	if err != nil {
 		return nil, err
 	}
@@ -201,8 +203,9 @@ func (k *rigChildren) Child(ctx context.Context, run *store.Run, a *store.Attemp
 }
 
 // child makes the child of the step's try, or of its cleanup, that link
-// names, of the attempt a, of run, or returns the one it has.
-func (k *rigChildren) child(ctx context.Context, run *store.Run, a *store.Attempt, link *store.Link) (string, error) {
+// names, of the attempt a, of run, a step run where stepRun is set, or
+// returns the one it has.
+func (k *rigChildren) child(ctx context.Context, run *store.Run, a *store.Attempt, link *store.Link, stepRun bool) (string, error) {
 	c := created(k.r.t)
 	var id string
 	err := k.r.store.Tx(ctx, func(tx *store.Tx) error {
@@ -221,20 +224,26 @@ func (k *rigChildren) child(ctx context.Context, run *store.Run, a *store.Attemp
 			return err
 		}
 		return tx.InsertRun(store.NewRun{
-			ID: id, Plan: c.Plan, DefaultGroup: "local", RunDir: "/runs/" + id, WorkflowID: fakeJobID(), Parent: link,
+			ID: id, Plan: c.Plan, StepRun: stepRun, DefaultGroup: "local", RunDir: "/runs/" + id, WorkflowID: fakeJobID(), Parent: link,
 		})
 	})
 	return id, err
 }
 
-// StepRun makes a child of the try of step 0, the rig's job's first, or
-// of its cleanup, as the coordinator makes a step run, and refuses one of
-// any other step, as the coordinator does a step that can't have one.
+// StepRun makes a step run of the try of step 0, the rig's job's first,
+// or of its cleanup, as the coordinator makes one; refuses one of step 1,
+// as the coordinator does a step that can't have one; and answers one of
+// any other step as the coordinator does an attempt that no longer holds
+// its job.
 func (k *rigChildren) StepRun(ctx context.Context, run *store.Run, a *store.Attempt, req *workerapi.StepRunRequest) (*workerapi.StepRun, error) {
-	if req.Step != 0 {
+	switch req.Step {
+	case 0:
+	case 1:
 		return nil, fmt.Errorf("%w: step %d", workerapisrv.ErrNotStepRun, req.Step)
+	default:
+		return nil, store.ErrFenced
 	}
-	id, err := k.child(ctx, run, a, &store.Link{Run: run.ID, Job: a.Job, Attempt: a.ID, Step: req.Step, Try: req.Try, Cleanup: req.Cleanup, Root: run.ID, Depth: 1})
+	id, err := k.child(ctx, run, a, &store.Link{Run: run.ID, Job: a.Job, Attempt: a.ID, Step: req.Step, Try: req.Try, Cleanup: req.Cleanup, Root: run.ID, Depth: 1}, true)
 	if err != nil {
 		return nil, err
 	}
@@ -263,6 +272,7 @@ func (k *rigChildren) StopChild(ctx context.Context, id string, reason plan.Reas
 		k.stops = map[string][]workerapi.ChildStop{}
 	}
 	k.stops[r.Parent.Attempt] = append(k.stops[r.Parent.Attempt], workerapi.ChildStop{Step: r.Parent.Step, Try: r.Parent.Try, Reason: reason})
+	k.stopped = append(k.stopped, id)
 	return nil
 }
 

@@ -15,8 +15,11 @@ import (
 	"github.com/parallelworks/meridian/workerapi"
 )
 
-// stepRunRoot is a run whose job build runs where the run started, with
-// steps on the host farm: a checkout, a command, a step that calls a
+// stepRunRoot is a run whose job build runs where the run started, whose
+// env: reads a variable, as its first step does, with steps on the host
+// farm: a checkout, a command that reads the steps before it, the job's
+// outputs, a variable and the job's status, as its cleanup: does, a step
+// that calls a
 // workflow, which can't run so, a command whose host a variable names, a
 // command whose ssh: is null, which runs in its job, an action the
 // coordinator performs, whose ssh: places nothing, a command whose host
@@ -28,15 +31,17 @@ import (
 // retry counter names; and whose matrix job fan has a step on farm.
 const stepRunRoot = `jobs:
   build:
+    env: {JOBV: "${{ vars.JOBV }}"}
     steps:
-      - run: echo here
+      - id: here
+        run: echo here ${{ vars.OTHER }}
       - uses: parallelworks/checkout
         ssh: {remoteHost: farm}
         with: {repo: https://example.com/app.git, branch: main}
       - id: there
-        run: echo there
+        run: echo there ${{ steps.here.outputs.x }} ${{ needs.build.outputs.y }} ${{ vars.MINE }} ${{ failure() }}
         ssh: {remoteHost: farm}
-        cleanup: echo tidy
+        cleanup: echo tidy ${{ steps.there.outputs.z }} ${{ needs.build.outputs.y }}
       - uses: github/t/grand@main
         ssh: {remoteHost: farm}
         with: {$yaml: w.yaml}
@@ -110,7 +115,9 @@ func newStepRunRig(t *testing.T) *stepRunRig {
 // stepRuns says, where it isn't nil, rather than hold their places.
 func newStepRunRigWith(t *testing.T, stepRuns func(backend.PlaceRequest) testEnd) *stepRunRig {
 	t.Helper()
-	vars := conformancetest.Variables{"vars.FARM": {Value: "farm"}}
+	vars := conformancetest.Variables{
+		"vars.FARM": {Value: "farm"}, "vars.OTHER": {Value: "other"}, "vars.MINE": {Value: "mine"}, "vars.JOBV": {Value: "jobv"},
+	}
 	d := newTestDriver()
 	d.runDir = "/home/alice/.local/state/meridian/runs/1-store"
 	hold := make(chan struct{})

@@ -58,7 +58,8 @@ var since = map[string]int{
 	"ChildStop.step": 3, "ChildStop.try": 3, "ChildStop.reason": 3,
 
 	"StepRunClaim.step": 3, "StepRunClaim.try": 3, "StepRunClaim.cleanup": 3, "StepRunClaim.state": 3,
-	"StepRunState.steps": 3, "StepRunState.cancelled": 3, "StepRunState.maxRetries": 3,
+	"StepRunState.steps": 3, "StepRunState.cancelled": 3, "StepRunState.maxRetries": 3, "StepRunState.ifAlways": 3,
+	"StepRunState.jobRetry": 3, "StepRunState.jobAttempt": 3,
 	"StepRunResult.outcome": 3, "StepRunResult.outputs": 3,
 	"StepRunResult.cleanupOutcome": 3, "StepRunResult.cleanupOutputs": 3,
 	"StepRunRequest.step": 3, "StepRunRequest.try": 3, "StepRunRequest.cleanup": 3,

@@ -39,7 +39,9 @@ type JobState struct {
 	// the step again for each try, as format 1 does, so that what reads
 	// env.PW_WORKFLOW_STEP_CURRENT_RETRY reads the try's. FirstTry is the
 	// step as Step gave it at its first try, for a later one, which carries
-	// over what the first decided.
+	// over what the first decided; and, for any try of a step run's step
+	// (docs/design.md, Steps on another host), what its caller's first try
+	// decided, which Step doesn't decide again either.
 	Try      int
 	FirstTry *ReadyStep
 	// Env holds the variables the worker defines for the step, or for the
@@ -275,7 +277,8 @@ type ReadyStepRetry struct {
 // again for each try, with the try in state.Try and state.Env: a later try
 // doesn't evaluate the if: or retry:, but carries over what the first
 // decided (state.FirstTry), and has no Retry, which the worker reads from
-// the first, as format 1 does. A step's cleanup: is the Cleanup phase's.
+// the first, as format 1 does; nor does any try given state.FirstTry, as
+// a step run's is. A step's cleanup: is the Cleanup phase's.
 //
 // The step fails, for failure(), when one before it failed as its job
 // counts it, and is cancelled, for cancelled(), when state.Cancelled says
@@ -400,7 +403,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 			return rs, e.diags, nil
 		}
 		d.always, d.outlivesCancel = false, true
-	case state.Try > 0:
+	case state.FirstTry != nil:
 		d = decision{run: true, always: state.FirstTry.IfAlways, outlivesCancel: state.FirstTry.OutlivesCancel}
 	default:
 		e = c.evaluation(PhaseStep, e)
@@ -481,7 +484,7 @@ func (j *ReadyJob) step(ctx context.Context, index int, state JobState, cleanup 
 	if !cleanup {
 		rs.TimeoutSeconds = e.duration(s.Timeout, at(s.Path, "timeout"), "timeout", 0)
 	}
-	if r := s.Retry; r != nil && state.Try == 0 && !cleanup {
+	if r := s.Retry; r != nil && state.FirstTry == nil && !cleanup {
 		pointer := at(s.Path, "retry")
 		rs.Retry = &ReadyStepRetry{
 			MaxRetries:      e.count(r.MaxRetries, at(pointer, "max-retries"), "max-retries", defaultStepRetries),

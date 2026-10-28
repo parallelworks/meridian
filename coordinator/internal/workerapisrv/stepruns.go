@@ -34,7 +34,7 @@ func (s *Server) serveStepRun(w http.ResponseWriter, r *http.Request, a *store.A
 	case req.Step < 0 || req.Try < 0 || req.Cleanup && req.Try != 0:
 		s.badRequest(w, r, "a step run of a step or a try that is no step's or try's")
 		return
-	case masked > workerapi.MaxStepRunMasked:
+	case masked > workerapi.MaxStepRunMasked || len(req.Masked) > workerapi.MaxStepRunMasks:
 		s.badRequest(w, r, "a step run's request that masks more than it may")
 		return
 	}
@@ -47,10 +47,8 @@ func (s *Server) serveStepRun(w http.ResponseWriter, r *http.Request, a *store.A
 	case errors.Is(err, ErrNotStepRun):
 		s.badRequest(w, r, "a step run of a step, a try or a host that can't have one")
 		return
-	case errors.Is(err, store.ErrFenced):
-		problem.Write(w, fenced())
-		return
 	case err != nil:
+		// store.ErrFenced among them, which it answers fenced.
 		s.writeError(w, r, err)
 		return
 	}
@@ -59,12 +57,19 @@ func (s *Server) serveStepRun(w http.ResponseWriter, r *http.Request, a *store.A
 
 // stepRunOf returns the ID of the step run of the try try of the step
 // step, or of its cleanup:, of the attempt a, answering 404 for one it
-// hasn't, and false.
+// hasn't, as for a try whose child is a workflow its step calls, and
+// false.
 func (s *Server) stepRunOf(w http.ResponseWriter, r *http.Request, a *store.Attempt, step, try int, cleanup bool) (string, bool) {
 	var id string
 	if err := s.store.View(r.Context(), func(tx *store.Tx) error {
 		var err error
-		id, err = tx.ChildOf(a.ID, step, try, cleanup)
+		if id, err = tx.ChildOf(a.ID, step, try, cleanup); err != nil {
+			return err
+		}
+		child, err := tx.Run(id)
+		if err == nil && !child.StepRun {
+			err = store.ErrNotFound
+		}
 		return err
 	}); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
