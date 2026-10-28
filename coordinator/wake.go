@@ -90,18 +90,51 @@ func (c *Coordinator) retryTx(ctx context.Context, tx *store.Tx, w *waking) *wak
 
 // wakeAgain wakes ws again, those of the supervisors and markers a
 // transaction woke that hopper was running (waking), each in a transaction
-// of its own that reads first whether it still waits, wakeAgainAfter apart,
-// until hopper runs none of them, wakeTries times in all with the first.
-// Those that are nil are left out.
+// of its own that reads first whether it still waits, until hopper runs
+// none of them: wakeAgainAfter apart, wakeTries times in all with the
+// first, as the caller waits; and then, for those hopper still runs, in
+// the background, twice as long apart each time, up to wakeLaterMost,
+// until wakeLaterFor has passed. Those that are nil are left out.
+//
+// hopper runs a supervisor or a marker until it has recorded the wait its
+// look returned, which its finalizer writes in batches, every 25 ms, and
+// later on a loaded host, whose store's lock it waits for. A wake that
+// gave up first was lost: the supervisor or marker waited its whole wait
+// (supervision.wait), as a marker that a need on any instance waits for
+// did, though one had succeeded.
 func (c *Coordinator) wakeAgain(ctx context.Context, ws ...*waking) {
 	ws = slices.DeleteFunc(ws, func(w *waking) bool { return w == nil })
 	for try := 1; try < wakeTries && len(ws) > 0; try++ {
-		select {
-		case <-ctx.Done():
+		if sleep(ctx, wakeAgainAfter) != nil {
 			return
-		case <-time.After(wakeAgainAfter):
 		}
 		ws = slices.DeleteFunc(ws, func(w *waking) bool { return !c.wakeOnce(ctx, w) })
+	}
+	if len(ws) > 0 {
+		go c.wakeLater(context.WithoutCancel(ctx), ws)
+	}
+}
+
+// wakeLater wakes ws again in the background, as wakeAgain says.
+func (c *Coordinator) wakeLater(ctx context.Context, ws []*waking) {
+	delay := 2 * wakeAgainAfter
+	for deadline := time.Now().Add(wakeLaterFor); len(ws) > 0 && time.Now().Before(deadline); delay = min(2*delay, wakeLaterMost) {
+		if sleep(ctx, delay) != nil {
+			return
+		}
+		ws = slices.DeleteFunc(ws, func(w *waking) bool { return !c.wakeOnce(ctx, w) })
+	}
+}
+
+// sleep waits for d, or returns ctx's error once it is done.
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
@@ -124,8 +157,12 @@ func (c *Coordinator) wakeOnce(ctx context.Context, w *waking) bool {
 }
 
 // A supervisor or marker that hopper runs as it is woken is woken again,
-// wakeTries times in all, wakeAgainAfter apart.
+// wakeTries times in all, wakeAgainAfter apart, and then in the background
+// at most wakeLaterMost apart, for wakeLaterFor (wakeAgain): longer than
+// a loaded host takes to record a look's wait.
 const (
 	wakeTries      = 5
 	wakeAgainAfter = 20 * time.Millisecond
+	wakeLaterMost  = time.Second
+	wakeLaterFor   = 30 * time.Second
 )
