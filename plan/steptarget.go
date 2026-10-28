@@ -40,6 +40,11 @@ func (j *Job) StepSSHReadsWorker(s *Step) string {
 			switch {
 			case r.Context == "env" && len(r.Path) > 0 && r.Path[0] == stepTargetEnv:
 			case r.Context == "needs" && (len(r.Path) == 0 || r.Path[0] == "[index]" || r.Path[0] == "*"):
+				// The compiler refuses an index of needs that isn't a job's
+				// name, an expression's among them, and Refs reports a
+				// literal one, as needs['prep'], as that name, which the
+				// case after reads: what is left is needs.* and needs
+				// itself.
 				return "needs[]"
 			case r.Context == "needs" && r.Path[0] == j.Name:
 				return "needs." + j.Name

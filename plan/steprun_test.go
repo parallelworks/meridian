@@ -80,12 +80,14 @@ jobs:
         ssh: {remoteHost: "${{ join(needs.*.outputs.host, '') }}"}
       - run: echo env
         ssh: {remoteHost: "${{ env.HOST }}"}
+      - run: echo literal
+        ssh: {remoteHost: "${{ needs['prep'].outputs.host }}"}
       - run: echo status
         if: always()
         ssh: {remoteHost: "${{ failure() && 'b' || 'a' }}"}
 `, nil)
 	j := p.Job("build")
-	for i, want := range []string{"", "", "", "needs.build", "needs[]", "env.HOST", "job.status"} {
+	for i, want := range []string{"", "", "", "needs.build", "needs[]", "env.HOST", "", "job.status"} {
 		if got := j.StepSSHReadsWorker(&j.Steps[i]); got != want {
 			t.Errorf("step %d's ssh: reads %q of the worker's, want %q", i, got, want)
 		}

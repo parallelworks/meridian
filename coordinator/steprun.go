@@ -14,6 +14,7 @@ import (
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -107,16 +108,16 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	if j == nil || !j.StepElsewhere(step) {
 		return "", nil, fmt.Errorf("%w: run %s's job %q's step %d", errNotStepRun, cl.run.ID, name, req.Step)
 	}
-	if err := c.triedBefore(ctx, a.ID, req.Step, req.Try); err != nil {
+	if err := c.triedBefore(ctx, cl.run, cl.attempt.Job, a.ID, req.Step, req.Try); err != nil {
 		return "", nil, err
 	}
-	target, onHost, private, diags, err := c.stepTarget(ctx, cl.run, cl.attempt.Job, req.Step, req.Try)
+	target, job, private, diags, err := c.stepTarget(ctx, cl.run, cl.attempt.Job, req.Step, req.Try)
 	switch {
 	case err != nil:
 		return "", nil, err
 	case diags.HasErrors():
 		return "", diags, nil
-	case target == nil && !onHost:
+	case target == nil && job == nil:
 		return "", nil, fmt.Errorf("%w: a step whose ssh: names no host runs in its job, which has none", errNotStepRun)
 	case !sameTarget(req.SSH, target):
 		return "", nil, fmt.Errorf("%w: the host its worker gave isn't the one its ssh: names", errNotStepRun)
@@ -141,49 +142,89 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 }
 
 // triedBefore checks that the try try of the step step, of the attempt
-// attempt, follows the one before it, which had a step run that has
-// ended, and not in success, as tries come one after another: so that a
-// worker can't choose a try, and with it a host, where the step's ssh:
-// reads its retry counter, whatever its retry: says.
-func (c *Coordinator) triedBefore(ctx context.Context, attempt string, step, try int) error {
+// attempt, of run's job key, follows the one before it: that one ran in
+// its job, as one whose ssh: put it on no host, or on its job's own does,
+// or had a step run that has ended, however, as tries come one after
+// another. So a worker can't choose a try, and with it a host, where the
+// step's ssh: reads its retry counter, whatever its retry: says. How the
+// try before ended doesn't matter: a step run can succeed as its try
+// fails, as when its timeout comes as it ends, and the caller can stop it
+// at any time.
+func (c *Coordinator) triedBefore(ctx context.Context, run *store.Run, key, attempt string, step, try int) error {
 	if try == 0 {
 		return nil
 	}
-	return c.store.View(ctx, func(tx *store.Tx) error {
+	var ended, found bool
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
 		id, err := tx.Child(attempt, step, try-1)
 		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("%w: try %d without a step run of try %d", errNotStepRun, try, try-1)
+			return nil
 		}
 		if err != nil {
 			return err
 		}
+		found = true
 		r, err := tx.Run(id)
-		switch {
-		case err != nil:
-			return err
-		case r.State != store.RunEnded || r.Outcome == plan.OutcomeSuccess:
-			return fmt.Errorf("%w: try %d while the step run of try %d hasn't failed", errNotStepRun, try, try-1)
-		}
+		ended = err == nil && r.State == store.RunEnded
+		return err
+	}); err != nil {
+		return err
+	}
+	switch {
+	case found && ended:
 		return nil
-	})
+	case found:
+		return fmt.Errorf("%w: try %d while the step run of try %d hasn't ended", errNotStepRun, try, try-1)
+	}
+	// Without a step run, the try before ran in its job, if its ssh: put
+	// it there.
+	before, job, _, diags, err := c.stepTarget(ctx, run, key, step, try-1)
+	switch {
+	case err != nil:
+		return err
+	case diags.HasErrors() || before != nil && !sameHost(before, job):
+		return fmt.Errorf("%w: try %d without a step run of try %d, which its ssh: puts elsewhere than its job", errNotStepRun, try, try-1)
+	}
+	return nil
 }
 
 // stepTarget evaluates, as the coordinator, where the ssh: of the step at
 // index of the job key, of run, puts its try try: with what Ready readies
-// the job with, as a claim of it reads it (readyInputOf). It reports
-// whether the job, as Ready readies it, runs on a host, too.
-func (c *Coordinator) stepTarget(ctx context.Context, run *store.Run, key string, index, try int) (*plan.Inline, bool, bool, problems.Diagnostics, error) {
+// the job with, as a claim of it reads it (readyInputOf). It gives the
+// host the job, as Ready readies it, runs on too, or nil for none.
+func (c *Coordinator) stepTarget(ctx context.Context, run *store.Run, key string, index, try int) (*plan.Inline, *plan.Inline, bool, problems.Diagnostics, error) {
 	p, from, in, err := c.readyInputOf(ctx, run, key)
 	if err != nil {
-		return nil, false, false, nil, err
+		return nil, nil, false, nil, err
 	}
 	res, _, err := p.Ready(ctx, from.job.Name, in)
 	if err != nil {
-		return nil, false, false, nil, err
+		return nil, nil, false, nil, err
 	}
-	onHost := res != nil && res.Job != nil && res.Job.Target.Inline != nil
+	var job *plan.Inline
+	if res != nil && res.Job != nil {
+		job = res.Job.Target.Inline
+	}
 	target, private, diags, err := p.StepTarget(ctx, from.job.Name, index, try, in)
-	return target, onHost, private, diags, err
+	return target, job, private, diags, err
+}
+
+// sameHost reports whether a, a step's ssh:, names the host and login of
+// b, its job's, by which the job's worker runs the step in its job, as
+// format 1 reuses the job's connection: the same remoteHost, remoteUser,
+// jumpNodeHost and jumpNodeUser, as text, as the worker compares them.
+func sameHost(a, b *plan.Inline) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	am, _ := a.SSH.Get().(map[string]any)
+	bm, _ := b.SSH.Get().(map[string]any)
+	for _, k := range []string{"remoteHost", "remoteUser", "jumpNodeHost", "jumpNodeUser"} {
+		if expr.Text(am[k]) != expr.Text(bm[k]) {
+			return false
+		}
+	}
+	return true
 }
 
 // sameTarget reports whether a, the host a step's worker says its ssh:
