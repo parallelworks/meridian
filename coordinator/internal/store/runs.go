@@ -457,13 +457,12 @@ func (tx *Tx) StartRun(id string, state *compile.StartState, diags problems.Diag
 
 // EndRun records how the run ended, and deletes its secret record, its
 // jobs' parts of it too (PutJobRecord), which nothing needs once the run
-// has ended; but a step run's, whose caller reads its end from it, it
-// deletes as the step run's caller ends, with the caller's. The record is
-// erased: overwritten
-// with zeros as it is deleted, and, once the transaction commits, gone
-// from the write-ahead log too, which the store checkpoints and
-// truncates. A run that has ended already, or that has an attempt that
-// hasn't, is ErrState.
+// has ended; but a step run's, whose caller reads its end from it, goes
+// once both have ended, with whichever ends last (deleteRecords). The
+// record is erased: overwritten with zeros as it is deleted, and, once the
+// transaction commits, gone from the write-ahead log too, which the store
+// checkpoints and truncates. A run that has ended already, or that has an
+// attempt that hasn't, is ErrState.
 func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error {
 	switch outcome {
 	case plan.OutcomeSuccess, plan.OutcomeFailure, plan.OutcomeCancelled:
@@ -500,18 +499,41 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 		return err
 	}
 	tx.ended = append(tx.ended, id)
-	// The run's own, unless it is a step run, and its step runs'.
-	const records = "(SELECT id FROM meridian_runs WHERE id = ? AND step_run = 0 OR parent_run = ? AND step_run = 1)"
-	if _, err := tx.exec("DELETE FROM meridian_records WHERE run_id IN "+records, n, n); err != nil {
-		return err
-	}
-	if _, err := tx.exec("DELETE FROM meridian_job_records WHERE run_id IN "+records, n, n); err != nil {
+	if err := tx.deleteRecords(n); err != nil {
 		return err
 	}
 	if err := tx.eraseDigests(); err != nil {
 		return err
 	}
 	tx.erased = true
+	return nil
+}
+
+// deleteRecords deletes the secret record and the job records of the run
+// numbered n, which has ended, but a step run's, which its caller reads
+// once it has ended: those go once both have ended, with whichever ends
+// last, the caller's with those of its step runs that have ended, and a
+// step run's with it, once its caller has.
+func (tx *Tx) deleteRecords(n int64) error {
+	var (
+		stepRun bool
+		caller  sql.NullString
+	)
+	if err := tx.queryRow("SELECT r.step_run, p.state FROM meridian_runs r LEFT JOIN meridian_runs p ON p.id = r.parent_run WHERE r.id = ?", n).Scan(&stepRun, &caller); err != nil {
+		return err
+	}
+	for _, table := range []string{"meridian_records", "meridian_job_records"} {
+		if !stepRun || caller.String == string(RunEnded) {
+			if _, err := tx.exec("DELETE FROM "+table+" WHERE run_id = ?", n); err != nil {
+				return err
+			}
+		}
+		if !stepRun {
+			if _, err := tx.exec("DELETE FROM "+table+" WHERE run_id IN (SELECT id FROM meridian_runs WHERE parent_run = ? AND step_run = 1 AND state = ?)", n, RunEnded); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

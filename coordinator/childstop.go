@@ -165,7 +165,12 @@ func (c *Coordinator) stopChildTx(ctx context.Context, tx *store.Tx, id string, 
 		w, err := c.wakeRootTx(ctx, tx, r.Parent.Root, id)
 		return []*waking{w}, err
 	}
-	// Each job's supervisor decides whether its job outlives the stop.
-	_, woken, err := c.stopTx(ctx, tx, id, reason, &cancelPaths{outlives: map[string]bool{}})
+	// Each job's supervisor decides whether its job outlives the stop, but
+	// a step run's, which never does: its worker is told now.
+	paths := &cancelPaths{outlives: map[string]bool{}}
+	if r.StepRun {
+		paths = stepRunPaths(r)
+	}
+	_, woken, err := c.stopTx(ctx, tx, id, reason, paths)
 	return woken, err
 }

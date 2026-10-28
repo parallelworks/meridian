@@ -136,55 +136,83 @@ func mustNumber(t *testing.T, id string) int64 {
 	return n
 }
 
-// TestStepRunRecordOutlivesIt checks that a step run's secret record, from
-// which its caller reads its end, outlives the step run, until its caller
-// ends, whose own goes with it.
+// TestStepRunRecordOutlivesIt checks that a step run's secret record and
+// its job records, from which its caller reads its end, outlive the step
+// run until its caller ends, whose own go with it; and that they outlive
+// its caller, which ended first, until the step run ends.
 func TestStepRunRecordOutlivesIt(t *testing.T) {
 	t.Parallel()
-	s := open(t)
-	root := createRun(t, s)
-	var attempt *Attempt
-	inTx(t, s, func(tx *Tx) error {
-		if err := tx.StartRun(root, testState(), nil); err != nil {
-			return err
-		}
-		var err error
-		attempt, _, err = tx.NewAttempt(NewAttempt{Run: root, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
-		return err
-	})
-	link := Link{Run: root, Job: "build", Attempt: attempt.ID, Step: 1, Root: root, Depth: 1}
-	var id string
-	inTx(t, s, func(tx *Tx) error {
-		var err error
-		if id, err = tx.NewRunID(); err != nil {
-			return err
-		}
-		if err := tx.InsertRun(NewRun{ID: id, Plan: testPlan(t), StepRun: true, DefaultGroup: "local", RunDir: "/runs/1", WorkflowID: fakeJobID(10), FinisherID: fakeJobID(11), Parent: &link}); err != nil {
-			return err
-		}
-		if err := tx.InsertRecord(id, 1, []byte("key"), []byte("sealed")); err != nil {
-			return err
-		}
-		return tx.EndRun(id, plan.OutcomeSuccess, "")
-	})
-	held := func() bool {
-		var err error
-		inTx(t, s, func(tx *Tx) error {
-			_, err = tx.Record(id)
-			return nil
+	for _, callerFirst := range []bool{false, true} {
+		t.Run(strconv.FormatBool(callerFirst), func(t *testing.T) {
+			t.Parallel()
+			s := open(t)
+			root := createRun(t, s)
+			var attempt *Attempt
+			inTx(t, s, func(tx *Tx) error {
+				if err := tx.StartRun(root, testState(), nil); err != nil {
+					return err
+				}
+				var err error
+				attempt, _, err = tx.NewAttempt(NewAttempt{Run: root, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+				return err
+			})
+			link := Link{Run: root, Job: "build", Attempt: attempt.ID, Step: 1, Root: root, Depth: 1}
+			var id string
+			inTx(t, s, func(tx *Tx) error {
+				var err error
+				if id, err = tx.NewRunID(); err != nil {
+					return err
+				}
+				if err := tx.InsertRun(NewRun{ID: id, Plan: testPlan(t), StepRun: true, DefaultGroup: "local", RunDir: "/runs/1", WorkflowID: fakeJobID(10), FinisherID: fakeJobID(11), Parent: &link}); err != nil {
+					return err
+				}
+				if err := tx.InsertJob(NewJob{Run: id, Name: "build", Key: "build", SupervisorID: fakeJobID(12)}); err != nil {
+					return err
+				}
+				if err := tx.InsertRecord(id, 1, []byte("key"), []byte("sealed")); err != nil {
+					return err
+				}
+				return tx.PutJobRecord(id, "build", 1, []byte("part"))
+			})
+			// held reports whether the step run's record, and its job's
+			// part of it, are held, failing the test for one without the
+			// other.
+			held := func() bool {
+				var record, part error
+				var parts map[string]JobRecord
+				inTx(t, s, func(tx *Tx) error {
+					_, record = tx.Record(id)
+					parts, part = tx.JobRecords(id, []string{"build"})
+					return nil
+				})
+				if part != nil || (record == nil) != (len(parts) == 1) {
+					t.Fatalf("the step run's record is %v, its job's part %v, %v", record, parts, part)
+				}
+				return record == nil
+			}
+			endStepRun := func() {
+				inTx(t, s, func(tx *Tx) error { return tx.EndRun(id, plan.OutcomeSuccess, "") })
+			}
+			endCaller := func() {
+				inTx(t, s, func(tx *Tx) error {
+					if err := tx.EndAttempt(attempt.ID, AttemptEnd{Kind: EndLost, Reason: plan.ReasonWorkerLost}); err != nil {
+						return err
+					}
+					return tx.EndRun(root, plan.OutcomeFailure, "")
+				})
+			}
+			first, second := endStepRun, endCaller
+			if callerFirst {
+				first, second = endCaller, endStepRun
+			}
+			first()
+			if !held() {
+				t.Fatal("the step run's record went with the first of it and its caller to end")
+			}
+			second()
+			if held() {
+				t.Error("the step run's record outlived it and its caller")
+			}
 		})
-		return err == nil
-	}
-	if !held() {
-		t.Fatal("the step run's record went as it ended")
-	}
-	inTx(t, s, func(tx *Tx) error {
-		if err := tx.EndAttempt(attempt.ID, AttemptEnd{Kind: EndLost, Reason: plan.ReasonWorkerLost}); err != nil {
-			return err
-		}
-		return tx.EndRun(root, plan.OutcomeFailure, "")
-	})
-	if held() {
-		t.Error("the step run's record outlived its caller")
 	}
 }

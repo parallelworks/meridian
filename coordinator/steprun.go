@@ -373,8 +373,8 @@ func (c *Coordinator) stepRunJob(ctx context.Context, run *store.Run, rj *plan.R
 // A stepRunEnd is how a step run ended, which is how the try of the step
 // it runs ended (docs/design.md, Steps on another host), or Ended unset
 // for one that hasn't: its run's outcome and why; the exit status of its
-// step's command, as its worker reported the step finished, or -1 for
-// none; what its step wrote to $OUTPUTS, for one that succeeded, which
+// step's command, or its cleanup's, for a cleanup's step run, as its
+// worker reported it finished, or -1 for none; what its step wrote to $OUTPUTS, for one that succeeded, which
 // the caller's worker appends to the file the step would have written,
 // with which of them are private and which hold a secret; and its job's
 // problems.
@@ -441,7 +441,7 @@ func (c *Coordinator) stepRunEnd(ctx context.Context, id string) (*stepRunEnd, e
 	}
 	end := &stepRunEnd{Ended: true, Outcome: run.Outcome, Reason: run.Reason, ExitCode: -1, Diagnostics: job.Diagnostics}
 	for _, e := range events {
-		if e.Finished && !e.Cleanup && e.Step == run.Parent.Step {
+		if e.Finished && e.Cleanup == run.Parent.Cleanup && e.Step == run.Parent.Step {
 			end.ExitCode = e.ExitCode
 		}
 	}

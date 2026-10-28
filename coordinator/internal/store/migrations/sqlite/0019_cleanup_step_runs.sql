@@ -6,3 +6,7 @@ ALTER TABLE meridian_runs ADD COLUMN parent_cleanup INTEGER NOT NULL DEFAULT 0;
 DROP INDEX meridian_runs_child;
 CREATE UNIQUE INDEX meridian_runs_child ON meridian_runs (parent_attempt, parent_step, parent_try, parent_cleanup)
 WHERE parent_attempt IS NOT NULL;
+
+-- A run's step runs, whose records its end deletes, once they have ended
+-- too (Tx.EndRun).
+CREATE INDEX meridian_runs_step_runs ON meridian_runs (parent_run) WHERE step_run = 1;

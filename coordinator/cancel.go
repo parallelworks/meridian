@@ -142,23 +142,19 @@ func (c *Coordinator) stopTx(ctx context.Context, tx *store.Tx, id string, reaso
 	if err != nil || !stopped {
 		return false, nil, err
 	}
+	run, err := tx.Run(id)
+	if err != nil {
+		return false, nil, err
+	}
 	live, err := tx.LiveAttempts(id)
 	if err != nil {
 		return false, nil, err
 	}
-	var (
-		run   *store.Run
-		woken []*waking
-	)
+	var woken []*waking
 	for _, a := range live {
 		// A job readied meanwhile has its supervisor decide.
 		if outlives, known := paths.outlives[a.Job]; !known || outlives {
 			continue
-		}
-		if run == nil {
-			if run, err = tx.Run(id); err != nil {
-				return false, nil, err
-			}
 		}
 		ws, err := c.tellStopTx(ctx, tx, run, a, reason)
 		if err != nil {
@@ -175,7 +171,7 @@ func (c *Coordinator) stopTx(ctx context.Context, tx *store.Tx, id string, reaso
 	// instance waiting for its turn under max-parallel: is, and ends it at
 	// once (instanceStep).
 	for _, j := range jobs {
-		if j.Outcome == "" && (!j.ReadyAt.IsZero() || j.Instance >= 0) {
+		if j.Outcome == "" && (jobReadied(run, j) || j.Instance >= 0) {
 			w, err := c.wakeJobTx(ctx, tx, id, j.Key)
 			if err != nil {
 				return false, nil, err
@@ -218,6 +214,9 @@ type cancelPaths struct {
 // or doesn't; and the jobs not readied yet whose path ends them at once,
 // skipped because their needs failed, without waiting for them.
 func (c *Coordinator) cancelPaths(ctx context.Context, run *store.Run) (*cancelPaths, error) {
+	if run.StepRun {
+		return stepRunPaths(run), nil
+	}
 	p, err := c.plans.get(run)
 	if err != nil {
 		return nil, err
@@ -263,6 +262,22 @@ func (c *Coordinator) cancelPaths(ctx context.Context, run *store.Run) (*cancelP
 	return out, nil
 }
 
+// stepRunPaths returns what becomes of the job of the step run run once
+// it stops: it never outlives the stop (jobOutlives), and is readied, as
+// its caller's job was (jobReadied).
+func stepRunPaths(run *store.Run) *cancelPaths {
+	name, _, _ := strings.Cut(run.Parent.Job, "#")
+	return &cancelPaths{outlives: map[string]bool{name: false}}
+}
+
+// jobReadied reports whether the job j of run has been readied: whether
+// its supervisor has readied it. A step run's job always has, since it is
+// readied as its caller's job, which was readied already, and so never
+// has a time of its own (store.Job.ReadyAt).
+func jobReadied(run *store.Run, j *store.Job) bool {
+	return run.StepRun || !j.ReadyAt.IsZero()
+}
+
 // readiedOutlives reports whether the job j of run, readied, whose path is
 // path, outlives the run's stop: whether Ready gave it with IfAlways, as a
 // job whose if:'s value was the word always once its needs had ended.
@@ -280,10 +295,13 @@ func (c *Coordinator) readiedOutlives(ctx context.Context, run *store.Run, j *st
 // jobOutlives reports whether the readied job j of run, which has been
 // stopped, outlives the stop. The answer never changes once the run is
 // stopped, and the coordinator keeps it, rather than open the run's
-// secret record at each look.
+// secret record at each look. A step run's never does: what outlives a
+// stop of its caller's job, or of its caller's run, is never stopped
+// (stopStepChildrenTx), and a stop that reaches it, its step's own, or
+// the end of its caller's attempt, is its step's try's to heed.
 func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.Job) (bool, error) {
 	if run.StepRun {
-		return c.stepRunOutlives(run)
+		return false, nil
 	}
 	id := run.ID + "/" + j.Key
 	c.mu.Lock()
@@ -326,24 +344,6 @@ func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.
 	return outlives, nil
 }
 
-// stepRunOutlives reports whether the step run run, which has been
-// stopped, outlives the stop, as the stop of its caller's job's steps'
-// children judges it (stopStepChildrenTx): as its step does, as the step's
-// if: says, or always, for the step's cleanup's. It reads the plan alone,
-// not its caller's job's if:, which a step run's job doesn't run by.
-func (c *Coordinator) stepRunOutlives(run *store.Run) (bool, error) {
-	p, err := c.plans.get(run)
-	if err != nil {
-		return false, err
-	}
-	name, _, _ := strings.Cut(run.Parent.Job, "#")
-	j := p.Job(name)
-	if j == nil || run.Parent.Step >= len(j.Steps) {
-		return false, fmt.Errorf("coordinator: step run %s's caller's plan has no step %d of job %q", run.ID, run.Parent.Step, name)
-	}
-	return run.Parent.Cleanup || plan.OutlivesCancel(j.Steps[run.Parent.Step].If), nil
-}
-
 // placesNoMore reports whether the job, whose latest attempt is a, or nil
 // before its first, has no attempt that runs, nor one whose worker's end
 // is the job's, and the stop ends it (stopEnds): its supervisor places no
@@ -375,7 +375,7 @@ func betweenAttempts(a *store.Attempt) bool {
 // before it stopped, doesn't outlive the stop: without an attempt that
 // runs, it is placed no more.
 func (c *Coordinator) stopEnds(ctx context.Context, run *store.Run, job *store.Job) (bool, error) {
-	if run.StoppedAt.IsZero() || job.ReadyAt.IsZero() || job.ReadiedStopped {
+	if run.StoppedAt.IsZero() || !jobReadied(run, job) || job.ReadiedStopped {
 		// A job readied once the run had stopped is as Ready gave it.
 		return false, nil
 	}

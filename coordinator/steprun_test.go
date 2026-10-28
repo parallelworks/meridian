@@ -19,9 +19,13 @@ import (
 // steps on the host farm: a checkout, a command, a step that calls a
 // workflow, which can't run so, a command whose host a variable names, a
 // command whose ssh: is null, which runs in its job, an action the
-// coordinator performs, whose ssh: places nothing, and a command whose
-// host only the job's worker knows; whose job hosted runs on farm, with a
-// step whose ssh: is null; and whose matrix job fan has a step on farm.
+// coordinator performs, whose ssh: places nothing, a command whose host
+// only the job's worker knows, commands whose host their retry counter
+// names, and a command on farm that outlives its job's cancel; whose job
+// hosted runs on farm, with a step whose ssh: is null; whose job
+// failover, on farm, runs again once its worker is lost, and has a step
+// whose host its retry counter names; and whose matrix job fan has a
+// step on farm.
 const stepRunRoot = `jobs:
   build:
     steps:
@@ -49,6 +53,9 @@ const stepRunRoot = `jobs:
         ssh: {remoteHost: "farm${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}"}
       - run: echo once
         ssh: {remoteHost: "farm${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}"}
+      - if: ${{ always() }}
+        run: echo always
+        ssh: {remoteHost: farm}
   blank:
     ssh: {remoteHost: ""}
     steps:
@@ -61,6 +68,7 @@ const stepRunRoot = `jobs:
         ssh: null
   failover:
     ssh: {remoteHost: farm}
+    retry: {reasons: [worker-lost], max-retries: 1}
     steps:
       - run: echo failover
         retry: {max-retries: 1}

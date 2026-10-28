@@ -1,7 +1,11 @@
 package coordinator
 
 import (
+	"context"
+	"errors"
 	"maps"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/parallelworks/meridian/backend"
@@ -9,22 +13,24 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // TestStepRunEnd checks how a step run's end is its step's try's: once it
 // has ended, its outcome, and what its step wrote to $OUTPUTS, as its job's
-// result holds it, for one that succeeded; and none for one that failed,
-// as format 1 copies the file back only from a try that succeeded.
+// result holds it, with which are private and which secret, for one that
+// succeeded; and none for one that failed, as format 1 copies the file
+// back only from a try that succeeded.
 func TestStepRunEnd(t *testing.T) {
 	// Its subtests hold the places, which it would hold one of otherwise
 	// as they wait (parallel).
 	t.Parallel()
-	written := map[string]string{"RUNDIR": "/home/alice/work", "TOKEN": "t0k3n"}
+	written := map[string]string{"RUNDIR": "/home/alice/work", "TOKEN": "t0k3n", "KEY": "k3y"}
 	for _, outcome := range []plan.Outcome{plan.OutcomeSuccess, plan.OutcomeFailure} {
 		t.Run(string(outcome), func(t *testing.T) {
 			parallel(t)
 			r := newStepRunRigWith(t, func(backend.PlaceRequest) testEnd {
-				return testEnd{result: plan.JobResult{Outcome: outcome, Outputs: maps.Clone(written), Private: []string{"TOKEN"}}}
+				return testEnd{result: plan.JobResult{Outcome: outcome, Outputs: maps.Clone(written), Private: []string{"TOKEN"}, Secrets: []string{"KEY"}}}
 			})
 			id, err := r.ask(t, r.build, stepRunRequest{Step: 2, SSH: farm})
 			if err != nil {
@@ -40,8 +46,8 @@ func TestStepRunEnd(t *testing.T) {
 				t.Fatal(err)
 			case end.Outcome != outcome:
 				t.Errorf("the step run ended %s", end.Outcome)
-			case outcome == plan.OutcomeSuccess && (!maps.Equal(end.Outputs, written) || len(end.Private) != 1 || end.Private[0] != "TOKEN"):
-				t.Errorf("the step run that succeeded gives the outputs %v, private %v", end.Outputs, end.Private)
+			case outcome == plan.OutcomeSuccess && (!maps.Equal(end.Outputs, written) || !slices.Equal(end.Private, []string{"TOKEN"}) || !slices.Equal(end.Secrets, []string{"KEY"})):
+				t.Errorf("the step run that succeeded gives the outputs %v, private %v, secret %v", end.Outputs, end.Private, end.Secrets)
 			case outcome != plan.OutcomeSuccess && end.Outputs != nil:
 				t.Errorf("the step run that failed gives the outputs %v", end.Outputs)
 			}
@@ -49,76 +55,254 @@ func TestStepRunEnd(t *testing.T) {
 	}
 }
 
-// TestStepRunStops checks the stops of a step run: its step's own, as the
-// worker API's stop of a child makes it, of a run whose store holds one
-// job of its plan's several; a stop of its caller's job, which a step
-// run of the step's cleanup outlives; and the end of its caller's
-// attempt, which stops both, in the transaction that ends it.
+// TestStepRunStops checks that a stop that reaches a step run reaches its
+// worker, in the transaction that stores it, whatever its step's if:
+// says: its step's own, its timeout among them; a person's cancel of it;
+// a stop of its caller's
+// job, which the step runs of a step's cleanup and of a step that
+// outlives its job's cancel outlive, and after which only those are made;
+// and a stop of its caller's run, which they outlive too.
 func TestStepRunStops(t *testing.T) {
 	parallel(t)
 	r := newStepRunRig(t)
 	ctx := t.Context()
-	own, err := r.ask(t, r.build, stepRunRequest{Step: 2, SSH: farm})
-	if err != nil {
+	ask := func(a *store.Attempt, req stepRunRequest) string {
+		t.Helper()
+		id, err := r.ask(t, a, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.placed(t, id, a.Job)
+		return id
+	}
+	own := ask(r.build, stepRunRequest{Step: 2, SSH: farm})
+	always := ask(r.build, stepRunRequest{Step: 10, SSH: farm})
+	other := ask(r.build, stepRunRequest{Step: 1, SSH: farm})
+	retried := ask(r.build, stepRunRequest{Step: 8, SSH: &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "farm0"})}})
+	hosted := ask(r.hosted, stepRunRequest{Step: 0})
+
+	// Its step's own stop.
+	if err := (childAPI{r.c}).StopChild(ctx, other, plan.ReasonCancelled); err != nil {
 		t.Fatal(err)
 	}
-	cleanup, err := r.ask(t, r.build, stepRunRequest{Step: 2, Cleanup: true, SSH: farm})
-	if err != nil || cleanup == own {
-		t.Fatalf("the step's cleanup's step run is %q, %v", cleanup, err)
+	r.told(t, other, "build", plan.ReasonCancelled)
+	// A person's cancel of it.
+	if err := r.c.Cancel(ctx, retried); err != nil {
+		t.Fatal(err)
+	}
+	r.told(t, retried, "build", plan.ReasonCancelled)
+
+	// A stop of its caller's job.
+	if err := r.c.tell(ctx, storedRun(t, r.c, r.root), r.build, plan.ReasonCancelled); err != nil {
+		t.Fatal(err)
+	}
+	r.told(t, own, "build", plan.ReasonCancelled)
+	r.untold(t, always, "build")
+	if _, err := r.ask(t, r.build, stepRunRequest{Step: 4, SSH: farm}); !errors.As(err, new(*stepStoppedError)) {
+		t.Errorf("a step of a job that was stopped gets a step run: %v", err)
+	}
+	cleanup := ask(r.build, stepRunRequest{Step: 2, Cleanup: true, SSH: farm})
+	if cleanup == own {
+		t.Fatal("the step's cleanup's step run is its try's")
 	}
 	if again, err := r.ask(t, r.build, stepRunRequest{Step: 2, Cleanup: true, SSH: farm}); err != nil || again != cleanup {
 		t.Errorf("asked again, the cleanup's step run is %q, %v", again, err)
 	}
-	if _, err := r.ask(t, r.build, stepRunRequest{Step: 1, Cleanup: true, SSH: farm}); err == nil {
-		t.Error("a step without a cleanup: has a cleanup's step run")
+	for name, req := range map[string]stepRunRequest{
+		"a cleanup of a try":        {Step: 2, Try: 1, Cleanup: true, SSH: farm},
+		"a step without a cleanup:": {Step: 1, Cleanup: true, SSH: farm},
+	} {
+		if _, err := r.ask(t, r.build, req); !errors.Is(err, errNotStepRun) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
-	other, err := r.ask(t, r.build, stepRunRequest{Step: 1, SSH: farm})
+
+	// A stop of its caller's run.
+	if err := r.c.Cancel(ctx, r.root); err != nil {
+		t.Fatal(err)
+	}
+	r.told(t, hosted, "hosted", plan.ReasonCancelled)
+	r.untold(t, always, "build")
+	r.untold(t, cleanup, "build")
+
+	// Its step's timeout, whatever its if: says.
+	if err := (childAPI{r.c}).StopChild(ctx, always, plan.ReasonTimeout); err != nil {
+		t.Fatal(err)
+	}
+	r.told(t, always, "build", plan.ReasonTimeout)
+}
+
+// TestStepRunCallerEnds checks that the end of its caller's attempt stops
+// each of its step runs, a cleanup's and one of a step that outlives its
+// job's cancel among them, and tells their workers, in the transaction
+// that ends it.
+func TestStepRunCallerEnds(t *testing.T) {
+	parallel(t)
+	r := newStepRunRig(t)
+	var ids []string
+	for _, req := range []stepRunRequest{{Step: 2, SSH: farm}, {Step: 2, Cleanup: true, SSH: farm}, {Step: 10, SSH: farm}} {
+		id, err := r.ask(t, r.build, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.placed(t, id, "build")
+		ids = append(ids, id)
+	}
+	if err := r.c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.EndAttempt(r.build.ID, store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		r.told(t, id, "build", plan.ReasonCancelled)
+	}
+}
+
+// TestStepRunStoppedUnplaced checks that a step run stopped once its
+// supervisor has looked for where to place it, and before it placed it,
+// is never placed: its job ends cancelled, as a job its run's stop ends
+// between attempts does.
+func TestStepRunStoppedUnplaced(t *testing.T) {
+	parallel(t)
+	r := newStepRunRig(t)
+	asked := make(chan string, 1)
+	var once sync.Once
+	r.d.set(func(d *testDriver) {
+		d.probe = func(*backend.Member) (backend.Fit, error) {
+			once.Do(func() {
+				if err := (childAPI{r.c}).StopChild(context.WithoutCancel(t.Context()), <-asked, plan.ReasonCancelled); err != nil {
+					t.Error(err)
+				}
+			})
+			return backend.Fit{Availability: backend.StartsNow}, nil
+		}
+	})
+	id, err := r.ask(t, r.build, stepRunRequest{Step: 2, SSH: farm})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.placed(t, other, "build")
-	if err := (childAPI{r.c}).StopChild(ctx, other, plan.ReasonTimeout); err != nil {
+	asked <- id
+	if run := waitEnded(t, r.c, id); run.Outcome != plan.OutcomeCancelled {
+		t.Errorf("the step run ended %s", run.Outcome)
+	}
+	if j := storedJob(t, r.c, id, "build"); j.Outcome != plan.OutcomeCancelled || j.Attempts != 0 {
+		t.Errorf("the step run's job is %+v", j)
+	}
+}
+
+// TestStepRunLost checks that a step run whose worker is lost ends failed,
+// worker_lost, rather than run again, though its caller's job's retry:
+// lists worker-lost: it is one try of its step, which its caller's step's
+// retry: tries again.
+func TestStepRunLost(t *testing.T) {
+	parallel(t)
+	r := newStepRunRig(t)
+	id, err := r.ask(t, r.placed(t, r.root, "failover"), stepRunRequest{SSH: farm})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if run := storedRun(t, r.c, other); run.StoppedAt.IsZero() || run.StopReason != plan.ReasonTimeout {
-		t.Errorf("the step run its step stopped is stopped at %v, for %q", run.StoppedAt, run.StopReason)
-	}
-
-	// A stop of the caller's job stops the try's step run, but not the
-	// cleanup's.
-	root := storedRun(t, r.c, r.root)
-	if err := r.c.store.Tx(ctx, func(tx *store.Tx) error {
-		_, err := r.c.stopStepChildrenTx(ctx, tx, root, r.build, plan.ReasonCancelled)
-		return err
+	a := r.placed(t, id, "failover")
+	if err := r.c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if run := storedRun(t, r.c, own); run.StoppedAt.IsZero() {
-		t.Error("a stop of its job didn't stop the step's step run")
+	run, job, lost := storedRun(t, r.c, id), storedJob(t, r.c, id, "failover"), latestAttempt(t, r.c, id, "failover")
+	if _, err := r.c.workerLost(t.Context(), run, job, lost, func(context.Context, *store.Tx) error { return nil }); err != nil && !errors.Is(err, errSettled) {
+		t.Fatal(err)
 	}
-	if run := storedRun(t, r.c, cleanup); !run.StoppedAt.IsZero() {
-		t.Error("a stop of its job stopped the step's cleanup's step run")
+	if j := storedJob(t, r.c, id, "failover"); j.Outcome != plan.OutcomeFailure || !slices.Equal(jobCodes(j), []string{"worker_lost"}) {
+		t.Errorf("the step run whose worker was lost: %+v", j)
 	}
-	// Stopped, a step run outlives its stop as its step does, and the
-	// cleanup's always.
-	for id, want := range map[string]bool{own: false, cleanup: true} {
-		if got, err := r.c.stepRunOutlives(storedRun(t, r.c, id)); err != nil || got != want {
-			t.Errorf("step run %s outlives its stop: %v, %v", id, got, err)
-		}
-	}
+}
 
-	// The end of the caller's attempt stops the cleanup's too.
-	if err := r.c.store.Tx(ctx, func(tx *store.Tx) error {
-		if err := tx.EndAttempt(r.build.ID, store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost}); err != nil {
+// TestStepRunExitCode checks that a step run's end gives the exit status
+// its worker reported for the step it runs, and a cleanup's step run's
+// for the step's cleanup.
+func TestStepRunExitCode(t *testing.T) {
+	parallel(t)
+	r := newStepRunRigWith(t, func(backend.PlaceRequest) testEnd { return testEnd{running: true} })
+	for cleanup, code := range map[bool]int{false: 3, true: 5} {
+		id, err := r.ask(t, r.build, stepRunRequest{Step: 2, Cleanup: cleanup, SSH: farm})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var a *store.Attempt
+		waitFor(t, func() bool {
+			a, err = latestAttemptOf(t, r.c, id, "build")
+			return err == nil && a.State == store.AttemptRunning
+		})
+		// The other's, which the worker doesn't run, comes last.
+		events := []workerapi.Event{
+			{Seq: 1, Step: 2, Cleanup: cleanup},
+			{Seq: 2, Finished: true, Step: 2, Cleanup: cleanup, Outcome: plan.OutcomeFailure, ExitCode: code},
+			{Seq: 3, Finished: true, Step: 2, Cleanup: !cleanup, Outcome: plan.OutcomeFailure, ExitCode: 9},
+		}
+		if err := r.c.store.Tx(t.Context(), func(tx *store.Tx) error {
+			_, err := tx.AppendEvents(a.ID, events)
 			return err
+		}); err != nil {
+			t.Fatal(err)
 		}
-		run, err := tx.Run(cleanup)
-		if err == nil && run.StoppedAt.IsZero() {
-			t.Error("the end of its caller's attempt didn't stop the cleanup's step run")
+		r.endStepRun(t, id, plan.OutcomeFailure)
+		if end, err := r.c.stepRunEnd(t.Context(), id); err != nil || end.ExitCode != code {
+			t.Errorf("the step run, cleanup %v, ended %+v, %v", cleanup, end, err)
 		}
-		return err
-	}); err != nil {
+	}
+}
+
+// TestStepRunStoppedSucceeds checks that a step run that was stopped,
+// whose step succeeded all the same, gives no outputs: it ended
+// cancelled, as its run did, whatever its job did.
+func TestStepRunStoppedSucceeds(t *testing.T) {
+	parallel(t)
+	release := make(chan struct{})
+	r := newStepRunRigWith(t, func(backend.PlaceRequest) testEnd {
+		return testEnd{wait: release, result: plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1"}}}
+	})
+	id, err := r.ask(t, r.build, stepRunRequest{Step: 2, SSH: farm})
+	if err != nil {
 		t.Fatal(err)
+	}
+	r.placed(t, id, "build")
+	if err := (childAPI{r.c}).StopChild(t.Context(), id, plan.ReasonCancelled); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	var end *stepRunEnd
+	waitFor(t, func() bool {
+		end, err = r.c.stepRunEnd(t.Context(), id)
+		return err != nil || end.Ended
+	})
+	if j := storedJob(t, r.c, id, "build"); j.Outcome != plan.OutcomeSuccess {
+		t.Fatalf("the step run's job ended %s", j.Outcome)
+	}
+	if err != nil || end.Outcome != plan.OutcomeCancelled || end.Outputs != nil {
+		t.Errorf("the stopped step run whose step succeeded ended %+v, %v", end, err)
+	}
+}
+
+// told checks that the step run id is stopped, and that the worker of the
+// latest attempt of its job key is told to stop, for reason.
+func (r *stepRunRig) told(t *testing.T, id, key string, reason plan.Reason) {
+	t.Helper()
+	if run := storedRun(t, r.c, id); run.StoppedAt.IsZero() {
+		t.Errorf("step run %s isn't stopped", id)
+	}
+	if ctl := controlOf(t, r.c, latestAttempt(t, r.c, id, key).ID); !ctl.Cancel || ctl.Reason != reason {
+		t.Errorf("step run %s's worker is told %+v, not to stop for %q", id, ctl, reason)
+	}
+}
+
+// untold checks that the step run id isn't stopped, and that the worker of
+// the latest attempt of its job key isn't told to stop.
+func (r *stepRunRig) untold(t *testing.T, id, key string) {
+	t.Helper()
+	if run := storedRun(t, r.c, id); !run.StoppedAt.IsZero() {
+		t.Errorf("step run %s is stopped, for %q", id, run.StopReason)
+	}
+	if ctl := controlOf(t, r.c, latestAttempt(t, r.c, id, key).ID); ctl.Cancel {
+		t.Errorf("step run %s's worker is told %+v", id, ctl)
 	}
 }
 
