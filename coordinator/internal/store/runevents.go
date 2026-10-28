@@ -155,8 +155,12 @@ func (tx *Tx) RunEvents(run string, after int64, limit int) ([]RunEvent, error) 
 	if limit <= 0 {
 		return nil, fmt.Errorf("store: %d of a run's events", limit)
 	}
-	rows, err := tx.query(`SELECT e.seq, e.kind, e.job_key, e.attempt_id, e.child_run, e.at, s.body
+	// A child.created or child.ended event's child is read with it, for its
+	// link and how it ended.
+	rows, err := tx.query(`SELECT e.seq, e.kind, e.job_key, e.attempt_id, e.child_run, e.at, s.body,
+  c.id, c.parent_run, c.parent_job, c.parent_attempt, c.parent_step, c.parent_try, c.root_run, c.depth, c.outcome, c.reason
 FROM meridian_run_events e LEFT JOIN meridian_events s ON s.attempt_id = e.attempt_id AND s.seq = e.step_seq
+LEFT JOIN meridian_runs c ON c.id = e.child_run
 WHERE e.run_id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, n, after, limit)
 	if err != nil {
 		return nil, err
@@ -164,23 +168,40 @@ WHERE e.run_id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, n, after, limit)
 	type row struct {
 		event   RunEvent
 		attempt string
+		// child is whether the store has the event's child, and called
+		// its link, and outcome and reason how it ended.
+		child           bool
+		called          *Link
+		outcome, reason sql.NullString
 	}
 	var read []row
 	for rows.Next() {
 		var (
-			r            row
-			job, attempt sql.NullString
-			child        sql.NullInt64
-			at           int64
-			body         []byte
+			r                        row
+			job, attempt             sql.NullString
+			child                    sql.NullInt64
+			at                       int64
+			body                     []byte
+			found, parent, root      sql.NullInt64
+			step, try                sql.NullInt64
+			parentJob, parentAttempt sql.NullString
+			depth                    sql.NullInt64
 		)
-		if err := rows.Scan(&r.event.Seq, &r.event.Kind, &job, &attempt, &child, &at, &body); err != nil {
+		if err := rows.Scan(&r.event.Seq, &r.event.Kind, &job, &attempt, &child, &at, &body,
+			&found, &parent, &parentJob, &parentAttempt, &step, &try, &root, &depth, &r.outcome, &r.reason); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		r.event.Job, r.attempt, r.event.At = job.String, attempt.String, time.UnixMicro(at).UTC()
 		if child.Valid {
 			r.event.Child = runID(child.Int64)
+		}
+		r.child = found.Valid
+		if parent.Valid {
+			r.called = &Link{
+				Run: runID(parent.Int64), Job: parentJob.String, Attempt: parentAttempt.String, Step: int(step.Int64), Try: int(try.Int64),
+				Root: runID(root.Int64), Depth: int(depth.Int64),
+			}
 		}
 		if body != nil {
 			r.event.Step = new(workerapi.Event)
@@ -235,13 +256,12 @@ WHERE e.run_id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, n, after, limit)
 			}
 			e.Outcome, e.Reason, e.Diagnostics = r.Outcome, r.Reason, r.Diagnostics
 		case EventChildCreated, EventChildEnded:
-			c, err := tx.RunSummary(e.Child)
-			if err != nil {
-				return nil, err
+			if !r.child {
+				return nil, ErrNotFound
 			}
-			e.Called = c.Parent
+			e.Called = r.called
 			if e.Kind == EventChildEnded {
-				e.Outcome, e.Reason = c.Outcome, c.Reason
+				e.Outcome, e.Reason = plan.Outcome(r.outcome.String), plan.Reason(r.reason.String)
 			}
 		}
 		out[i] = e

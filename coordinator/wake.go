@@ -89,12 +89,14 @@ func (c *Coordinator) retryTx(ctx context.Context, tx *store.Tx, w *waking) *wak
 }
 
 // wakeAgain wakes ws again, those of the supervisors and markers a
-// transaction woke that hopper was running (waking), each in a transaction
-// of its own that reads first whether it still waits, until hopper runs
-// none of them: wakeAgainAfter apart, wakeTries times in all with the
-// first, as the caller waits; and then, for those hopper still runs, in
-// the background, twice as long apart each time, up to wakeLaterMost,
-// until wakeLaterFor has passed. Those that are nil are left out.
+// transaction woke that hopper was running (waking), until hopper runs
+// none of them (wakeOnce): wakeAgainAfter apart, wakeTries times in all
+// with the first, as the caller waits; and then, for those hopper still
+// runs, or whose try failed, in the background, twice as long apart each
+// time, up to wakeLaterMost, until wakeLaterFor has passed, or the
+// coordinator closes (wakeLaterGo). Those that are nil are left out. A
+// caller that is done before its tries are leaves those it hasn't made to
+// the background too.
 //
 // hopper runs a supervisor or a marker until it has recorded the wait its
 // look returned, which its finalizer writes in batches, every 25 ms, and
@@ -106,13 +108,30 @@ func (c *Coordinator) wakeAgain(ctx context.Context, ws ...*waking) {
 	ws = slices.DeleteFunc(ws, func(w *waking) bool { return w == nil })
 	for try := 1; try < wakeTries && len(ws) > 0; try++ {
 		if sleep(ctx, wakeAgainAfter) != nil {
-			return
+			break
 		}
 		ws = slices.DeleteFunc(ws, func(w *waking) bool { return !c.wakeOnce(ctx, w) })
 	}
 	if len(ws) > 0 {
-		go c.wakeLater(context.WithoutCancel(ctx), ws)
+		c.wakeLaterGo(ws)
 	}
+}
+
+// wakeLaterGo has ws woken again in the background (wakeLater), unless
+// the coordinator has closed: each then looks again at the end of its
+// wait instead. Close ends the goroutine, and waits for it. It runs with
+// the coordinator's context, wakersCtx, rather than the caller's: a hopper
+// job's names the job's attempt as the owner of the transactions begun
+// with it, and hoppersqlite fails at once a write of the job's that would
+// wait for one of those (hoppersqlite.ErrLockHeldByOwner), as the job
+// goes on.
+func (c *Coordinator) wakeLaterGo(ws []*waking) {
+	c.wakersMu.Lock()
+	defer c.wakersMu.Unlock()
+	if c.wakersCtx.Err() != nil {
+		return
+	}
+	c.wakers.Go(func() { c.wakeLater(c.wakersCtx, ws) })
 }
 
 // wakeLater wakes ws again in the background, as wakeAgain says.
@@ -138,20 +157,34 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// wakeOnce wakes w in a transaction of its own, if it still waits, and
-// reports whether hopper runs it now.
+// wakeOnce wakes w again, if it still waits, and reports whether to try
+// again: whether hopper runs it now, or the try failed, as on a store
+// busy for longer than it waits. It reads first, without the store's
+// write lock, whether hopper runs it, as it does until it has recorded
+// its look's wait: if it does, a wake would fail. If it doesn't, a
+// transaction of its own reads whether it still waits, and wakes it. One
+// whose job, or need, the store no longer has isn't tried again.
 func (c *Coordinator) wakeOnce(ctx context.Context, w *waking) bool {
+	if j, err := c.inserter.JobGet(ctx, w.id); err == nil && j.State == hopper.JobStateRunning {
+		return true
+	}
 	var running *waking
-	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
+	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		waits, err := w.waits(tx)
 		if err != nil || !waits {
 			return err
 		}
 		running = c.retryTx(ctx, tx, w)
 		return nil
-	}); err != nil {
-		c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", w.run, "job", w.key, "error", err)
+	})
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		return false
+	case err != nil:
+		if ctx.Err() == nil {
+			c.log.DebugContext(ctx, "coordinator: wake a job's supervisor", "run", w.run, "job", w.key, "error", err)
+		}
+		return true
 	}
 	return running != nil
 }

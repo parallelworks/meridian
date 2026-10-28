@@ -120,7 +120,9 @@ func TestStalledHostHoldsNoWorkers(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // what is waited for has no signal
 	}
-	if took := time.Since(began); took > 5*time.Second {
+	// Held by the probes, it took about 29 s; not held, about 1 s, and
+	// several under the race detector on a loaded runner.
+	if took := time.Since(began); took > 15*time.Second {
 		t.Errorf("a run on the local backend took %v to end while a host that doesn't answer was probed", took)
 	}
 	if r := storedRun(t, c, local); r.Outcome != plan.OutcomeSuccess {
