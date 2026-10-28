@@ -694,6 +694,13 @@
       "Nombra cada archivo o directorio que descargar por su ruta desde la raíz del repositorio, sin patrones."
     ]
   },
+  "checkout_revision_invalid": {
+    "title": "Revisión del checkout que no es un nombre que git acepte",
+    "why": "La branch de un paso parallelworks/checkout nombra una rama, una etiqueta o un commit completo, que la interfaz Sources fija con git al crear la ejecución. Una que empieza por un guion, que git podría tomar por una opción, o que termina en punto, o que contiene un nombre vacío, que empieza por punto o que termina en .lock, no es un nombre que git acepte para una rama o una etiqueta, así que Meridian no se la pide a git.",
+    "fix": [
+      "Nombra una rama, una etiqueta, o un commit por su SHA completo."
+    ]
+  },
   "checkout_path_not_found": {
     "title": "Entrada de sparse checkout que no nombra nada",
     "why": "Una entrada del sparse_checkout de un paso parallelworks/checkout no nombra ningún archivo ni directorio en el commit al que se fijó el paso al crear la ejecución. No se escribe nada para ella, como en el formato 1, y el paso continúa.",
@@ -1183,10 +1190,11 @@
     ]
   },
   "uses_not_supported": {
-    "title": "Paso con uses: que el worker aún no puede ejecutar",
-    "why": "Un paso que usa con uses: una acción, como parallelworks/checkout, o un flujo de trabajo, la ejecuta en lugar de un comando. Esta versión del worker de Meridian solo ejecuta pasos con run:, así que el paso falla.",
+    "title": "Paso con uses: que una versión anterior de Meridian no puede ejecutar",
+    "why": "Un paso que usa con uses: una acción que realiza el coordinador, como parallelworks/checkout, o un flujo de trabajo, se lo pide al coordinador a través de la versión 3 de la API de workers, y lo que ejecuta un checkout o una llamada a un flujo de trabajo se fija al crear su ejecución. Un worker al que le da el paso un coordinador de una versión anterior, que habla una versión anterior de la API, no puede pedirlo, y un checkout, o una llamada a un flujo de trabajo, de una ejecución que creó una versión anterior de Meridian no tiene nada fijado, así que el paso falla.",
     "fix": [
-      "Haz el trabajo del paso con un comando run: en su lugar."
+      "Actualiza el coordinador a la versión de Meridian del worker.",
+      "Ejecuta el flujo de trabajo de nuevo, como una ejecución nueva, en lugar de retomar una ejecución que creó una versión anterior de Meridian."
     ]
   },
   "action_needs_platform": {

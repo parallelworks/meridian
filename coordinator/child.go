@@ -14,61 +14,40 @@ import (
 	"github.com/parallelworks/meridian/workerapi"
 )
 
-// A ChildRequest is a try of a step whose uses: names a workflow, which
-// asks for the child run that runs it (docs/design.md, Workflows a step
-// calls): what the worker that runs the step gives of it, as Step gave it
-// (plan.ReadyStep).
-type ChildRequest struct {
-	// Attempt is the ID of the attempt that runs the step, Step the step's
-	// index in its job, and Try the try, from 0.
-	Attempt   string
-	Step, Try int
-	// With is the step's with:, and Env its environment: Step's, with the
-	// variables the worker defines for the step that format 1 defines
-	// (plan.IsFormatVariable) over it.
-	With map[string]any
-	Env  map[string]string
-	// WithPrivate, WithSecrets, EnvPrivate and EnvSecrets name what of With
-	// and Env is private, as plan.ReadyStep's do, and Masked are the
-	// strings the worker masks for the step.
-	WithPrivate, WithSecrets, EnvPrivate, EnvSecrets []string
-	Masked                                           []string
-	// WorkingDirectory is the step's own working-directory:, as Step gave
-	// it (plan.ReadyStep.WorkingDirectory): "" for none, or a path relative
-	// to its run's directory, or absolute.
-	WorkingDirectory string
-}
-
-// ErrStepGone is what CreateChild returns for a step's try that can't have
+// errStepGone is what createChild returns for a step's try that can't have
 // a child: its attempt no longer holds its job, as one that has ended, or
 // that another superseded, or whose job has ended; or its run has ended.
-var ErrStepGone = errors.New("coordinator: the step's attempt no longer holds its job, or its run has ended")
+var errStepGone = errors.New("coordinator: the step's attempt no longer holds its job, or its run has ended")
 
-// ErrRunStopped is what CreateChild returns for a step of a run that was
+// errRunStopped is what createChild returns for a step of a run that was
 // stopped, as by a cancel or its timeout:, that doesn't outlive that, as
 // its if: says (plan.OutlivesCancel).
-var ErrRunStopped = errors.New("coordinator: the step's run was stopped")
+var errRunStopped = errors.New("coordinator: the step's run was stopped")
 
-// A StepStoppedError is what CreateChild returns for a step that its
+// A stepStoppedError is what createChild returns for a step that its
 // attempt's control stops, as its worker would have stopped it had it read
 // the control first: one that doesn't outlive its job's cancellation, as
 // its if: says (plan.OutlivesCancel), of a job the control cancels, for
-// Reason, any but the run's timeout; or, with no Reason, one whose
+// reason, any but the run's timeout; or, with no reason, one whose
 // early-cancel: is any-job-failed, once a job of the run has failed
 // (workerapi.Control.AnyJobFailed).
-type StepStoppedError struct{ Reason plan.Reason }
+type stepStoppedError struct{ reason plan.Reason }
 
-func (e *StepStoppedError) Error() string {
-	if e.Reason == "" {
+func (e *stepStoppedError) Error() string {
+	if e.reason == "" {
 		return "coordinator: the step's early-cancel: stops it, as a job of its run failed"
 	}
-	return "coordinator: the step's job is being cancelled, " + string(e.Reason)
+	return "coordinator: the step's job is being cancelled, " + string(e.reason)
 }
 
-// CreateChild creates the child run of a try of a step whose uses: names a
-// workflow, and returns its ID: the next number in the store, or the
-// child's that the try has already, which a repeated ask finds again. As
-// docs/design.md says under Workflows a step calls:
+// createChild creates the child run of the try of a step whose uses: names
+// a workflow that req asks for, of the attempt a, and returns its ID: the
+// next number in the store, or the child's that the try has already, which
+// a repeated ask finds again. step is the step at req.Step of a's job, and
+// p the plan of a's run, as the worker API resolved them
+// (childAPI.stepOf), which checked that the step calls a workflow and has
+// the try: createChild doesn't check them again. As docs/design.md says
+// under Workflows a step calls:
 //
 //   - The workflow is the one the run's root pinned for the step as it was
 //     created, by its text in the store, kept with the root (store.Tx.Text),
@@ -99,16 +78,14 @@ func (e *StepStoppedError) Error() string {
 //     CreateRun stores a run, with its Start in the queue every coordinator
 //     works: its variables are its root's, so any replica starts it.
 //
-// It returns ErrStepGone for an attempt that no longer holds its job, or a
-// run that has ended; ErrRunStopped for a step of a run that was stopped
+// It returns errStepGone for an attempt that no longer holds its job, or a
+// run that has ended; errRunStopped for a step of a run that was stopped
 // that doesn't outlive that, as the plan says of its if:
-// (plan.OutlivesCancel), never the worker; and a *StepStoppedError for a
+// (plan.OutlivesCancel), never the worker; and a *stepStoppedError for a
 // step its attempt's control stops. Its transaction checks each again as
 // it stores the child, so that no zombie attempt, nor a cancelled run or
-// job, gets one. It returns an error for a request that names no step
-// whose uses: names a workflow, or a try past the step's retry:, where the
-// plan writes it out (plan.Step.LastTry), which are its caller's mistakes.
-func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string, problems.Diagnostics, error) {
+// job, gets one.
+func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan.Plan, step *plan.Step, req *workerapi.ChildRequest) (string, problems.Diagnostics, error) {
 	if err := c.writable(); err != nil {
 		return "", nil, err
 	}
@@ -122,20 +99,20 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 	)
 	err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
-		if attempt, err = tx.Attempt(req.Attempt); err != nil {
+		if attempt, err = tx.Attempt(a.ID); err != nil {
 			return err
 		}
-		if existing, err = tx.Child(req.Attempt, req.Step, req.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
+		if existing, err = tx.Child(a.ID, req.Step, req.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
 		if !attempt.Holds {
-			return ErrStepGone
+			return errStepGone
 		}
 		if parent, err = tx.Run(attempt.Run); err != nil {
 			return err
 		}
 		if parent.State != store.RunRunning {
-			return ErrStepGone
+			return errStepGone
 		}
 		if control, err = tx.Control(attempt.ID); err != nil {
 			return err
@@ -152,32 +129,12 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 	case existing != "":
 		return existing, nil, nil
 	}
-	p, err := c.plans.get(parent)
-	if err != nil {
-		return "", nil, err
-	}
-	name, _, _ := strings.Cut(attempt.Job, "#")
-	job := p.Job(name)
-	if job == nil || req.Step < 0 || req.Step >= len(job.Steps) || req.Try < 0 {
-		return "", nil, fmt.Errorf("coordinator: run %s's job %s has no step %d", parent.ID, attempt.Job, req.Step)
-	}
-	step := &job.Steps[req.Step]
-	source := step.Source
-	if source == nil {
-		return "", nil, fmt.Errorf("coordinator: step %d of run %s's job %s calls no workflow", req.Step, parent.ID, attempt.Job)
-	}
-	// A try past the step's retry:, where the plan writes it out, is no
-	// try of the step's: a worker can't make a child for each number.
-	if req.Try > 0 {
-		if last, known := step.LastTry(req.Try - 1); known && last {
-			return "", nil, fmt.Errorf("coordinator: step %d of run %s's job %s has no try %d", req.Step, parent.ID, attempt.Job, req.Try)
-		}
-	}
 	// Whether the step outlives its run's stop, or its job's, is the plan's
 	// to say, from its if:, as Step decides it, never the worker's.
 	if err := stepLives(attempt, parent, step, control); err != nil {
 		return "", nil, err
 	}
+	source := step.Source
 	rootPlan := p
 	if root != parent {
 		if rootPlan, err = c.plans.get(root); err != nil {
@@ -228,7 +185,8 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 	for k, v := range source.Remote {
 		remote[k] = v
 	}
-	created, diags, err := compile.Create(ctx, source.Location, text, req.With, compile.Options{
+	with, _ := req.With.Get().(map[string]any)
+	created, diags, err := compile.Create(ctx, source.Location, text, with, compile.Options{
 		Source: *source, Contexts: map[string]any{"remote": remote}, Variables: vars,
 		Inputs: c.opts.Inputs, Groups: c.opts.Groups, Sessions: c.opts.Sessions, Limits: p.Run.Limits,
 		Parent: &compile.Parent{
@@ -247,13 +205,13 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		// What another ask stored meanwhile is the try's child.
 		var err error
-		if id, err = tx.Child(req.Attempt, req.Step, req.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
+		if id, err = tx.Child(a.ID, req.Step, req.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
 		// What changed meanwhile, as the attempt's being superseded or
 		// the run's being stopped, is read again here, where the child is
 		// stored.
-		a, err := tx.Attempt(req.Attempt)
+		now, err := tx.Attempt(a.ID)
 		if err != nil {
 			return err
 		}
@@ -261,11 +219,11 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 		if err != nil {
 			return err
 		}
-		ctl, err := tx.Control(req.Attempt)
+		ctl, err := tx.Control(a.ID)
 		if err != nil {
 			return err
 		}
-		if err := stepLives(a, r, step, ctl); err != nil {
+		if err := stepLives(now, r, step, ctl); err != nil {
 			return err
 		}
 		if id, err = tx.NewRunID(); err != nil {
@@ -279,10 +237,10 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 	return id, diags, nil
 }
 
-// stepLives returns ErrStepGone for an attempt a, of run, that no longer
-// holds its job, or a run that has ended; ErrRunStopped for a run that was
+// stepLives returns errStepGone for an attempt a, of run, that no longer
+// holds its job, or a run that has ended; errRunStopped for a run that was
 // stopped, of a step that doesn't outlive that, as its if: says
-// (plan.OutlivesCancel); and a *StepStoppedError for a step that ctl, the
+// (plan.OutlivesCancel); and a *stepStoppedError for a step that ctl, the
 // attempt's control, stops: a cancel of its job, for any reason but the
 // run's timeout, of such a step, or, for a step whose early-cancel: is
 // any-job-failed, a job of the run having failed.
@@ -290,13 +248,13 @@ func stepLives(a *store.Attempt, run *store.Run, step *plan.Step, ctl workerapi.
 	outlives := plan.OutlivesCancel(step.If)
 	switch {
 	case !a.Holds || run.State != store.RunRunning:
-		return ErrStepGone
+		return errStepGone
 	case !run.StoppedAt.IsZero() && !outlives:
-		return ErrRunStopped
+		return errRunStopped
 	case ctl.Cancel && ctl.Reason != plan.ReasonTimeout && !outlives:
-		return &StepStoppedError{Reason: ctl.Reason}
+		return &stepStoppedError{reason: ctl.Reason}
 	case ctl.AnyJobFailed && step.EarlyCancel == plan.EarlyCancelAnyJobFailed:
-		return &StepStoppedError{}
+		return &stepStoppedError{}
 	}
 	return nil
 }

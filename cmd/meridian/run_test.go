@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -403,6 +404,23 @@ func TestRunDetaches(t *testing.T) {
 	}, workflow)
 	if r.code != exitError || !strings.Contains(r.stdout, "run 1 left running: meridian resume 1") {
 		t.Errorf("an interrupted meridian run = %+v", r)
+	}
+}
+
+// TestRunServeMembersFails checks that meridian run fails, saying why,
+// once what serves the sockets forwarded to hosts can't, as it does once
+// the coordinator's own socket can't be served, rather than go on with
+// the workers on hosts that nothing serves.
+func TestRunServeMembersFails(t *testing.T) {
+	env := runEnv(t)
+	workflow := writeFile(t, "w.yaml", helloWorkflow)
+	r := runTest(t, env, func(c *cli) {
+		c.serveMembers = func(*coordinator.Coordinator, context.Context, coordinator.Logs) error {
+			return errors.New("test: the hosts' sockets can't be served")
+		}
+	}, workflow)
+	if r.code != exitError || !strings.Contains(r.stderr, "test: the hosts' sockets can't be served") {
+		t.Errorf("meridian run whose hosts' sockets can't be served = %+v", r)
 	}
 }
 

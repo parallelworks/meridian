@@ -303,7 +303,7 @@ jobs:
 					return err
 				}) == nil
 			})
-			id, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: 0, With: map[string]any{"$yaml": "w.yaml"}})
+			id, diags, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{Step: 0, Try: 0, With: plan.DataOf(map[string]any{"$yaml": "w.yaml"})})
 			if err != nil || diags.HasErrors() {
 				t.Fatal(id, diags, err)
 			}

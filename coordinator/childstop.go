@@ -3,7 +3,6 @@ package coordinator
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
@@ -89,7 +88,7 @@ func (c *Coordinator) stopStepChildrenTx(ctx context.Context, tx *store.Tx, run 
 	if err != nil || len(children) == 0 {
 		return nil, err
 	}
-	p, err := c.plans.get(run)
+	_, job, err := c.planJob(run, a)
 	if unreadable(err) {
 		// Its steps' workers stop their children, as their steps stop.
 		c.log.WarnContext(ctx, "coordinator: the plan of a run that stops couldn't be read, so its steps' workers stop their children", "run", run.ID, "error", err)
@@ -98,8 +97,6 @@ func (c *Coordinator) stopStepChildrenTx(ctx context.Context, tx *store.Tx, run 
 	if err != nil {
 		return nil, err
 	}
-	name, _, _ := strings.Cut(a.Job, "#")
-	job := p.Job(name)
 	var woken []*waking
 	for _, child := range children {
 		if job != nil && child.Step < len(job.Steps) && plan.OutlivesCancel(job.Steps[child.Step].If) {

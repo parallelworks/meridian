@@ -181,7 +181,11 @@ func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *c
 	// The workers on hosts reach it through sockets forwarded there, of
 	// whichever process of the store's holds each.
 	members := make(chan error, 1)
-	go func() { members <- coord.ServeMembers(work, rs.logs) }()
+	serveMembers := c.serveMembers
+	if serveMembers == nil {
+		serveMembers = (*coordinator.Coordinator).ServeMembers
+	}
+	go func() { members <- serveMembers(coord, work, rs.logs) }()
 	defer func() {
 		stop()
 		<-sock.done
@@ -207,6 +211,13 @@ func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *c
 		case err := <-served:
 			// Serve returns before work is done only when it can't serve.
 			served <- err
+			quiet()
+			return c.fail(err)
+		case err := <-members:
+			// So does ServeMembers, which leaves the workers on hosts
+			// nothing to reach the coordinator through, so that the run
+			// would wait out their leases.
+			members <- err
 			quiet()
 			return c.fail(err)
 		case err := <-sock.errs:
