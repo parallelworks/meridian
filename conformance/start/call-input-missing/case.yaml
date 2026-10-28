@@ -3,8 +3,9 @@ description: >-
   workflow it calls requires, one with no default: that isn't optional nor
   a boolean, isn't created, as format 1 refuses it. The problem is at the
   uses: of the run's own step that the path of calls starts at. A value
-  that reads what a job makes, as needs, is known only as the step runs,
-  and is taken for one then.
+  that reads what is known only as jobs run, as needs or env, ACTIVATE
+  takes for a value as it creates the run, and Meridian checks as the
+  step runs.
 source: ACTIVATE's filling of a called workflow's defaults
 repositories: [github/conformance/inputs]
 expect:

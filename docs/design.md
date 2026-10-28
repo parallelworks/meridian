@@ -2223,24 +2223,24 @@ the host but runs the child where its caller runs, as some known calls do.
   expression, the child's Create checks as the step runs
   (`input_required`), where ACTIVATE evaluates, as the root is created,
   each that reads only what is known then, as the run's inputs, and takes
-  one that reads what a job makes, as `needs`, for a value. Of the known
-  workflows' 270 calls, none of the 262 whose workflow is one known file
-  leaves out an input that is required whatever the run's values; 27 of
-  them leave out one that such an expression decides, and so may one
-  more, whose workflow is a marketplace workflow that 4 known files could
-  be. Each is reported at the `uses:` of the root's own step that
-  the path of calls starts at, in the root's file, since whoever runs the
-  root may not own the workflows it calls; a cycle, once whatever paths
-  reach it, a workflow too deep, and an input left out, once for each
-  step that leaves it out, name the chain of calls from the root; what
-  is wrong with a called workflow's own step, as a reference that names
-  no workflow, is reported in that workflow's file, at the step. As in
-  format 1, a workflow called on two paths is walked on each, its calls
-  counted on each, and its text once, the root's own not counted. These
-  limits are format 1's, and Meridian's own (`Options.Calls`), as its
-  other limits are, so whoever runs a workflow can raise them; a child's
-  Create, which reads its pins from its root's plan, checks them no more,
-  so the plan doesn't record them.
+  one that reads what is known only as jobs run, as `needs` or `env`, for
+  a value. Of the known workflows' 270 calls, none of the 262 whose
+  workflow is one known file leaves out an input that is required
+  whatever the run's values; 27 of them leave out one that such an
+  expression decides, and so may one more, whose workflow is a
+  marketplace workflow that 4 known files could be. Each is reported at
+  the `uses:` of the root's own step that the path of calls starts at, in
+  the root's file, since whoever runs the root may not own the workflows
+  it calls; a cycle, once whatever paths reach it, a workflow too deep,
+  and an input left out, once for each step that leaves it out, name the
+  chain of calls from the root; what is wrong with a called workflow's
+  own step, as a reference that names no workflow, is reported in that
+  workflow's file, at the step. As in format 1, a workflow called on two
+  paths is walked on each, its calls counted on each, and its text once,
+  the root's own not counted. These limits are format 1's, and Meridian's
+  own (`Options.Calls`), as its other limits are, so whoever runs a
+  workflow can raise them; a child's Create, which reads its pins from
+  its root's plan, checks them no more, so the plan doesn't record them.
 - **The worker runs the step, and waits for the child.** As for any step,
   Step evaluates the step's `with:` on the worker, in the caller's scope,
   on each try, as format 1 does; the worker asks the coordinator for the
