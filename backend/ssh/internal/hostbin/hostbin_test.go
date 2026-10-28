@@ -711,3 +711,23 @@ func TestSystem(t *testing.T) {
 		}
 	}
 }
+
+// TestUnhex checks that a value a host says in hex is read back, and that
+// one that isn't hex, or that holds NUL, which no path can, is refused.
+func TestUnhex(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+		ok       bool
+	}{
+		{"2f686f6d652f61", "/home/a", true},
+		{"", "", true},
+		{"zz", "", false},
+		{"6100", "", false},
+		{"00", "", false},
+	} {
+		got, err := unhex(tc.in)
+		if (err == nil) != tc.ok || got != tc.want {
+			t.Errorf("unhex(%q) = %q, %v; want %q, ok %v", tc.in, got, err, tc.want, tc.ok)
+		}
+	}
+}
