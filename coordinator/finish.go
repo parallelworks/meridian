@@ -72,6 +72,7 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 	var (
 		withdrawn []string
 		waits     bool
+		woke      *waking
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
 		// A newer run's start state, of a newer version, doesn't decode:
@@ -94,11 +95,9 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 			}
 		}
 		if r.State != store.RunEnded && r.Parent != nil {
-			woke, err := c.wakeRootTx(ctx, tx, r.Parent.Root, id)
-			if err != nil {
+			if woke, err = c.wakeRootTx(ctx, tx, r.Parent.Root, id); err != nil {
 				return err
 			}
-			c.wakeAgainAfter(tx, []*waking{woke})
 		}
 		switch r.State {
 		case store.RunCreated:
@@ -142,6 +141,12 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 		return treeWait, nil
 	}
 	c.cancelPlacements(ctx, id, ws, withdrawn)
+	// The root's finisher is woken again only once the placements the run
+	// withdrew are cancelled, not as the transaction commits
+	// (wakeAgainAfter): woken first, it could end the root, and with it a
+	// meridian run that serves the connections those cancels need, before
+	// they are sent.
+	c.wakeAgain(ctx, woke)
 	return 0, nil
 }
 
@@ -149,7 +154,7 @@ func (c *Coordinator) finishRun(ctx context.Context, id string, done func(contex
 // for the runs of its tree to end (store.Run.WaitedAt), as the run child
 // of the tree ends in tx, as wakeJobTx wakes a supervisor: it returns the
 // finisher if hopper was running it, for the caller to wake again once tx
-// commits (wakeAgainAfter), or nil.
+// commits (wakeAgain), or nil.
 func (c *Coordinator) wakeRootTx(ctx context.Context, tx *store.Tx, root, child string) (*waking, error) {
 	r, err := tx.Run(root)
 	if err != nil || r.State == store.RunEnded || r.WaitedAt.IsZero() || r.FinisherID.IsZero() {
