@@ -301,6 +301,7 @@
   "workflow_nested_too_deep": "The workflows {chain} call each other more than {max} levels below the run, as deep as workflows can call each other.",
   "workflows_too_many": "The run calls more than {max} {what, select, calls {times, counted on every path of calls from it} other {distinct workflows}}, as many as a run can.",
   "workflows_too_large": "The workflows the run calls hold more than {max} bytes of text in all, as much as a run's can.",
+  "child_input_missing": "The workflows {chain} each call the next, and the last needs a value for its input \"{input}\", which the with: of the step that calls it doesn't give.",
   "child_not_pinned": "The step calls {uses}, which wasn't pinned and kept with its run's tree: the run was created by a release that didn't pin a run's whole tree.",
   "child_dir_outside": "The step's working directory puts the run it calls in {dir}, which isn't in its root run's directory.",
   "child_not_created": "The run of the workflow this step calls wasn't created: its problems follow.",

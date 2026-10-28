@@ -295,6 +295,7 @@
   "workflow_nested_too_deep": "Los flujos de trabajo {chain} se llaman entre sí más de {max} niveles por debajo de la ejecución, la profundidad máxima a la que los flujos de trabajo pueden llamarse.",
   "workflows_too_many": "La ejecución llama a más de {max} {what, select, calls {veces, contando cada camino de llamadas desde ella} other {flujos de trabajo distintos}}, el máximo que puede una ejecución.",
   "workflows_too_large": "Los flujos de trabajo a los que llama la ejecución contienen en total más de {max} bytes de texto, el máximo que pueden los de una ejecución.",
+  "child_input_missing": "Los flujos de trabajo {chain} llaman cada uno al siguiente, y el último necesita un valor para su entrada “{input}”, que el with: del paso que lo llama no da.",
   "child_not_pinned": "El paso llama a {uses}, que no se fijó ni se guardó con el árbol de su ejecución: la ejecución la creó una versión que no fijaba el árbol entero de una ejecución.",
   "child_dir_outside": "El directorio de trabajo del paso pone la ejecución a la que llama en {dir}, que no está dentro del directorio de su ejecución raíz.",
   "child_not_created": "No se creó la ejecución del flujo de trabajo al que llama este paso: sus problemas siguen.",
