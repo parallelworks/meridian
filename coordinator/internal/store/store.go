@@ -231,18 +231,27 @@ type Store struct {
 	// counts, tries it again, until it succeeds, or the store closes:
 	// Close cancels closing, which ends the goroutine and its try, waits
 	// for it, and tries once more, if one is pending, which lastTried then
-	// says. warnAfter is how long the goroutine tries before it warns,
-	// once (eraseWarnAfter, which a test shortens), and erased, if a test
-	// sets it, is called as the goroutine ends.
-	warnAfter time.Duration
-	walMu     sync.Mutex
-	pending   bool
-	erasing   bool
-	lastTried bool
-	closing   context.Context //nolint:containedctx // the store's own, which Close cancels
-	close     context.CancelFunc
-	erasers   sync.WaitGroup
-	erased    func()
+	// says. heldUp counts the tries held up, so that a try that succeeds
+	// clears pending only if none was held up as it ran, which may have
+	// been of a record deleted after the log it truncated. warnAfter is
+	// how long the goroutine tries before it warns, once (eraseWarnAfter,
+	// which a test shortens). erased, if a test sets it, is called as the
+	// goroutine ends; truncated, as a try has truncated the log, before
+	// heldUp is read; and checkpointing with the connection of a try that
+	// waits for no one, as its checkpoint is about to run
+	// (truncateWALNow).
+	warnAfter     time.Duration
+	walMu         sync.Mutex
+	pending       bool
+	heldUp        uint64
+	truncated     func()
+	checkpointing func(*sql.Conn)
+	erasing       bool
+	lastTried     bool
+	closing       context.Context //nolint:containedctx // the store's own, which Close cancels
+	close         context.CancelFunc
+	erasers       sync.WaitGroup
+	erased        func()
 	// closeOnce has Close close the store once; closeErr is what it
 	// returned.
 	closeOnce sync.Once
@@ -882,14 +891,23 @@ func (s *Store) Changes() <-chan struct{} {
 // 8 MiB, which a log that holds a record needn't be, so the store counts
 // on itself alone.
 func (s *Store) eraseWAL(ctx context.Context) {
+	s.walMu.Lock()
+	heldUp := s.heldUp
+	s.walMu.Unlock()
 	if s.truncateWAL(ctx) {
+		if s.truncated != nil {
+			s.truncated()
+		}
 		s.walMu.Lock()
-		s.pending = false
+		if s.heldUp == heldUp {
+			s.pending = false
+		}
 		s.walMu.Unlock()
 		return
 	}
 	s.walMu.Lock()
 	defer s.walMu.Unlock()
+	s.heldUp++
 	switch {
 	case s.lastTried:
 		// The store has closed, past its last try.
@@ -936,12 +954,28 @@ func (s *Store) eraseLater() {
 			return
 		case <-t.C:
 		}
+		s.walMu.Lock()
+		heldUp := s.heldUp
+		s.walMu.Unlock()
 		if s.truncateWALNow(s.closing) {
+			if s.truncated != nil {
+				s.truncated()
+			}
 			s.walMu.Lock()
-			s.erasing, s.pending = false, false
+			if s.heldUp == heldUp {
+				s.erasing, s.pending = false, false
+				s.walMu.Unlock()
+				return
+			}
+			// A try held up as this one ran may be of a record deleted
+			// after the log it truncated: tried again, from the first wait.
 			s.walMu.Unlock()
-			return
+			wait = eraseRetryFirst / 2
+			continue
 		}
+		s.walMu.Lock()
+		s.heldUp++
+		s.walMu.Unlock()
 		if !warned && time.Since(began) >= s.warnAfter {
 			warned = true
 			s.log.Warn("store: a reader or a writer has kept the write-ahead log from being truncated for a while, so it may still hold a secret record deleted since; it is tried again", "for", time.Since(began).Round(time.Second))
@@ -991,17 +1025,22 @@ func (s *Store) truncateWALNow(ctx context.Context) bool {
 		}
 		return false
 	}
+	// Set back however the try goes, the setting to 0 included, which can
+	// take effect and still return an error.
+	defer func() {
+		if _, err := conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA busy_timeout = "+strconv.FormatInt(timeout, 10)); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
 	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout = 0"); err != nil {
 		if ctx.Err() == nil {
 			s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
 		}
 		return false
 	}
-	defer func() {
-		if _, err := conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA busy_timeout = "+strconv.FormatInt(timeout, 10)); err != nil {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-		}
-	}()
+	if s.checkpointing != nil {
+		s.checkpointing(conn)
+	}
 	return s.checkpoint(ctx, conn)
 }
 

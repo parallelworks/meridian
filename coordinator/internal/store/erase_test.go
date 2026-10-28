@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"io/fs"
@@ -258,13 +259,14 @@ ON CONFLICT (attempt_id, step, try) DO UPDATE SET digest = excluded.digest`, a.I
 
 // erasureRig is a store whose warnings a test reads, with a run whose
 // secret record holds unit, which a reader can hold a snapshot of as the
-// run ends.
+// run ends; and the units of the other runs' records (addRun).
 type erasureRig struct {
 	t     *testing.T
 	s     *Store
 	path  string
 	id    string
 	unit  []byte
+	units [][]byte
 	logMu sync.Mutex
 	log   bytes.Buffer
 }
@@ -277,17 +279,32 @@ func newErasureRig(t *testing.T) *erasureRig {
 		t.Fatal(err)
 	}
 	r.s = s
-	inTx(t, s, func(tx *Tx) error {
-		var err error
-		if r.id, err = tx.NewRunID(); err != nil {
-			return err
-		}
-		if err := tx.InsertRun(NewRun{ID: r.id, Plan: testPlan(t), DefaultGroup: "local", RunDir: "/r", WorkflowID: fakeJobID(0)}); err != nil {
-			return err
-		}
-		return tx.InsertRecord(r.id, 1, []byte("the-wrapped-data-key"), bytes.Repeat(r.unit, 600))
-	})
+	r.id = r.addRun(r.unit)
 	return r
+}
+
+// addRun stores a run whose secret record holds unit, and returns its ID.
+func (r *erasureRig) addRun(unit []byte) string {
+	r.t.Helper()
+	r.units = append(r.units, unit)
+	var id string
+	inTx(r.t, r.s, func(tx *Tx) error {
+		var err error
+		if id, err = tx.NewRunID(); err != nil {
+			return err
+		}
+		if err := tx.InsertRun(NewRun{ID: id, Plan: testPlan(r.t), DefaultGroup: "local", RunDir: "/r", WorkflowID: fakeJobID(len(r.units) * 10)}); err != nil {
+			return err
+		}
+		return tx.InsertRecord(id, 1, []byte("the-wrapped-data-key"), bytes.Repeat(unit, 600))
+	})
+	return id
+}
+
+// end ends the run id, which deletes its record.
+func (r *erasureRig) end(id string) {
+	r.t.Helper()
+	inTx(r.t, r.s, func(tx *Tx) error { return tx.EndRun(id, plan.OutcomeSuccess, "") })
 }
 
 // hold has a reader hold a snapshot of the store from before the run
@@ -315,16 +332,52 @@ func (r *erasureRig) hold() (release func() error) {
 
 // erased reports whether the write-ahead log is truncated, or gone, as
 // the store's last connection leaves it once the store has closed, and
-// neither file holds the record.
+// neither file holds any of the records.
 func (r *erasureRig) erased() bool {
+	files := []string{r.path, r.path + "-wal"}
 	info, err := os.Stat(r.path + "-wal")
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return len(holding(r.t, []string{r.path}, r.unit)) == 0
+		files = files[:1]
 	case err != nil:
 		r.t.Fatal(err)
+	case info.Size() != 0:
+		return false
 	}
-	return info.Size() == 0 && len(holding(r.t, []string{r.path, r.path + "-wal"}, r.unit)) == 0
+	for _, unit := range r.units {
+		if len(holding(r.t, files, unit)) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// waitErased waits for erased, for at most within, from now.
+func (r *erasureRig) waitErased(within time.Duration) {
+	r.t.Helper()
+	start := time.Now()
+	for !r.erased() {
+		if time.Since(start) > within {
+			r.t.Fatalf("%v on, the log isn't truncated, or holds a record", time.Since(start).Round(time.Millisecond))
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // polls the files
+	}
+}
+
+// pendingState returns the store's pending and erasing.
+func (r *erasureRig) pendingState() (pending, erasing bool) {
+	r.s.walMu.Lock()
+	defer r.s.walMu.Unlock()
+	return r.s.pending, r.s.erasing
+}
+
+// beginClose does what Close does before its last try: it stops the
+// goroutine that tries again, and waits for it.
+func (r *erasureRig) beginClose() {
+	r.s.walMu.Lock()
+	r.s.close()
+	r.s.walMu.Unlock()
+	r.s.erasers.Wait()
 }
 
 func (r *erasureRig) warnings() string {
@@ -350,7 +403,7 @@ func TestRecordErasedPastReader(t *testing.T) {
 		}
 	})
 	release := r.hold()
-	inTx(t, r.s, func(tx *Tx) error { return tx.EndRun(r.id, plan.OutcomeSuccess, "") })
+	r.end(r.id)
 	// Held past a few tries, whose waits double up to a second.
 	time.Sleep(1500 * time.Millisecond) //nolint:forbidigo // the reader holds the log past the store's first tries
 	if r.erased() {
@@ -359,13 +412,7 @@ func TestRecordErasedPastReader(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}
-	released := time.Now()
-	for !r.erased() {
-		if time.Since(released) > 3*time.Second {
-			t.Fatalf("%v after the reader was done, the log isn't truncated, or holds the record", time.Since(released))
-		}
-		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // polls the files
-	}
+	r.waitErased(3 * time.Second)
 	if w := r.warnings(); w != "" {
 		t.Errorf("the store warned of a reader it waited out:\n%s", w)
 	}
@@ -382,7 +429,7 @@ func TestCloseEndsEraser(t *testing.T) {
 	r.s.erased = func() { ended.Store(true) }
 	release := r.hold()
 	defer func() { _ = release() }()
-	inTx(t, r.s, func(tx *Tx) error { return tx.EndRun(r.id, plan.OutcomeSuccess, "") })
+	r.end(r.id)
 	closed := make(chan error, 1)
 	go func() { closed <- r.s.Close() }()
 	// Close tries once more, which the reader holds up, and warns, before
@@ -416,10 +463,10 @@ func TestCloseEndsEraser(t *testing.T) {
 	}
 }
 
-// TestEraseRetryWaitsForNoOne checks that a try of the truncation that the
-// store makes again doesn't wait for a reader that holds the log, as a
-// truncation that waits holds back writers meanwhile, and leaves its
-// connection's busy timeout as it found it.
+// TestEraseRetryWaitsForNoOne checks that the tries the store makes again
+// don't wait for a reader that holds the log, as a truncation that waits
+// holds back writers meanwhile: each runs its checkpoint with a busy
+// timeout of 0, and leaves its connection's busy timeout as it found it.
 func TestEraseRetryWaitsForNoOne(t *testing.T) {
 	t.Parallel()
 	r := newErasureRig(t)
@@ -428,16 +475,49 @@ func TestEraseRetryWaitsForNoOne(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	// Two connections at most: the reader's, and the one the try takes,
-	// which the check after takes again.
-	r.s.db.SetMaxOpenConns(2)
+	var (
+		mu       sync.Mutex
+		timeouts []int64
+	)
+	r.s.checkpointing = func(conn *sql.Conn) {
+		var timeout int64
+		if err := conn.QueryRowContext(context.WithoutCancel(t.Context()), "PRAGMA busy_timeout").Scan(&timeout); err != nil {
+			t.Error(err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		timeouts = append(timeouts, timeout)
+	}
 	release := r.hold()
-	if r.s.truncateWALNow(t.Context()) {
-		t.Fatal("a try that waits for no one truncated the log a reader holds")
+	r.end(r.id)
+	// Two connections at most from here: the reader's, and the one each
+	// try takes, which the check after takes again.
+	r.s.db.SetMaxOpenConns(2)
+	// The goroutine that tries again has tried, past the first, held up.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		mu.Lock()
+		n := len(timeouts)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the store didn't try the truncation again")
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // polls the tries
 	}
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}
+	r.waitErased(3 * time.Second)
+	mu.Lock()
+	for _, timeout := range timeouts {
+		if timeout != 0 {
+			t.Errorf("a try made again ran its checkpoint with a busy timeout of %d ms, want 0", timeout)
+		}
+	}
+	mu.Unlock()
 	for range 2 {
 		conn, err := r.s.db.Conn(t.Context())
 		if err != nil {
@@ -454,6 +534,108 @@ func TestEraseRetryWaitsForNoOne(t *testing.T) {
 	}
 }
 
+// TestEraseHeldUpAsOneSucceeds checks that a try that truncates the log
+// as another, of a record deleted meanwhile, is held up, doesn't clear
+// what is pending: the goroutine that tries again goes on until it
+// truncates the log after the record was deleted. Before, it cleared it
+// and ended, and nothing tried again.
+func TestEraseHeldUpAsOneSucceeds(t *testing.T) {
+	t.Parallel()
+	r := newErasureRig(t)
+	t.Cleanup(func() {
+		if err := r.s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	next := r.endHeldUpAsTruncated()
+	var tries atomic.Int64
+	r.s.checkpointing = func(*sql.Conn) { tries.Add(1) }
+	release := r.hold()
+	r.end(r.id)
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	var e heldUpEnd
+	select {
+	case e = <-next:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the goroutine didn't truncate the log once the first reader was done")
+	}
+	if e.err != nil {
+		t.Fatal(e.err)
+	}
+	// The goroutine tries again, past what was held up as it truncated
+	// the log, rather than ending.
+	for after, deadline := tries.Load(), time.Now().Add(5*time.Second); tries.Load() == after; {
+		if time.Now().After(deadline) {
+			t.Fatal("the goroutine didn't try again once a truncation was held up as it truncated the log")
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // polls the tries
+	}
+	if pending, erasing := r.pendingState(); !pending || !erasing {
+		t.Errorf("with a truncation held up as another succeeded, pending is %v, and tried again %v, want both", pending, erasing)
+	}
+	if err := e.release(); err != nil {
+		t.Fatal(err)
+	}
+	r.waitErased(3 * time.Second)
+}
+
+// TestEraseHeldUpAsOneSucceedsAsStoreCloses checks the same of the try a
+// run's end makes as the store closes, when none tries again: it leaves
+// pending what another, held up as it ran, set, which has Close try once
+// more.
+func TestEraseHeldUpAsOneSucceedsAsStoreCloses(t *testing.T) {
+	t.Parallel()
+	r := newErasureRig(t)
+	next := r.endHeldUpAsTruncated()
+	r.beginClose()
+	r.end(r.id)
+	e := <-next
+	if e.err != nil {
+		t.Fatal(e.err)
+	}
+	if pending, _ := r.pendingState(); !pending {
+		t.Error("with a truncation held up as another succeeded, nothing is pending")
+	}
+	if err := e.release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !r.erased() {
+		t.Error("the log isn't truncated, or holds a record")
+	}
+	if w := r.warnings(); w != "" {
+		t.Errorf("the store warned:\n%s", w)
+	}
+}
+
+// A heldUpEnd is a run that ended as a reader held the log, and the
+// reader's release.
+type heldUpEnd struct {
+	release func() error
+	err     error
+}
+
+// endHeldUpAsTruncated adds a run that, as the store's first try that
+// succeeds has truncated the log, before it reads what was held up,
+// ends as a reader holds the log, so that its own try is held up.
+func (r *erasureRig) endHeldUpAsTruncated() <-chan heldUpEnd {
+	other := r.addRun([]byte("another-sealed-record."))
+	next := make(chan heldUpEnd, 1)
+	var once sync.Once
+	r.s.truncated = func() {
+		once.Do(func() {
+			release := r.hold()
+			err := r.s.Tx(r.t.Context(), func(tx *Tx) error { return tx.EndRun(other, plan.OutcomeSuccess, "") })
+			next <- heldUpEnd{release, err}
+		})
+	}
+	return next
+}
+
 // TestErasePendingWarnsOnce checks that the store warns, once, that the
 // log may still hold a secret record once a reader has kept it from being
 // truncated for a while, and goes on trying until it is.
@@ -467,7 +649,7 @@ func TestErasePendingWarnsOnce(t *testing.T) {
 	})
 	r.s.warnAfter = 100 * time.Millisecond
 	release := r.hold()
-	inTx(t, r.s, func(tx *Tx) error { return tx.EndRun(r.id, plan.OutcomeSuccess, "") })
+	r.end(r.id)
 	deadline := time.Now().Add(30 * time.Second)
 	for !strings.Contains(r.warnings(), "for a while") {
 		if time.Now().After(deadline) {
@@ -483,34 +665,27 @@ func TestErasePendingWarnsOnce(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}
-	for !r.erased() {
-		if time.Now().After(deadline) {
-			t.Fatal("the log wasn't truncated once the reader was done")
-		}
-		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // polls the files
-	}
+	r.waitErased(3 * time.Second)
 }
 
 // TestEraseAsStoreCloses checks that a truncation held up as the store
 // closes, after Close has stopped the goroutine that tries again but
-// before its last try, is covered by that try: here the reader is done by
-// then, and the last try truncates the log.
+// before its last try, is covered by that try: nothing is pending until
+// a run ends then, and the reader is done by the last try, which
+// truncates the log.
 func TestEraseAsStoreCloses(t *testing.T) {
 	t.Parallel()
 	r := newErasureRig(t)
-	release := r.hold()
-	inTx(t, r.s, func(tx *Tx) error { return tx.EndRun(r.id, plan.OutcomeSuccess, "") })
-	// As Close has begun: the goroutine that tries again is stopped.
-	r.s.walMu.Lock()
-	r.s.close()
-	r.s.walMu.Unlock()
-	r.s.erasers.Wait()
+	other := r.addRun([]byte("another-sealed-record."))
+	r.end(r.id)
+	if pending, _ := r.pendingState(); pending {
+		t.Fatal("a truncation that no reader held up is pending")
+	}
+	r.beginClose()
 	// A run that ends now: its truncation is held up, and none tries again.
-	r.s.eraseWAL(t.Context())
-	r.s.walMu.Lock()
-	pending, erasing := r.s.pending, r.s.erasing
-	r.s.walMu.Unlock()
-	if !pending || erasing {
+	release := r.hold()
+	r.end(other)
+	if pending, erasing := r.pendingState(); !pending || erasing {
 		t.Errorf("a truncation held up as the store closes is pending %v, tried again %v, want pending, and not tried again", pending, erasing)
 	}
 	if err := release(); err != nil {
@@ -527,6 +702,32 @@ func TestEraseAsStoreCloses(t *testing.T) {
 	}
 	if w := r.warnings(); w != "" {
 		t.Errorf("the store warned:\n%s", w)
+	}
+}
+
+// TestEraseAfterLastTry checks that a truncation held up once the store
+// has made its last try, which can't cover it, warns itself that the log
+// may hold the record until the next Open.
+func TestEraseAfterLastTry(t *testing.T) {
+	t.Parallel()
+	r := newErasureRig(t)
+	t.Cleanup(func() {
+		if err := r.s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	// As Close has made its last try, but not yet closed the database.
+	r.beginClose()
+	r.s.walMu.Lock()
+	r.s.lastTried = true
+	r.s.walMu.Unlock()
+	release := r.hold()
+	r.end(r.id)
+	if w := r.warnings(); !strings.Contains(w, "the next Open truncates it") {
+		t.Errorf("a truncation held up past the last try didn't warn; the store logged:\n%s", w)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
 	}
 }
 
