@@ -4113,8 +4113,15 @@ One replica at a time holds what a member's workers connect through, such
 as the forwarded socket or the relay, under a lease in the store, and
 serves every attempt that reaches it there, of whichever job: any replica
 can serve any job. It closes the connection only when it gives the lease
-up. A replica that takes the lease over, once its holder has stopped
-renewing it, sets the connection up again at the same address, so the
+up: as it stops, or once no attempt has needed the member for five
+minutes, neither one that hasn't ended nor a placement, so that a
+long-lived coordinator doesn't keep one on every member it ever served,
+while a member between one job and the next keeps it. The next attempt
+on the member takes the lease again, which starts the store's grace
+again too ([Leases and fencing](#leases-and-fencing)). A host's pooled
+SSH connection isn't let go yet. A replica that takes the lease over,
+once its holder has stopped renewing it, sets the connection up again at
+the same address, so the
 member's running workers reconnect to it. Locally, the socket is held
 under a lock on a file beside the store's database,
 which the system releases when its holder exits, however it exits, and
