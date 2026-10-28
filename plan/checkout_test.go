@@ -68,6 +68,8 @@ func TestCheckRepo(t *testing.T) {
 		"deploy@[2001:db8::1]:team/app.git",
 		"ssh://deploy@[2001:db8::1]:2222/team/app",
 		"HTTPS://github.com/acme/app",
+		"ssh://git%2Dbot@host/app",
+		"https://git.example.com/acme/a$b|c",
 	} {
 		if err := plan.CheckRepo(repo); err != nil {
 			t.Errorf("%s: %v", repo, err)
@@ -102,6 +104,21 @@ func TestCheckRepo(t *testing.T) {
 		{"[::1]:", plan.RepoForm, ""},
 		{"[::1]app", plan.RepoTransport, ""},
 		{"dir/[::1]:app", plan.RepoTransport, ""},
+		// What ssh would read as more than a host or a user, in a
+		// ProxyCommand or a Match exec, which a shell runs.
+		{"ssh://x$(id)@host/org/repo.git", plan.RepoName, "ssh://" + problems.Masked + "@host/org/repo.git"},
+		{"ssh://x$(touch${IFS}/tmp/p)@host/org/repo.git", plan.RepoName, ""},
+		{"ssh://git@h`id`.example.com/org/repo.git", plan.RepoName, "ssh://" + problems.Masked + "@h`id`.example.com/org/repo.git"},
+		{"git@a|b.example.com:org/repo.git", plan.RepoName, ""},
+		{"git;id@host.example.com:org/repo.git", plan.RepoName, ""},
+		{"git+ssh://host;id/app", plan.RepoName, ""},
+		{"ssh+git://host:22$x/app", plan.RepoName, ""},
+		{"git@[::1;id]:app", plan.RepoName, ""},
+		{"a&b:app", plan.RepoName, ""},
+		// As git decodes a URL's percent-escapes before ssh gets them.
+		{"ssh://x%24%28id%29@host/app", plan.RepoName, "ssh://" + problems.Masked + "@host/app"},
+		{"ssh://h%60id%60/app", plan.RepoName, ""},
+		{"ssh://h%0aProxyCommand%20x/app", plan.RepoName, ""},
 	} {
 		p := kindtest.Want(t, plan.CheckRepo(tc.repo), problems.CheckoutRepoInvalid)
 		shown := tc.shown

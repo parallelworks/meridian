@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/parallelworks/meridian/internal/sshname"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -15,7 +16,7 @@ import (
 // all of it: before 10.1, a user's control characters, as a newline, which
 // starts a line of ssh -G's output of its own (CVE-2025-61984). So the
 // check is Meridian's own, as OpenSSH 10.1's valid_hostname and
-// valid_ruser make it, whichever ssh is installed. A value it refuses is
+// valid_ruser make it, whichever ssh is installed (sshname). A value it refuses is
 // problems.SSHTargetUnsafe, of format 1's key for it, with the value
 // escaped (escape).
 //
@@ -27,10 +28,10 @@ func (t Target) check() error {
 		key, value string
 		valid      func(string) bool
 	}{
-		{"remoteHost", t.Host, validHostname},
-		{"remoteUser", t.User, validUser},
-		{"jumpNodeHost", t.JumpHost, validHostname},
-		{"jumpNodeUser", t.JumpUser, validUser},
+		{"remoteHost", t.Host, sshname.ValidHost},
+		{"remoteUser", t.User, sshname.ValidUser},
+		{"jumpNodeHost", t.JumpHost, sshname.ValidHost},
+		{"jumpNodeUser", t.JumpUser, sshname.ValidUser},
 	} {
 		if !v.valid(v.value) {
 			return problems.SSHTargetUnsafe.Problem(problems.Params{"key": v.key, "value": escape(v.value)})
@@ -61,48 +62,4 @@ func hostForm(s string) bool {
 func escape(s string) string {
 	q := strconv.Quote(s)
 	return q[1 : len(q)-1]
-}
-
-// isSpace and isControl are C's isspace and iscntrl, in the C locale,
-// for a byte: OpenSSH checks bytes, not characters.
-func isSpace(b byte) bool   { return b == ' ' || b >= '\t' && b <= '\r' }
-func isControl(b byte) bool { return b < 0x20 || b == 0x7f }
-
-// validHostname reports whether a host is safe to give ssh, as OpenSSH's
-// valid_hostname says: it doesn't start with -, and holds no white space,
-// control character, or any of '`"$\;&<>|(){}.
-func validHostname(s string) bool {
-	if strings.HasPrefix(s, "-") {
-		return false
-	}
-	for i := range len(s) {
-		if strings.IndexByte("'`\"$\\;&<>|(){}", s[i]) >= 0 || isSpace(s[i]) || isControl(s[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-// validUser reports whether a user is safe to give ssh, as OpenSSH 10.1's
-// valid_ruser says: "", or one that doesn't start with -, holds no control
-// character and none of '`";&<>|(){}, has no - after white space, and no \
-// last.
-func validUser(s string) bool {
-	if s == "" {
-		return true
-	}
-	if strings.HasPrefix(s, "-") {
-		return false
-	}
-	for i := range len(s) {
-		switch {
-		case isControl(s[i]) || strings.IndexByte("'`\";&<>|(){}", s[i]) >= 0:
-			return false
-		case isSpace(s[i]) && i+1 < len(s) && s[i+1] == '-':
-			return false
-		case s[i] == '\\' && i+1 == len(s):
-			return false
-		}
-	}
-	return true
 }

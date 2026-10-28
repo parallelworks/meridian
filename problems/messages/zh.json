@@ -95,7 +95,7 @@
   "source_not_known": "该步骤的 {key} 引用了创建运行时还无法知道的内容，但其 uses: 指定的工作流在那时就会被固定。",
   "checkout_not_known": "该步骤的 with: {key} 读取了在创建运行时未知的内容，但该步骤会在那时被固定到一个提交。",
   "checkout_not_found": "这里没有仓库 {repo} 的修订“{revision}”。",
-  "checkout_repo_invalid": "Meridian 不会检出 {repo}：{reason, select, transport {它通过 https 或 ssh 以外的传输方式访问} credential {它的 URL 中包含凭据} other {它不是 git 接受的 URL}}。",
+  "checkout_repo_invalid": "Meridian 不会检出 {repo}：{reason, select, transport {它通过 https 或 ssh 以外的传输方式访问} credential {它的 URL 中包含凭据} name {它的主机或用户包含 ssh 会当作名字以外内容来读取的字符} other {它不是 git 接受的 URL}}。",
   "checkout_path_invalid": "sparse_checkout 条目“{path}”不是 Meridian 按原样接受的、从仓库根开始的路径。",
   "checkout_path_not_found": "sparse_checkout 条目“{path}”在该步骤检出的提交中没有指向任何内容。",
   "checkout_submodules": "该步骤检出了带有子模块的整个 {repo}，而 Meridian 目前还不检出子模块。",

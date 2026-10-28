@@ -95,7 +95,7 @@
   "source_not_known": "ステップの {key} は実行の作成時にはわからないものを参照していますが、uses: が指定するワークフローはそのときに固定されます。",
   "checkout_not_known": "ステップの with: の {key} は実行の作成時に分からないものを読み取りますが、ステップはそのときにコミットへ固定されます。",
   "checkout_not_found": "ここにはリポジトリ {repo} のリビジョン「{revision}」がありません。",
-  "checkout_repo_invalid": "Meridian は {repo} をチェックアウトしません: {reason, select, transport {https と ssh 以外のトランスポートで接続するためです} credential {URL に資格情報が含まれているためです} other {git が受け付ける URL ではないためです}}。",
+  "checkout_repo_invalid": "Meridian は {repo} をチェックアウトしません: {reason, select, transport {https と ssh 以外のトランスポートで接続するためです} credential {URL に資格情報が含まれているためです} name {ホストまたはユーザーに、ssh が名前以上のものとして読むものが含まれているためです} other {git が受け付ける URL ではないためです}}。",
   "checkout_path_invalid": "sparse_checkout のエントリ「{path}」は、Meridian が書かれたとおりに受け取る、リポジトリのルートからのパスではありません。",
   "checkout_path_not_found": "sparse_checkout のエントリ「{path}」は、ステップがチェックアウトするコミットの中の何も指していません。",
   "checkout_submodules": "ステップはサブモジュールを持つ {repo} 全体をチェックアウトしますが、Meridian はまだサブモジュールをチェックアウトしません。",

@@ -2573,14 +2573,21 @@ checkout.
     platform's Sources may take fewer. Whatever URL Git ends up at,
     through a redirect or the user's `insteadOf`, it fetches only over
     https and ssh (`protocol.allow`), for `uses:` workflows too, unless
-    the user's own configuration allows another transport by name. Two are
-    refused as the run is created (`checkout_repo_invalid`), differences
-    from format 1: another transport, as `file://` or `ext::`, so that a
-    workflow can't have the coordinator read its host's files, or run a
-    command there, or `git://` or `http://`, which have no TLS or SSH, so
-    that nothing fetched would be authenticated or protected; and a URL
-    that holds a credential, as
-    `user:token@`, which would put a secret in the plan. Git is the `git`
+    the user's own configuration allows another transport by name. Three
+    are refused as the run is created (`checkout_repo_invalid`),
+    differences from format 1: another transport, as `file://` or `ext::`,
+    so that a workflow can't have the coordinator read its host's files, or
+    run a command there, or `git://` or `http://`, which have no TLS or
+    SSH, so that nothing fetched would be authenticated or protected; a
+    URL that holds a credential, as `user:token@`, which would put a
+    secret in the plan; and, over ssh, a host or a user that holds what
+    ssh would read as more than a name, by the rules OpenSSH 10.1 and
+    later checks its own command line with, as Meridian checks an `ssh:`'s
+    ([Connections](#connections)), with a URL's percent-escapes decoded,
+    as Git decodes them: Git gives them to ssh, which puts them in the
+    commands of the user's ssh config, as a `ProxyCommand`, that a shell
+    runs, and an older ssh takes them. None of the known workflows'
+    checkouts names one. Git is the `git`
     command, not a client in Go
     ([FIPS 140-3](#fips-140-3)). ACTIVATE runs `git` on the step's host,
     with that host's credentials, and through the platform, with the run's

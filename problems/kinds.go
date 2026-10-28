@@ -272,7 +272,7 @@ var (
 	CheckoutNotFound = define(Error, "checkout_not_found", "No such repository or revision to check out", "repo", "revision")
 	// CheckoutRepoInvalid is a parallelworks/checkout step's with: repo that
 	// Meridian doesn't fetch: repo is it as a problem shows it, with no
-	// credential, and reason why, transport, credential or form
+	// credential, and reason why, transport, credential, form or name
 	// (plan.CheckRepo).
 	CheckoutRepoInvalid = define(Error, "checkout_repo_invalid", "Checkout of a repository Meridian doesn't fetch", "repo", "reason")
 	// CheckoutPathInvalid is an entry of a parallelworks/checkout step's
