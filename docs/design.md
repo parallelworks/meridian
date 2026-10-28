@@ -2454,10 +2454,10 @@ of them leaves false. That differs from a feature whose interface is
 missing, which fails to compile ([Interfaces](#interfaces)): every run
 makes its `sessions:`, but a step may never run. The worker fails a step
 that uses scheduler-agent or wait-for-agent with `action_needs_platform`
-already, and the coordinator does cancel-jobs. Until checkout and
-update-session are built, a step that uses one fails with
-`uses_not_supported`; what this section says of them is decided, and
-built next, but for checkout's pins, which are built.
+already, and the coordinator does cancel-jobs and checkout. Until
+update-session is built, a step that uses it fails with
+`uses_not_supported`; what this section says of it is decided, and built
+next.
 
 - **checkout.**
   - **Pinned as the run is created.** Create pins each checkout's `repo`
@@ -2512,15 +2512,44 @@ built next, but for checkout's pins, which are built.
     cluster's login node with an old Git, or without outbound access,
     hasn't.
   - **Written by the worker.** The worker asks the coordinator for the
-    step's tree, which it serves from the step's pin, never from what the
-    worker says, as a tar stream of at most 1 GiB (`Options.Limits`), and
-    extracts it through an `os.Root` on the step's working directory
-    joined with `path:`, or on `path:` as it is where it is absolute, as
-    format 1 uses it, so that no member of it, nor a link already there,
-    writes outside it. It merges, replacing files of the same names
-    and keeping the rest, as ACTIVATE's copy does, and writes no `.git`.
-    The coordinator tries a fetch 5 times, 2, 4, 8 and 16 seconds apart, as
-    ACTIVATE does, and the step's `retry:` applies on top.
+    step's action, as for cancel-jobs, and the coordinator answers from
+    the step's pin, never from what the worker says: it fails the step for
+    a tree it can't serve, and warns of a path that names nothing. Once it
+    succeeds, the worker asks for the tree with the same request
+    ([The worker API](#the-worker-api)), which the coordinator streams as a
+    tar of the commit's files, links and directories, whose files come to
+    1 GiB at most (`workerapi.MaxCheckoutBytes`, `checkout_too_large`),
+    in a million entries at most (`workerapi.MaxCheckoutEntries`,
+    `checkout_too_many`), so that no tree uses up a host's inodes. The
+    tree request is the action's own, unchanged; another is refused as
+    the worker's bug, which fails the step rather than halt the attempt.
+    The worker writes the tree through an `os.Root` on the step's working
+    directory joined with `path:`, or on `path:` as it is where it is
+    absolute, as format 1 uses it, so that no member of it, nor a link
+    already there, writes outside it. It merges, as ACTIVATE's copy does:
+    a file or a link replaces a file or a link of the same name, written
+    under a name of its own and renamed over it, so that it never writes
+    through a link, or into a file another name links to, and the rest is
+    kept; a directory where the tree has a file fails the step
+    (`checkout_write_failed`). A link where the tree has a directory, as
+    one in a member's leading directories, is replaced by a directory, as
+    git checks out over one: no write follows a link, one an earlier step
+    left, into `.git` or elsewhere, or one the tree holds, as a system
+    whose names ignore case reads a link `A` and a directory `a/` of one
+    tree as one. It writes only directories, files and symbolic links, by
+    names that stay inside the directory, none of them `.git`, nor a link
+    to one, in any case (`checkout_unsafe`).
+    The coordinator reads the commit from its copy of the repository, and
+    fetches it by itself if the copy hasn't it, trying 5 times, 2, 4, 8
+    and 16 seconds apart, as ACTIVATE tries a clone
+    (`checkout_unavailable`); the step's `retry:` applies on top, and the
+    worker asks again for a stream cut short. A step whose `repo` or
+    `branch` is `""` checks out nothing, and succeeds, as in format 1.
+    The files are the blobs as committed, with no `.gitattributes`
+    applied: no line ending converted, and no filter, such as Git LFS's
+    smudge, run, as a clone on the step's host could. The tree is built
+    from the commit's own list of files, not by `git archive`, which
+    applies `export-ignore` and `export-subst`, as a clone doesn't.
   - **Paths.** A `sparse_checkout` entry is a literal path from the
     repository's root; a glob or a `!`, which ACTIVATE can read as a
     pattern, is refused (`checkout_path_invalid`). Every known entry, in
@@ -2529,7 +2558,8 @@ built next, but for checkout's pins, which are built.
     checkout of a repository with submodules, which format 1 clones with
     them, isn't built yet: its step fails when it runs
     (`checkout_submodules`), and it can come later. A sparse one leaves
-    them empty, as format 1's does. None of the known repositories checked
+    them empty, as format 1's does, and a submodule a sparse entry names
+    is an empty directory. None of the known repositories checked
     out has submodules.
 - **cancel-jobs.** The coordinator does it, in one transaction for each
   request, and answers a repeat of it as it answered it:
@@ -3494,8 +3524,8 @@ and a platform that embeds Meridian serve the same API.
   texts. Version 3 adds them. The coordinator serves them, and the worker
   makes them for a step that calls a workflow; one of an attempt of an
   earlier version fails (`uses_not_supported`).
-- **Actions:** ask the coordinator to do a step's cancel-jobs or
-  update-session, from version 3, or for its checkout's tree
+- **Actions:** ask the coordinator to do a step's cancel-jobs,
+  update-session or checkout, from version 3
   ([Built-in actions](#built-in-actions)). The request has the step's
   `with:` as Step evaluated it, and its answer says how the action ended:
   success or failure, with its problems. The coordinator reads which
@@ -3522,9 +3552,18 @@ and a platform that embeds Meridian serve the same API.
   the coordinator may have done the action. In an attempt of an earlier
   version, the step fails as before (`uses_not_supported`). The
   coordinator doesn't do update-session yet: it fails such a step with
-  `uses_not_supported`, as the worker did. The worker fails a
-  step that uses checkout (`uses_not_supported`), and one that uses an
-  action only a platform provides (`action_needs_platform`).
+  `uses_not_supported`, as the worker did. The worker fails a step that
+  uses an action only a platform provides (`action_needs_platform`).
+- **Checkout's tree:** once a checkout's action succeeded, the same
+  request reads its tree (`/v1/checkout`, of version 3), which the
+  coordinator serves only for that request, as a tar stream of the
+  commit the step was pinned to, read from the plan: another request for
+  the try, and one of a try whose action wasn't answered success, is
+  refused as the worker's bug, 400, which fails the step rather than
+  halt the attempt. A stream cut short ends without the end of its
+  chunked body, and the worker asks again, writing the tree whole again
+  over what it wrote of it. The answer may take as long as its most bytes
+  take at the server's slowest rate, 1 MiB a second.
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
   (`plan.JobResult`). The same end again, as a worker sends after a

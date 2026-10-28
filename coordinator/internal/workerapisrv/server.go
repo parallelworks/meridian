@@ -674,6 +674,7 @@ var routes = map[string]route{
 	workerapi.PathChild:     {http.MethodPost, workerapi.Version3},
 	workerapi.PathChildEnd:  {http.MethodGet, workerapi.Version3},
 	workerapi.PathChildStop: {http.MethodPost, workerapi.Version3},
+	workerapi.PathCheckout:  {http.MethodPost, workerapi.Version3},
 }
 
 // ServeHTTP serves one request of the worker API, which came on a
@@ -725,6 +726,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveChildEnd(w, r, a)
 	case workerapi.PathChildStop:
 		s.serveChildStop(w, r, a)
+	case workerapi.PathCheckout:
+		s.serveCheckout(w, r, a, run)
 	}
 }
 

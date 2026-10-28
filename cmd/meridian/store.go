@@ -61,6 +61,7 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	coord, err := coordinator.Open(ctx, coordinator.Options{
 		Database: db, Keys: keys,
 		Variables: cfg, Inputs: cfg, Groups: cfg,
+		Trees: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
 		Drivers: map[string]backend.Driver{
 			"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()},
 			"ssh":   ssh,
