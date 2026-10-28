@@ -58,10 +58,14 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 		c.ssh(&opts)
 	}
 	ssh := backendssh.New(opts)
+	var trees coordinator.Trees = &cacheSources{dirs: dirs, servers: cfg.GitLabServers()}
+	if c.trees != nil {
+		trees = c.trees
+	}
 	coord, err := coordinator.Open(ctx, coordinator.Options{
 		Database: db, Keys: keys,
 		Variables: cfg, Inputs: cfg, Groups: cfg,
-		Trees: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
+		Trees: trees,
 		Drivers: map[string]backend.Driver{
 			"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()},
 			"ssh":   ssh,

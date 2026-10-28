@@ -67,8 +67,46 @@ func (s caseSources) Read(ctx context.Context, source plan.Source) (*compile.Wor
 	return w, nil
 }
 
-// Pin finds no commit: a case's repositories hold workflows that its steps
-// call, not trees that a parallelworks/checkout step checks out.
-func (caseSources) Pin(context.Context, string, string) (string, error) {
-	return "", compile.ErrNotFound
+// Pin finds the commit of the case's repository repo names, as
+// https://github.com/<owner>/<repository>, with or without .git, at its
+// branch main, or at that commit itself (Commit), whose tree a
+// parallelworks/checkout step checks out (Tree); and none of another.
+func (s caseSources) Pin(_ context.Context, repo, revision string) (string, error) {
+	commit := Commit(s.c)
+	if !Holds(s.c, repo) || revision != "main" && revision != commit {
+		return "", compile.ErrNotFound
+	}
+	return commit, nil
+}
+
+// Commit is the commit each of a case's repositories is at, on its branch
+// main: the hex of its name's SHA-256, as long as a Git commit's.
+func Commit(c conformance.Case) string {
+	sum := sha256.Sum256([]byte(c.Name))
+	return hex.EncodeToString(sum[:20])
+}
+
+// Holds reports whether repo, as a parallelworks/checkout step's with:
+// names a repository, https://github.com/<owner>/<repository>, with or
+// without .git, is one of the case's (conformance.Case.Repositories).
+func Holds(c conformance.Case, repo string) bool {
+	rest, ok := strings.CutPrefix(repo, "https://github.com/")
+	return ok && slices.Contains(c.Repositories, "github/"+strings.TrimSuffix(rest, ".git"))
+}
+
+// Tree returns the tree of the case's repositories at Commit, as a
+// parallelworks/checkout step checks one out: the files of the case's
+// directory, by their paths in it.
+func Tree(c conformance.Case) (map[string][]byte, error) {
+	names, err := c.Files()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]byte, len(names))
+	for _, name := range names {
+		if out[name], err = c.File(name); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }

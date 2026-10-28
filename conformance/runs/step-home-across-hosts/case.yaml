@@ -1,0 +1,15 @@
+description: >-
+  Two hosts that share their user's home, as a cluster's login nodes do:
+  what a step on one leaves in the home, a step on the other reads.
+source: ACTIVATE's executor, and Meridian
+hosts:
+  farm: {}
+  farm2: {home: farm}
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 2, text: "from the first host\n"}

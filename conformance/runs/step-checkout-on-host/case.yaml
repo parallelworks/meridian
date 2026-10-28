@@ -1,0 +1,18 @@
+description: >-
+  A checkout step whose ssh: names a host, in a job that runs where the run
+  started, checks its repository out there, in the host's copy of the run's
+  directory, where a later job on that host reads it by its path, as format
+  1 clones it on the host the step connects to.
+source: ACTIVATE's executor, and Meridian
+repositories: [github/conformance/step-checkout-on-host]
+hosts:
+  farm: {}
+expect:
+  run:
+    outcome: success
+    jobs:
+      fetch: {outcome: success}
+      use:
+        outcome: success
+        logs:
+          - {step: 0, text: "checked out on the host\n"}

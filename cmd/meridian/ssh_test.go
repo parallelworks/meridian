@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,14 +22,14 @@ import (
 	"github.com/parallelworks/meridian/internal/sshtest"
 )
 
-// An sshHost is a host meridian runs jobs on through the ssh backend: the
-// test's own machine, through an SSH server in the test's process, or
-// OpenSSH's sshd where opensshtest.EnvSSHD names one, as CI's ssh job runs
-// these tests, whose user's home is a directory of the test's. meridian
-// reaches it as the cluster hpc of its clusters.yaml, whose host is farm,
-// an alias that the SSH config the test gives the ssh backend resolves to
-// the server; and runs the test binary there, as meridian, which it puts
-// there as its own.
+// An sshHost is a host meridian runs jobs and steps on through the ssh
+// backend: the test's own machine, through an SSH server in the test's
+// process, or OpenSSH's sshd where opensshtest.EnvSSHD names one, as CI's
+// ssh job runs these tests, whose user's home is a directory of the
+// test's. meridian reaches it by an alias, which the SSH config the test
+// gives the ssh backend resolves to the server, and, as newSSHHost starts
+// it, as the cluster hpc of its clusters.yaml, whose host is farm; and runs
+// the test binary there, as meridian, which it puts there as its own.
 type sshHost struct {
 	server sshServer
 	// home is the host's user's home.
@@ -50,74 +51,129 @@ type sshServer interface {
 // directories env names, as newSSHHost says, and writes its clusters.yaml.
 func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Options)) *sshHost {
 	t.Helper()
+	return newSSHHosts(t, env, hostSpec{alias: "farm", cluster: "hpc", with: with})["farm"]
+}
+
+// A hostSpec says what of a host newSSHHosts starts: its alias in the
+// test's SSH config, which a workflow's remoteHost names; the cluster of
+// clusters.yaml whose host it is, if any; the home it shares with another
+// host, by that host's alias, as a cluster's login nodes share one, or ""
+// for one of its own; and what the test changes of its server.
+// Unreachable is a host nothing listens at.
+type hostSpec struct {
+	alias, cluster, sameHome string
+	unreachable              bool
+	with                     []func(*sshtest.Options)
+}
+
+// newSSHHosts starts a host for each of specs, for meridian of the state and
+// config directories env names, behind one SSH config, each at its alias,
+// and writes the clusters of clusters.yaml their specs name; and returns
+// them by their aliases, each with what has meridian read that config.
+func newSSHHosts(t *testing.T, env map[string]string, specs ...hostSpec) map[string]*sshHost {
+	t.Helper()
 	if _, err := exec.LookPath("ssh"); err != nil {
 		t.Skip("no ssh client to read the SSH config with")
 	}
-	h := &sshHost{home: t.TempDir()}
-	// A race that meridian host, or a worker it starts, reports there
-	// fails the test, once its workers are stopped.
-	racetest.Watch(t, h.home)
-	t.Cleanup(func() { h.stopWorkers(t) })
-	// The user's runtime directory on the host, short enough for its
-	// sockets.
-	runtimeDir, err := os.MkdirTemp("", "msh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
 	client := t.TempDir()
 	key, signer := sshtest.NewKeyFile(t)
 	keyFile := filepath.Join(client, "id_ecdsa")
 	if err := os.WriteFile(keyFile, key, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	opts := sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: []string{
-		"HOME=" + h.home, "XDG_RUNTIME_DIR=" + runtimeDir, envMain + "=1",
-		"XDG_CACHE_HOME=", "XDG_STATE_HOME=", "XDG_CONFIG_HOME=",
-		local.EnvCacheDir + "=", local.EnvStateDir + "=", local.EnvConfigDir + "=", "TMPDIR=",
-		racetest.Env(h.home),
-	}}
-	for _, f := range with {
-		f(&opts)
+	var config, knownHosts, clusters strings.Builder
+	hosts := map[string]*sshHost{}
+	for _, spec := range specs {
+		h := &sshHost{home: t.TempDir()}
+		if shared, ok := hosts[spec.sameHome]; ok {
+			h.home = shared.home
+		} else {
+			// A race that meridian host, or a worker it starts, reports
+			// there fails the test, once its workers are stopped.
+			racetest.Watch(t, h.home)
+			t.Cleanup(func() { h.stopWorkers(t) })
+		}
+		hosts[spec.alias] = h
+		if spec.cluster != "" {
+			fmt.Fprintf(&clusters, "%s:\n  host: %s\n", spec.cluster, spec.alias)
+		}
+		if spec.unreachable {
+			fmt.Fprintf(&config, "Host %s\n  HostName 127.0.0.1\n  Port %d\n  ConnectTimeout 1\n", spec.alias, closedPort(t))
+			continue
+		}
+		// The user's runtime directory on the host, short enough for its
+		// sockets.
+		runtimeDir, err := os.MkdirTemp("", "msh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+		opts := sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: []string{
+			"HOME=" + h.home, "XDG_RUNTIME_DIR=" + runtimeDir, envMain + "=1",
+			"XDG_CACHE_HOME=", "XDG_STATE_HOME=", "XDG_CONFIG_HOME=",
+			local.EnvCacheDir + "=", local.EnvStateDir + "=", local.EnvConfigDir + "=", "TMPDIR=",
+			racetest.Env(h.home),
+		}}
+		for _, f := range spec.with {
+			f(&opts)
+		}
+		if opensshtest.Path() != "" {
+			// sshd sets HOME and the rest of a session's environment itself,
+			// and then what it is told to over them.
+			h.server = opensshtest.New(t, opensshtest.Options{
+				Authorized: opts.Authorized, Env: opts.Env, NoForwarding: opts.NoForwarding,
+				KeyExchanges: opts.KeyExchanges, Ciphers: opts.Ciphers,
+			})
+		} else {
+			h.server = sshtest.New(t, opts)
+		}
+		knownHosts.WriteString(h.server.KnownHosts(""))
+		fmt.Fprintf(&config, "Host %s\n  HostName %s\n  Port %s\n", spec.alias, h.server.Host(), h.server.Port())
 	}
-	if opensshtest.Path() != "" {
-		// sshd sets HOME and the rest of a session's environment itself,
-		// and then what it is told to over them.
-		h.server = opensshtest.New(t, opensshtest.Options{
-			Authorized: opts.Authorized, Env: opts.Env, NoForwarding: opts.NoForwarding,
-			KeyExchanges: opts.KeyExchanges, Ciphers: opts.Ciphers,
-		})
-	} else {
-		h.server = sshtest.New(t, opts)
-	}
-	knownHosts := filepath.Join(client, "known_hosts")
-	if err := os.WriteFile(knownHosts, []byte(h.server.KnownHosts("")), 0o600); err != nil {
+	known := filepath.Join(client, "known_hosts")
+	if err := os.WriteFile(known, []byte(knownHosts.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config := filepath.Join(client, "config")
-	if err := os.WriteFile(config, fmt.Appendf(nil, `Host farm
-  HostName %s
-  Port %s
+	fmt.Fprintf(&config, `Host *
   IdentityFile %s
   IdentitiesOnly yes
   IdentityAgent none
   UserKnownHostsFile %s
   GlobalKnownHostsFile /dev/null
-`, h.server.Host(), h.server.Port(), keyFile, knownHosts), 0o600); err != nil {
+`, keyFile, known)
+	configFile := filepath.Join(client, "config")
+	if err := os.WriteFile(configFile, []byte(config.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	binaries := hostBinaries(t)
-	h.setUp = func(c *cli) {
-		c.ssh = func(o *backendssh.Options) { o.ConfigFile, o.Binaries = config, binaries }
+	setUp := func(c *cli) {
+		c.ssh = func(o *backendssh.Options) { o.ConfigFile, o.Binaries = configFile, binaries }
+	}
+	for _, h := range hosts {
+		h.setUp = setUp
 	}
 	dir := env[local.EnvConfigDir]
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, local.ClustersFile), []byte("hpc:\n  host: farm\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, local.ClustersFile), []byte(clusters.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return h
+	return hosts
+}
+
+// closedPort returns a port on 127.0.0.1 that nothing listens at.
+func closedPort(t *testing.T) int {
+	t.Helper()
+	l, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
 }
 
 // stopWorkers stops the workers meridian placed on h that are still

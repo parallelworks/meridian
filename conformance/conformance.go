@@ -64,8 +64,20 @@ type Case struct {
 	// branch, main, which a step's uses: names with no revision, or as
 	// @main, and its with:'s $yaml names one of.
 	Repositories []string `yaml:"repositories,omitempty"`
+	// Hosts are the hosts a job's or a step's ssh: names, in the runs
+	// area, by the name its remoteHost gives: each a machine of its own,
+	// which runs what is placed on it as its user, with a home of its own,
+	// or the home of another of them that Host.Home names, as a cluster's
+	// login nodes share one.
+	Hosts map[string]Host `yaml:"hosts,omitempty"`
 	// Expect is what the workflow must produce.
 	Expect Expect `yaml:"expect"`
+}
+
+// A Host is one of a case's hosts (Case.Hosts): Home names another of them
+// whose home it shares, or is "" for a home of its own.
+type Host struct {
+	Home string `yaml:"home,omitempty"`
 }
 
 // Expect is what a case's workflow must produce.

@@ -1,0 +1,10 @@
+jobs:
+  main:
+    steps:
+      - uses: github/conformance/step-call-own-ssh
+        with:
+          $yaml: called.yaml
+        ssh:
+          remoteHost: farm
+      - if: ${{ failure() }}
+        run: echo the call was refused

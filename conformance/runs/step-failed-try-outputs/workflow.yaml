@@ -1,0 +1,11 @@
+jobs:
+  main:
+    steps:
+      - run: |
+          echo "x=written" >> $OUTPUTS
+          exit 1
+        ignore-errors: true
+        ssh:
+          remoteHost: farm
+      - run: echo "[${{ needs.main.outputs.x }}]"
+        if: always

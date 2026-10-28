@@ -350,6 +350,24 @@ expect:
           greet: {outcome: success}
   ```
 
+- `hosts` names the hosts a job's or a step's `ssh:` names by its
+  `remoteHost`, each a machine of its own, which runs what is placed on it
+  as the user, in its own copy of the run's directory, under its user's
+  home: its own, or the one of another host that `home` names, as a
+  cluster's login nodes share one:
+
+  ```yaml
+  hosts:
+    farm: {}
+    farm2: {home: farm}
+  ```
+
+  A step whose `ssh:` names a host other than its job's runs there; what
+  it prints is checked through what it writes to `$OUTPUTS`, which a later
+  step reads, rather than its log, which an implementation may keep
+  elsewhere than the step's, as Meridian keeps it with a run of the step's
+  own, which isn't among a job's `calls`.
+
 ## Expressions
 
 Each file holds cases that share a scope: the contexts their expressions
