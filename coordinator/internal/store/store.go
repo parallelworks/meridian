@@ -146,6 +146,15 @@ type Options struct {
 	// once (workerapisrv.Server.Placed); those of other processes read
 	// them again every so often. Nil means nothing is.
 	OnPlacementsRecorded func(ctx context.Context, ids []string)
+	// OnAttemptsEnded is called in a transaction that ended attempts, as
+	// it ends them, before it commits, with the transaction's context and
+	// the attempts' IDs: those Tx.EndAttempt ended, and those a new attempt
+	// of their job superseded (Tx.NewAttempt). The coordinator stops the
+	// children of their steps in it, as nothing waits for them any more,
+	// so that no child outlives the attempt that ran its step, whatever
+	// ended it. An error it returns is the transaction's, which then
+	// stores nothing. Nil means nothing is.
+	OnAttemptsEnded func(ctx context.Context, tx *Tx, ids []string) error
 	// OnRunsEnded is called once a transaction that ended runs (Tx.EndRun)
 	// has committed, with the transaction's context and the runs' IDs, in
 	// order, so that whoever holds polls for their ends, as children, in
@@ -190,6 +199,8 @@ type Store struct {
 	onControls func(ctx context.Context, ids []string)
 	onPlaced   func(ctx context.Context, ids []string)
 	onEnded    func(ctx context.Context, ids []string)
+	// attemptsEnded is Options.OnAttemptsEnded, or nil.
+	attemptsEnded func(ctx context.Context, tx *Tx, ids []string) error
 	// migrated is set once Meridian's schema, which keeps the clock's
 	// mark, is there: Open sets it before it returns the store.
 	migrated bool
@@ -309,6 +320,7 @@ func openOnce(ctx context.Context, path string, log *slog.Logger, opts *Options,
 	if opts != nil {
 		s.lastTry, s.retriesFor, s.clock = opts.LastTry, opts.RetriesFor, opts.Now
 		s.onReset, s.onControls, s.onPlaced, s.onEnded = opts.OnClockReset, opts.OnControlsChanged, opts.OnPlacementsRecorded, opts.OnRunsEnded
+		s.attemptsEnded = opts.OnAttemptsEnded
 		if opts.MaxLead > 0 {
 			s.maxLead = opts.MaxLead
 		}
@@ -593,6 +605,18 @@ type Tx struct {
 	// ended are the runs the transaction ended (EndRun), in order, which
 	// Options.OnRunsEnded is given once it commits.
 	ended []string
+	// after are what is called once the transaction commits (AfterCommit),
+	// in order.
+	after []func(context.Context)
+}
+
+// AfterCommit has f called once the transaction has committed, with its
+// context, after the hooks of Options, in the order AfterCommit was called:
+// never for a transaction that doesn't commit. A hook of Options that runs
+// in the transaction, as OnAttemptsEnded, so has what it does once the
+// transaction commits done then.
+func (tx *Tx) AfterCommit(f func(ctx context.Context)) {
+	tx.after = append(tx.after, f)
 }
 
 // stmt returns the statement of query for the transaction: the store's,
@@ -737,6 +761,9 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 	}
 	if len(tx.ended) > 0 && s.onEnded != nil {
 		s.onEnded(context.WithoutCancel(ctx), tx.ended)
+	}
+	for _, f := range tx.after {
+		f(context.WithoutCancel(ctx))
 	}
 	if tx.erased {
 		s.truncateWAL(context.WithoutCancel(ctx))

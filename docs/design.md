@@ -2175,12 +2175,14 @@ attempt's claim has of its tree, which its worker reads; and the worker's
 run of a calling step: it makes the child's directory, and cleans it as
 `clean-on-retry:` says, never following a symbolic link, asks for the
 child, waits for it, stops it as the step is stopped, and ends the step as
-below. The rest isn't built yet: the attempt isn't parked while it waits;
-an attempt that ends without its worker doesn't stop its steps' children;
-`meridian run`, `status` and `logs` show a root run's own jobs alone; and
-a step whose `ssh:` names a host is refused (`step_ssh_not_supported`), as
-any step's is, where format 1 connects to the host but runs the child
-where its caller runs, as some known calls do.
+below; and the coordinator's stop of a step's children, in the transaction
+that ends its attempt, however it ends, and in the one that stops its run,
+or its job, as the plan says of its `if:`. The rest isn't built yet: the
+attempt isn't parked while it waits; `meridian run`, `status` and `logs`
+show a root run's own jobs alone; and a step whose `ssh:` names a host is
+refused (`step_ssh_not_supported`), as any step's is, where format 1
+connects to the host but runs the child where its caller runs, as some
+known calls do.
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2344,7 +2346,11 @@ where its caller runs, as some known calls do.
 - **Stopping it.** A calling step that is stopped stops its child, and
   waits for the child to end, its cleanups among it, as format 1's call
   returns only once its child has; the child's jobs end as any run's do
-  when it is stopped.
+  when it is stopped. The step's worker stops it, and the coordinator does
+  too, as it tells the step's job to stop, in the same transaction: the
+  children of the steps a stop of the job stops, those whose `if:` doesn't
+  outlive a cancel, for the stop's reason; and those of a step that does
+  run on, as the step does.
   - A run's cancel stops a step that doesn't outlive it, and its child
     with `cancelled`; the step ends cancelled.
   - The cancel of the step's job, as by `parallelworks/cancel-jobs`, stops
@@ -2366,13 +2372,16 @@ where its caller runs, as some known calls do.
     `early-cancel: any-job-failed`: the one place where a job's own
     timeout doesn't fail it. A job that needs it is skipped as after one
     that failed.
-  - An attempt that ends without its worker, lost, withdrawn or
-    superseded, stops the children of its steps with `cancelled`, in the
-    transaction that ends it; its job's next attempt runs its steps again,
-    with new children. A worker that is only cut off keeps its children:
-    asked again, the coordinator gives it the same.
+  - An attempt that ends, without its worker, as lost, withdrawn or
+    superseded, or with it, stops the children of its steps that haven't
+    ended with `cancelled`, in the transaction that ends it, whatever ends
+    it: nothing waits for them any more. Its job's next attempt runs its
+    steps again, with new children. A worker that is only cut off keeps
+    its children: asked again, the coordinator gives it the same.
   - A root run doesn't end while a run of its tree hasn't, which it waits
-    for.
+    for, so its tree ends before it: a stop of the root, a cancel or its
+    `timeout:`, stops the children of its steps it stops, and so on down
+    its tree, and its end waits for theirs.
 - **Each try is a child of its own.** A step's `retry:` runs the whole
   child again, evaluating its `with:` again, as in format 1: a child for
   each try, linked to it. A rerun, which is Meridian's own, makes new
@@ -2528,12 +2537,19 @@ built next, but for checkout's pins, which are built.
     named by its workflow's `name:` and its ID, and has no slug. A
     `workflow` without a `run`, or with a negative one, fails the step, as
     in format 1 (`cancel_jobs_run_missing`). With no `jobs:`, or an empty
-    one, the step cancels its own run, as a person does, and succeeds; in
-    a child run, that is the child, as a subworkflow's in format 1. A
+    one, the step cancels its own run, as a person does, and succeeds. A
     `jobs:` that isn't a list of names, a `slug` or `workflow` that isn't
     a string, or a `run` that isn't a whole number, fails the step
     (`wrong_type`), as format 1 refuses it too; null, and `""` for a
     `slug` or `workflow`, are as if not given.
+  - **From a child run**, as format 1's from a subworkflow, the step's own
+    run is named as its root is, by the root's workflow and number, as
+    format 1 names a subworkflow's run, which is its root's: a `workflow`
+    and `run` that name the root cancel the root's jobs, or with no
+    `jobs:` the root, which stops its tree as a person's cancel does; a
+    `run` alone that names the root, or nothing, cancels the child's own,
+    as format 1's does. A child's own number, which format 1 doesn't know,
+    names another run, which fails the step.
   - A job that has ended, or is cancelled already, is left as it is. One
     that runs stops as a cancel stops it
     ([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup)),

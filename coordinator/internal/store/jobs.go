@@ -70,7 +70,9 @@ type Job struct {
 	// CancelledAt is when a step of the run cancelled the job, through
 	// parallelworks/cancel-jobs (CancelJob), or the zero time before; and
 	// CancelledBy that step, as /jobs/<its job's key>/steps/<its index>,
-	// as in /jobs/build#1/steps/2.
+	// as in /jobs/build#1/steps/2, or, for a step of a run of the run's
+	// tree, which can cancel a root's jobs, that run's ID, a colon and
+	// that, as in 7:/jobs/main/steps/1.
 	CancelledAt time.Time
 	CancelledBy string
 }

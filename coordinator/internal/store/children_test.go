@@ -1,9 +1,14 @@
 package store
 
 import (
+	"context"
 	"errors"
+	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 
+	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -126,5 +131,113 @@ func TestChildLinks(t *testing.T) {
 		if _, err := child(bad); err == nil {
 			t.Errorf("a link %+v was stored", bad)
 		}
+	}
+}
+
+// TestAttemptsEnded checks that whoever opened the store is told, in the
+// transaction that ends attempts, which ones it ended: those EndAttempt
+// ends, and those a new attempt of their job supersedes; and finds the
+// children of their steps that haven't ended there (LiveChildren). What it
+// has done once the transaction commits (AfterCommit) is done then, and
+// never for one that doesn't; and an error it returns is the
+// transaction's, which then stores nothing.
+func TestAttemptsEnded(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		told      [][]string
+		children  []LiveChild
+		committed []string
+		fail      error
+	)
+	s, err := Open(t.Context(), filepath.Join(coordtest.PrivateDir(t), "meridian.db"), &Options{
+		OnAttemptsEnded: func(_ context.Context, tx *Tx, ids []string) error {
+			live, err := tx.LiveChildren(ids...)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			told = append(told, ids)
+			children = append(children, live...)
+			tx.AfterCommit(func(context.Context) {
+				mu.Lock()
+				defer mu.Unlock()
+				committed = append(committed, ids...)
+			})
+			return fail
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	root := createRun(t, s)
+	var first *Attempt
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.StartRun(root, testState(), nil); err != nil {
+			return err
+		}
+		var err error
+		first, _, err = tx.NewAttempt(NewAttempt{Run: root, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	})
+	var child, ended string
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		for _, id := range []*string{&child, &ended} {
+			if *id, err = tx.NewRunID(); err != nil {
+				return err
+			}
+			try := 0
+			if id == &ended {
+				try = 1
+			}
+			link := &Link{Run: root, Job: "build", Attempt: first.ID, Step: 1, Try: try, Root: root, Depth: 1}
+			run := NewRun{ID: *id, Plan: testPlan(t), DefaultGroup: "local", RunDir: "/runs/x", WorkflowID: fakeJobID(20 + try), Parent: link}
+			if err := tx.InsertRun(run); err != nil {
+				return err
+			}
+		}
+		return tx.EndRun(ended, plan.OutcomeSuccess, "")
+	})
+	// A new attempt supersedes the first, whose step's child is live.
+	var second *Attempt
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		second, _, err = tx.NewAttempt(NewAttempt{Run: root, Job: "build", LeaseSeconds: 60, HeartbeatSeconds: 10})
+		return err
+	})
+	mu.Lock()
+	if !slices.EqualFunc(told, [][]string{{first.ID}}, slices.Equal) || !slices.Equal(committed, []string{first.ID}) ||
+		!slices.Equal(children, []LiveChild{{ID: child, Attempt: first.ID, Step: 1}}) {
+		t.Errorf("superseding told %v, committed %v, with the children %+v", told, committed, children)
+	}
+	told, children, committed, fail = nil, nil, nil, errors.New("no")
+	mu.Unlock()
+	// An error rolls back the end, and nothing is done after it.
+	err = s.Tx(t.Context(), func(tx *Tx) error {
+		return tx.EndAttempt(second.ID, AttemptEnd{Kind: EndLost, Reason: plan.ReasonWorkerLost})
+	})
+	mu.Lock()
+	if err == nil || !slices.EqualFunc(told, [][]string{{second.ID}}, slices.Equal) || len(committed) > 0 {
+		t.Errorf("a failed hook: %v, told %v, committed %v", err, told, committed)
+	}
+	told, fail = nil, nil
+	mu.Unlock()
+	inTx(t, s, func(tx *Tx) error {
+		a, err := tx.Attempt(second.ID)
+		if err == nil && a.State == AttemptEnded {
+			t.Error("an attempt was ended though its hook failed")
+		}
+		return tx.EndAttempt(second.ID, AttemptEnd{Kind: EndLost, Reason: plan.ReasonWorkerLost})
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.EqualFunc(told, [][]string{{second.ID}}, slices.Equal) || !slices.Equal(committed, []string{second.ID}) {
+		t.Errorf("ending told %v, committed %v", told, committed)
 	}
 }
