@@ -2044,7 +2044,9 @@ pending ──▶ ready ──▶ placing ──▶ running ──▶ succeeded 
   expands a matrix that reads `needs`, and evaluates the job's `if:`, so a
   false `if:` skips it here. Otherwise it evaluates the rest of what was left
   for this point, such as a `runs-on:` that uses `needs`, and picks a member
-  of the job's group ([Placement](#placement)). The coordinator runs Ready
+  of the job's group ([Placement](#placement)). Ready's errors fail the
+  job, and its warnings, as `job_ssh_host_empty`, are kept with the job,
+  which runs. The coordinator runs Ready
   again whenever it needs the job, as when it places it and each time a
   worker claims it, with what the job was readied with kept: whether the
   run had been cancelled then, and which instance each `:any` need took. So
@@ -4167,13 +4169,22 @@ backend there through `meridian host`
   lost before it fails the step, 300 seconds by default, isn't honoured:
   a step keeps running through an outage, which is what a worker on the
   host is for, and a laptop that sleeps through it fails no remote step.
-  The compiler will warn of the key (`ssh_disconnect_timeout_ignored`);
-  none of the known workflows sets it.
+  Every step runs as a negative one asks. Format 1 reads one as a number
+  of seconds, or a whole number with one of `d`, `h`, `m` or `s` after
+  it, so `-1`, `-5m` and `-2d` are negative. The compiler warns, where the
+  workflow writes it, of one that isn't negative, and of one an
+  expression gives, whose value it doesn't know yet
+  (`ssh_disconnect_timeout_ignored`); none of the known workflows sets
+  it.
 - **A job whose `ssh:` gives no `remoteHost`**, empty or null, runs as it
-  would without its `ssh:`, as format 1 runs it, and as a step's does
-  ([Running steps](#running-steps)). Ready doesn't do that yet: it places
-  such a job on a member with no host, which can't run it
-  (`ssh_host_missing`).
+  would without its `ssh:`, where its `runs-on:` says, or on the run's
+  default group, as format 1 runs it, and as a step's does
+  ([Running steps](#running-steps)): Ready gives it no inline group.
+  Format 1 notes it in the log of each step that runs so; Meridian keeps
+  Ready's warning with the job (`job_ssh_host_empty`), once however often
+  the job is readied, which its status and its end show, however it ends.
+  The common case is a `remoteHost` that reads a `compute-clusters`
+  input's `ip`, which is `""` for the workspace, this machine.
 - **A step whose `ssh:` names another host** fails
   (`step_ssh_not_supported`) until the worker can run a step on another
   host itself.
@@ -4202,6 +4213,10 @@ Where format 1, as ACTIVATE runs it, does otherwise:
 - **Outages.** Steps run through one, and their reports arrive after it.
   ACTIVATE fails a step once its connection has been lost for
   `disconnect-timeout`, and leaves its process running.
+- **A `disconnect-timeout` format 1 can't read**, such as `1h30m`, `1.5h`
+  or `300ms`, fails the step in ACTIVATE. Meridian ignores the key,
+  whatever its value, and runs the step, with a warning
+  (`ssh_disconnect_timeout_invalid`).
 - **Cancelling during an outage** reaches the worker once the connection
   is back. ACTIVATE tries for 10 seconds, and leaves the process running.
 - **One worker runs a job's steps**, so they share its session, and a

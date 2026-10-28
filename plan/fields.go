@@ -14,7 +14,8 @@ import (
 
 // target evaluates where job runs: its format 1 ssh:, or else its
 // runs-on:. An ssh: that gives null is none, as format 1 runs such a job
-// without ssh.
+// without ssh; so is one whose remoteHost is empty or null (NoRemoteHost),
+// which format 1 runs without ssh too, noting so (job_ssh_host_empty).
 func (e *evaluation) target(job *Job) Target {
 	if !job.SSH.IsZero() {
 		pointer := at(job.Path, "ssh")
@@ -22,7 +23,9 @@ func (e *evaluation) target(job *Job) Target {
 		if !ok {
 			return Target{}
 		}
-		if v != nil {
+		if m, isMapping := v.(map[string]any); isMapping && NoRemoteHost(m) {
+			e.report(problems.JobSSHHostEmpty, pointer, nil, expr.Read{})
+		} else if v != nil {
 			return Target{Inline: e.inline(v, pointer)}
 		}
 	}
@@ -136,6 +139,15 @@ func mappingData(v any) (Data, bool) {
 		return DataOf(v), true
 	}
 	return Data{}, false
+}
+
+// NoRemoteHost reports whether ssh, a format 1 ssh: mapping, gives a
+// remoteHost that is empty or null, which names no host: format 1 runs a
+// job or a step with one where it would run without its ssh:. One without
+// a remoteHost, which the schema refuses, isn't such a one.
+func NoRemoteHost(ssh map[string]any) bool {
+	host, given := ssh["remoteHost"]
+	return given && (host == nil || host == "")
 }
 
 // inline reads a format 1 ssh:, v, as evaluated at pointer: the group of
