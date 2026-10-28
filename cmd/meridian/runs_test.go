@@ -18,18 +18,29 @@ import (
 // A runLine is one of the JSON lines meridian run --format json writes, as
 // much of it as these tests read.
 type runLine struct {
-	Version int    `json:"version"`
-	Kind    string `json:"kind"`
+	Version int          `json:"version"`
+	Kind    string       `json:"kind"`
+	Run     string       `json:"run"`
+	Callers []lineCaller `json:"callers"`
+	Child   string       `json:"child"`
+	Job     string       `json:"job"`
+	Attempt int          `json:"attempt"`
+	Part    string       `json:"part"`
+	Step    *int         `json:"step"`
+	Try     int          `json:"try"`
+	Outcome string       `json:"outcome"`
+	Text    string       `json:"text"`
+	Ended   bool         `json:"ended"`
+	Cut     bool         `json:"cut"`
+}
+
+// A lineCaller is the try of a step that called a run, in a runLine.
+type lineCaller struct {
 	Run     string `json:"run"`
 	Job     string `json:"job"`
 	Attempt int    `json:"attempt"`
-	Part    string `json:"part"`
-	Step    *int   `json:"step"`
+	Step    int    `json:"step"`
 	Try     int    `json:"try"`
-	Outcome string `json:"outcome"`
-	Text    string `json:"text"`
-	Ended   bool   `json:"ended"`
-	Cut     bool   `json:"cut"`
 }
 
 // runLines reads what meridian run --format json wrote: a JSON object a
@@ -103,50 +114,95 @@ func TestRunsConformance(t *testing.T) {
 				}
 			}
 			lines := runLines(t, r.stdout)
-			if last := lines[len(lines)-1]; last.Kind != "run.finished" || last.Outcome != want.Outcome {
+			if last := lines[len(lines)-1]; last.Kind != "run.finished" || last.Outcome != want.Outcome || len(last.Callers) > 0 {
 				t.Errorf("the run ended %+v, want %s", last, want.Outcome)
 			}
-			jobs := map[string]string{}
-			attempts := map[string]int{}
-			logs := map[string]string{}
-			ended := map[string]bool{}
-			for _, l := range lines {
-				switch l.Kind {
-				case "job.finished":
-					jobs[l.Job] = l.Outcome
-				case "job.running":
-					attempts[l.Job] = max(attempts[l.Job], l.Attempt)
-				case "log":
-					name := runLogName(l.Job, l.Attempt, l.Part, l.Step, l.Try)
-					logs[name] += l.Text
-					if l.Ended {
-						ended[name] = true
-					}
-					if l.Cut {
-						t.Errorf("the log %s was cut short", name)
-					}
-				}
+			if first := lines[0]; first.Kind != "run.created" {
+				t.Fatalf("the first line is %+v", first)
 			}
-			if len(jobs) != len(want.Jobs) {
-				t.Errorf("the run's jobs ended %v, want %d of them", jobs, len(want.Jobs))
-			}
-			for name, w := range want.Jobs {
-				if jobs[name] != w.Outcome {
-					t.Errorf("the job %s ended %q, want %s", name, jobs[name], w.Outcome)
-				}
-				for _, l := range w.Logs {
-					part := "step"
-					if l.Cleanup {
-						part = "cleanup"
-					}
-					step := l.Step
-					log := runLogName(name, attempts[name], part, &step, l.Try)
-					if logs[log] != l.Text || !ended[log] {
-						t.Errorf("the log %s is %q, ended %v; want %q: it has %v", log, logs[log], ended[log], l.Text, slices.Sorted(maps.Keys(logs)))
-					}
-				}
-			}
+			checkRunLines(t, lines, lines[0].Run, nil, "the run", *want)
 		})
+	}
+}
+
+// checkRunLines checks what lines, meridian run's, say of the run id, what,
+// which the steps' tries callers called, from the run meridian run ran
+// down: that it ended as want says, and its jobs, their logs, and the runs
+// their steps called, in turn, each line of which says which steps' tries
+// called it.
+func checkRunLines(t *testing.T, lines []runLine, id string, callers []lineCaller, what string, want conformance.RunEnd) {
+	t.Helper()
+	var outcome string
+	jobs := map[string]string{}
+	attempts := map[string]int{}
+	logs := map[string]string{}
+	ended := map[string]bool{}
+	called := map[string]runLine{}
+	for _, l := range lines {
+		if l.Run != id {
+			continue
+		}
+		if !slices.Equal(l.Callers, callers) {
+			t.Errorf("a line of %s says it was called by %+v, want %+v: %+v", what, l.Callers, callers, l)
+		}
+		switch l.Kind {
+		case "run.finished":
+			outcome = l.Outcome
+		case "job.finished":
+			jobs[l.Job] = l.Outcome
+		case "job.running":
+			attempts[l.Job] = max(attempts[l.Job], l.Attempt)
+		case "child.created":
+			called[fmt.Sprintf("%s %d.%d", l.Job, *l.Step, l.Try)] = l
+		case "log":
+			name := runLogName(l.Job, l.Attempt, l.Part, l.Step, l.Try)
+			logs[name] += l.Text
+			if l.Ended {
+				ended[name] = true
+			}
+			if l.Cut {
+				t.Errorf("%s's log %s was cut short", what, name)
+			}
+		}
+	}
+	if outcome != want.Outcome {
+		t.Errorf("%s ended %q, want %s", what, outcome, want.Outcome)
+	}
+	if len(jobs) != len(want.Jobs) {
+		t.Errorf("%s's jobs ended %v, want %d of them", what, jobs, len(want.Jobs))
+	}
+	calls := 0
+	for name, w := range want.Jobs {
+		if jobs[name] != w.Outcome {
+			t.Errorf("%s's job %s ended %q, want %s", what, name, jobs[name], w.Outcome)
+		}
+		for _, l := range w.Logs {
+			part := "step"
+			if l.Cleanup {
+				part = "cleanup"
+			}
+			step := l.Step
+			log := runLogName(name, attempts[name], part, &step, l.Try)
+			if logs[log] != l.Text || !ended[log] {
+				t.Errorf("%s's log %s is %q, ended %v; want %q: it has %v", what, log, logs[log], ended[log], l.Text, slices.Sorted(maps.Keys(logs)))
+			}
+		}
+		for _, call := range w.Calls {
+			created, ok := called[fmt.Sprintf("%s %d.%d", name, call.Step, call.Try)]
+			if !ok {
+				t.Errorf("%s's job %s's step %d's try %d called no run: it called %v", what, name, call.Step, call.Try, slices.Sorted(maps.Keys(called)))
+				continue
+			}
+			calls++
+			if created.Attempt != attempts[name] {
+				t.Errorf("%s's job %s's attempt %d called a run, not its last, %d", what, name, created.Attempt, attempts[name])
+			}
+			under := append(slices.Clip(callers), lineCaller{Run: id, Job: name, Attempt: created.Attempt, Step: call.Step, Try: call.Try})
+			checkRunLines(t, lines, created.Child, under, fmt.Sprintf("the run %s's job %s's step %d called", what, name, call.Step), call.Run)
+		}
+	}
+	if calls != len(called) {
+		t.Errorf("%s's steps called %d runs, of which the case names %d", what, len(called), calls)
 	}
 }
 

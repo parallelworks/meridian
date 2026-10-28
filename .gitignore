@@ -1,6 +1,8 @@
 # Go
 coverage.out
 *.test
+# A go build of ./cmd/meridian at the root, without -o.
+/meridian
 
 # Editors / OS
 .DS_Store

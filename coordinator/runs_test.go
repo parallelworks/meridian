@@ -31,7 +31,8 @@ import (
 // from its start to its end, in process: the coordinator stores the run,
 // starts it, and places each job's attempt with workerDriver, whose worker
 // is meridian's, which runs the job's steps on this host and reports to
-// the coordinator's server of the worker API on a Unix socket.
+// the coordinator's server of the worker API on a Unix socket; and checks
+// how the run ends, and the runs its steps called, in turn.
 func TestRunsConformance(t *testing.T) {
 	t.Parallel()
 	cases, err := conformance.Cases("runs")
@@ -49,51 +50,101 @@ func TestRunsConformance(t *testing.T) {
 				t.Fatal("the case says nothing of how the run ends")
 			}
 			r, id := runCase(t, cs)
-			c, logs := r.c, r.logs
-			run := storedRun(t, c, id)
-			if string(run.Outcome) != want.Outcome {
-				t.Errorf("the run ended with %s, want %s", run.Outcome, want.Outcome)
-			}
-			var jobs []*store.Job
-			if err := c.store.View(t.Context(), func(tx *store.Tx) error {
-				var err error
-				jobs, err = tx.Jobs(id)
-				return err
-			}); err != nil {
-				t.Fatal(err)
-			}
-			if len(jobs) != len(want.Jobs) {
-				t.Errorf("the run has %d jobs, want %d", len(jobs), len(want.Jobs))
-			}
-			if slices.ContainsFunc(jobs, func(j *store.Job) bool { return j.Attempts > 0 }) && r.claims.Load() == 0 {
-				t.Error("no job placed was checked against its claim")
-			}
-			for _, j := range jobs {
-				w, ok := want.Jobs[j.Key]
-				switch {
-				case !ok:
-					t.Errorf("the run has the job %s, which the case doesn't", j.Key)
-					continue
-				case string(j.Outcome) != w.Outcome:
-					t.Errorf("the job %s ended with %s, want %s (%v)", j.Key, j.Outcome, w.Outcome, j.Diagnostics)
-				}
-				got := logs.Of(id, j.Key, j.Attempts)
-				for _, l := range w.Logs {
-					key := workerapitest.LogKey{Part: workerapi.LogStep, Step: l.Step, Try: l.Try}
-					if l.Cleanup {
-						key.Part = workerapi.LogCleanup
-					}
-					log, ok := got[key]
-					switch {
-					case !ok:
-						t.Errorf("the job %s has no log %+v: it has %v", j.Name, key, logKeys(got))
-					case string(log.Data) != l.Text || !log.Ended:
-						t.Errorf("the job %s's log %+v is %q, ended %v; want %q", j.Name, key, log.Data, log.Ended, l.Text)
-					}
-				}
-			}
+			checkRunEnd(t, r, id, "the run", *want)
 		})
 	}
+}
+
+// checkRunEnd checks that the run id, what, of r, ended as want says, and
+// its jobs, their logs, and the runs their steps called, in turn.
+func checkRunEnd(t *testing.T, r *workerRig, id, what string, want conformance.RunEnd) {
+	t.Helper()
+	c, logs := r.c, r.logs
+	run := storedRun(t, c, id)
+	if string(run.Outcome) != want.Outcome {
+		t.Errorf("%s ended with %s, want %s", what, run.Outcome, want.Outcome)
+	}
+	var jobs []*store.Job
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		jobs, err = tx.Jobs(id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != len(want.Jobs) {
+		t.Errorf("%s has %d jobs, want %d", what, len(jobs), len(want.Jobs))
+	}
+	if slices.ContainsFunc(jobs, func(j *store.Job) bool { return j.Attempts > 0 }) && r.claims.Load() == 0 {
+		t.Error("no job placed was checked against its claim")
+	}
+	children, err := c.Children(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	for _, j := range jobs {
+		w, ok := want.Jobs[j.Key]
+		switch {
+		case !ok:
+			t.Errorf("%s has the job %s, which the case doesn't", what, j.Key)
+			continue
+		case string(j.Outcome) != w.Outcome:
+			t.Errorf("%s's job %s ended with %s, want %s (%v)", what, j.Key, j.Outcome, w.Outcome, j.Diagnostics)
+		}
+		got := logs.Of(id, j.Key, j.Attempts)
+		for _, l := range w.Logs {
+			key := workerapitest.LogKey{Part: workerapi.LogStep, Step: l.Step, Try: l.Try}
+			if l.Cleanup {
+				key.Part = workerapi.LogCleanup
+			}
+			log, ok := got[key]
+			switch {
+			case !ok:
+				t.Errorf("%s's job %s has no log %+v: it has %v", what, j.Name, key, logKeys(got))
+			case string(log.Data) != l.Text || !log.Ended:
+				t.Errorf("%s's job %s's log %+v is %q, ended %v; want %q", what, j.Name, key, log.Data, log.Ended, l.Text)
+			}
+		}
+		if len(w.Calls) == 0 {
+			continue
+		}
+		a := latestAttempt(t, c, id, j.Key)
+		for _, call := range w.Calls {
+			i := slices.IndexFunc(children, func(ch RunStatus) bool {
+				p := ch.Parent
+				return p.Job == j.Key && p.Step == call.Step && p.Try == call.Try && p.Run == id
+			})
+			if i < 0 {
+				t.Errorf("%s's job %s's step %d's try %d called no run", what, j.Key, call.Step, call.Try)
+				continue
+			}
+			calls++
+			child := children[i]
+			if child.Root == "" || child.State != RunEnded {
+				t.Errorf("the run step %d of %s's job %s called is %+v", call.Step, what, j.Key, child)
+			}
+			if got, err := latestChild(t, c, a.ID, call.Step, call.Try); err != nil || got != child.ID {
+				t.Errorf("the job's last attempt's step %d's try %d called %q, %v, want %s", call.Step, call.Try, got, err, child.ID)
+			}
+			checkRunEnd(t, r, child.ID, fmt.Sprintf("the run %s's job %s's step %d called", what, j.Key, call.Step), call.Run)
+		}
+	}
+	if calls != len(children) {
+		t.Errorf("%s's steps called %d runs, of which the case names %d", what, len(children), calls)
+	}
+}
+
+// latestChild returns the child the step's try of the attempt called.
+func latestChild(t *testing.T, c *Coordinator, attempt string, step, try int) (string, error) {
+	t.Helper()
+	var id string
+	err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		id, err = tx.Child(attempt, step, try)
+		return err
+	})
+	return id, err
 }
 
 // logKeys returns which logs logs holds.

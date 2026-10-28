@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -51,13 +52,30 @@ type FollowOptions struct {
 	// whether or not the run has ended, without holding a step's end back
 	// for its log.
 	Stored bool
+	// Tree has Follow report the runs the run's steps call too, as it
+	// reports the run, each from its child.created on, and the runs their
+	// steps call, at any depth: each event and log of one says which step's
+	// try called it (Event.Callers, LogPart.Callers).
+	Tree bool
+}
+
+// A Caller is the try of a step that called a child run: the run whose
+// step it is, the key of the step's job, the number of the attempt that ran
+// the step, from 1, the step's index in its job, and its try, from 0.
+type Caller struct {
+	Run, Job           string
+	Attempt, Step, Try int
 }
 
 // A LogPart is part of one of a run's logs, as Follow reads it: its next
 // bytes, in order, as its worker uploaded them, with each secret masked.
 type LogPart struct {
-	Key  LogKey
-	Data []byte
+	Key LogKey
+	// Callers are the tries of the steps that called the run the log is
+	// of, from the run Follow follows down, for one its steps called, at
+	// any depth (FollowOptions.Tree), or none for the run's own.
+	Callers []Caller
+	Data    []byte
 	// Ended is set on a log's last part, once the log has ended; Cut
 	// instead, once the run has ended, when the log's attempt ended before
 	// the log did, as one whose worker was lost does: nothing more of it is
@@ -78,6 +96,12 @@ type LogPart struct {
 // events: then it is reported, and the log followed on. A run the store
 // doesn't have is ErrRunNotFound.
 //
+// With opts.Tree, it reports the runs the run's steps call as it reports
+// the run, each as it reports a run, from its child.created on, and each
+// event and log of one with the steps that called it (Caller); the run's
+// end, once theirs are reported, which come before it, as a root ends
+// after the runs of its tree.
+//
 // Follow reads the run's events again as soon as a transaction of this
 // process's adds one, and every so often for those another process adds,
 // and for the logs, which aren't in the store. An error from opts.Event or
@@ -89,76 +113,23 @@ func (c *Coordinator) Follow(ctx context.Context, id string, opts FollowOptions)
 	case (opts.Logs == nil) != (opts.Log == nil):
 		return nil, errors.New("coordinator: Follow with Logs but no Log to report them to, or the other way round")
 	}
-	f := &follower{c: c, run: id, opts: opts, ended: map[attemptKey]bool{}}
+	f := c.newFollower(id, nil, opts)
 	tick := time.NewTicker(c.followEvery)
 	defer tick.Stop()
-	var after int64
 	for {
 		// Taken before the events are read, so that one added after the
 		// read wakes the wait below.
 		changed := c.store.Changes()
-		var (
-			events []store.RunEvent
-			run    *store.Run
-			now    time.Time
-		)
-		err := c.store.View(ctx, func(tx *store.Tx) error {
-			var err error
-			if events, err = tx.RunEvents(id, after, followEvents); err != nil {
-				return err
-			}
-			if len(events) > 0 {
-				now, err = tx.Now()
-				return err
-			}
-			run, err = tx.Run(id)
-			return err
-		})
-		readAt := time.Now()
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, ErrRunNotFound
-		}
+		read, err := f.poll(ctx, true)
 		if err != nil {
 			return nil, err
 		}
-		for _, e := range events {
-			after = e.Seq
-			if e.Kind == store.EventRunFinished {
-				return f.end(ctx, eventOf(id, e))
-			}
-			// Held, if it is a step's end, until so long after it was
-			// stored, by the store's clock, which was now as the events
-			// were read.
-			until := readAt.Add(c.followHold - now.Sub(e.At))
-			if opts.Stored {
-				until = time.Time{}
-			}
-			if err := f.event(ctx, eventOf(id, e), until); err != nil {
-				return nil, err
-			}
+		if f.done || opts.Stored && !read {
+			// Every event stored is reported, and the logs, as far as they
+			// are stored.
+			return c.Status(ctx, id)
 		}
-		if len(events) == 0 && run.State == store.RunEnded {
-			// A run that ended before its events were kept.
-			return f.end(ctx, Event{Kind: RunFinished, Run: id, Time: run.EndedAt, Outcome: run.Outcome, Reason: run.Reason, Diagnostics: run.Diagnostics})
-		}
-		if opts.Stored && len(events) < followEvents {
-			// Every event stored is reported: the logs are, as far as
-			// they are stored.
-			for {
-				read, err := f.readLogs(ctx, nil)
-				if err != nil {
-					return nil, err
-				}
-				if !read {
-					return c.Status(ctx, id)
-				}
-			}
-		}
-		read, err := f.readLogs(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		if len(events) == followEvents || read {
+		if read {
 			continue
 		}
 		select {
@@ -170,14 +141,128 @@ func (c *Coordinator) Follow(ctx context.Context, id string, opts FollowOptions)
 	}
 }
 
-// A follower is what Follow keeps of a run as it follows it: the logs it
-// follows, in the order it began to, and the attempts that have ended.
+// newFollower returns a follower of the run id, which the steps' tries
+// callers called, from the run Follow follows down, or none for that run.
+func (c *Coordinator) newFollower(id string, callers []Caller, opts FollowOptions) *follower {
+	return &follower{c: c, run: id, callers: callers, opts: opts, ended: map[attemptKey]bool{}}
+}
+
+// poll reports what is stored of the follower's run past what it
+// reported, as Follow says: its next events, and its logs' next bytes; and
+// of the runs its steps called that it follows (FollowOptions.Tree). It
+// reports whether it read any, and has done with the run once it has
+// reported its end (done). top is set for the run Follow follows, whose
+// end it reports after the ends of the runs of its tree.
+func (f *follower) poll(ctx context.Context, top bool) (bool, error) {
+	read := false
+	if !f.done {
+		var (
+			events []store.RunEvent
+			run    *store.Run
+			now    time.Time
+		)
+		err := f.c.store.View(ctx, func(tx *store.Tx) error {
+			var err error
+			if events, err = tx.RunEvents(f.run, f.after, followEvents); err != nil {
+				return err
+			}
+			if len(events) > 0 {
+				now, err = tx.Now()
+				return err
+			}
+			run, err = tx.Run(f.run)
+			return err
+		})
+		readAt := time.Now()
+		switch {
+		case top && errors.Is(err, store.ErrNotFound):
+			return false, ErrRunNotFound
+		case err != nil && !top:
+			// The run a step called, not the one Follow follows.
+			return false, fmt.Errorf("coordinator: run %s, which a step of run %s called: %w", f.run, f.callers[len(f.callers)-1].Run, err)
+		case err != nil:
+			return false, err
+		}
+		for _, e := range events {
+			f.after = e.Seq
+			ev := eventOf(f.run, e)
+			ev.Callers = f.callers
+			if e.Kind == store.EventRunFinished {
+				return true, f.end(ctx, ev, top)
+			}
+			// Held, if it is a step's end, until so long after it was
+			// stored, by the store's clock, which was now as the events
+			// were read.
+			until := readAt.Add(f.c.followHold - now.Sub(e.At))
+			if f.opts.Stored {
+				until = time.Time{}
+			}
+			if err := f.event(ctx, ev, until); err != nil {
+				return false, err
+			}
+			if f.opts.Tree && e.Kind == store.EventChildCreated {
+				callers := append(slices.Clip(f.callers), Caller{Run: f.run, Job: ev.Job, Attempt: ev.Attempt, Step: ev.Step, Try: ev.Try})
+				f.children = append(f.children, f.c.newFollower(ev.Child, callers, f.opts))
+			}
+		}
+		if len(events) == 0 && run.State == store.RunEnded {
+			// A run that ended before its events were kept.
+			return true, f.end(ctx, Event{
+				Kind: RunFinished, Run: f.run, Callers: f.callers, Time: run.EndedAt, Outcome: run.Outcome, Reason: run.Reason, Diagnostics: run.Diagnostics,
+			}, top)
+		}
+		logs, err := f.readLogs(ctx, nil)
+		if err != nil {
+			return false, err
+		}
+		read = len(events) > 0 || logs
+	}
+	children, err := f.pollChildren(ctx)
+	return read || children, err
+}
+
+// pollChildren polls the followers of the runs the follower's run's steps
+// called, and stops following those that have done with their run, and
+// with the runs its steps called (finished). It reports whether any read.
+func (f *follower) pollChildren(ctx context.Context) (bool, error) {
+	read := false
+	kept := f.children[:0]
+	for _, child := range f.children {
+		r, err := child.poll(ctx, false)
+		if err != nil {
+			return read, err
+		}
+		read = read || r
+		if !child.finished() {
+			kept = append(kept, child)
+		}
+	}
+	clear(f.children[len(kept):])
+	f.children = kept
+	return read, nil
+}
+
+// finished reports whether the follower has done with its run, and with
+// the runs its steps called.
+func (f *follower) finished() bool {
+	return f.done && len(f.children) == 0
+}
+
+// A follower is what Follow keeps of a run as it follows it: the steps'
+// tries that called it, from the run Follow follows down; the last of its
+// events it reported, and whether it has reported its end; the logs it
+// follows, in the order it began to; the attempts that have ended; and
+// the followers of the runs its steps called (FollowOptions.Tree).
 type follower struct {
-	c     *Coordinator
-	run   string
-	opts  FollowOptions
-	logs  []*followedLog
-	ended map[attemptKey]bool
+	c        *Coordinator
+	run      string
+	callers  []Caller
+	opts     FollowOptions
+	after    int64
+	done     bool
+	logs     []*followedLog
+	ended    map[attemptKey]bool
+	children []*follower
 }
 
 // An attemptKey names one of a run's attempts: its job's key and its
@@ -268,15 +353,34 @@ func (f *follower) hold(ctx context.Context, key LogKey, until time.Time) error 
 }
 
 // end reports the logs that are left, each to its end, or cut short when
-// its attempt ended before it did, and then e, the run's end, and returns
-// how the run ended.
-func (f *follower) end(ctx context.Context, e Event) (*RunStatus, error) {
+// its attempt ended before it did, and then e, the run's end, and has done
+// with the run. For top, the run Follow follows, it first reports the
+// runs of its tree to their ends, which have ended before it: a root's end
+// waits for theirs. With FollowOptions.Stored, it reports only what is
+// stored of them, as of a child's tree whose own children still run.
+func (f *follower) end(ctx context.Context, e Event, top bool) error {
+	switch {
+	case top && f.opts.Stored:
+		for {
+			read, err := f.pollChildren(ctx)
+			if err != nil {
+				return err
+			}
+			if !read {
+				break
+			}
+		}
+	case top:
+		if err := f.drain(ctx); err != nil {
+			return err
+		}
+	}
 	for len(f.logs) > 0 {
 		l := f.logs[0]
 		for {
 			done, read, err := f.readLog(ctx, l, true)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if done || !read {
 				break
@@ -285,9 +389,33 @@ func (f *follower) end(ctx context.Context, e Event) (*RunStatus, error) {
 		f.logs = f.logs[1:]
 	}
 	if err := f.opts.Event(e); err != nil {
-		return nil, err
+		return err
 	}
-	return f.c.Status(ctx, f.run)
+	f.done = true
+	return nil
+}
+
+// drain reports what is left of the runs the follower's run's steps
+// called, and theirs, to their ends, reading them again every so often
+// while one has more to come.
+func (f *follower) drain(ctx context.Context) error {
+	tick := time.NewTicker(f.c.followEvery)
+	defer tick.Stop()
+	for len(f.children) > 0 {
+		read, err := f.pollChildren(ctx)
+		if err != nil || read {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+	return nil
 }
 
 // readLogs reports what is stored of the logs it follows, of those of
@@ -330,16 +458,16 @@ func (f *follower) readLog(ctx context.Context, l *followedLog, last bool) (done
 			read = true
 			l.offset += int64(len(data))
 			reported += len(data)
-			if err := f.opts.Log(LogPart{Key: l.key, Data: data}); err != nil {
+			if err := f.opts.Log(LogPart{Key: l.key, Callers: f.callers, Data: data}); err != nil {
 				return false, read, err
 			}
 			continue
 		}
 		switch {
 		case ended:
-			return true, read, f.opts.Log(LogPart{Key: l.key, Ended: true})
+			return true, read, f.opts.Log(LogPart{Key: l.key, Callers: f.callers, Ended: true})
 		case last && f.ended[attemptKey{l.key.Job, l.key.Attempt}]:
-			return true, read, f.opts.Log(LogPart{Key: l.key, Cut: true})
+			return true, read, f.opts.Log(LogPart{Key: l.key, Callers: f.callers, Cut: true})
 		}
 		return false, read, nil
 	}
@@ -354,6 +482,9 @@ func eventOf(run string, e store.RunEvent) Event {
 	}
 	if e.Group != "" {
 		ev.Member = e.Group + "/" + e.Member
+	}
+	if l := e.Called; l != nil {
+		ev.Child, ev.Step, ev.Try = e.Child, l.Step, l.Try
 	}
 	if s := e.Step; s != nil {
 		ev.Time, ev.Step, ev.Try, ev.Cleanup = s.Time, s.Step, s.Try, s.Cleanup

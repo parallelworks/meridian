@@ -333,8 +333,19 @@ expect:
   ```
 
   A run a step calls is a run of its own, whose jobs aren't among
-  `expect.run.jobs`: a case checks what it does through what its caller's
-  steps read of it, such as a file it leaves in its directory.
+  `expect.run.jobs`. A job's `calls` lists every run its steps called, of
+  its last attempt, each by its `step` and `try`, from 0, with how it ends
+  as `run`, as `expect.run` says how the run ends: its `outcome`, and its
+  `jobs`, with their logs and calls in turn:
+
+  ```yaml
+  calls:
+    - step: 0
+      run:
+        outcome: success
+        jobs:
+          greet: {outcome: success}
+  ```
 
 ## Expressions
 

@@ -63,16 +63,35 @@ type RunStatus struct {
 	// Diagnostics are the run's problems: Start's, and the coordinator's.
 	// Runs gives none.
 	Diagnostics problems.Diagnostics
+	// Parent is the try of the step that called a child run, or nil for a
+	// run no step called; and Root the ID of the run at the top of its
+	// tree. Descendants is how many runs of a root's tree there are below
+	// it, at any depth.
+	Parent      *Caller
+	Root        string
+	Descendants int
 }
 
-// statusOf is the run r's status.
-func statusOf(r *store.Run) *RunStatus {
-	return &RunStatus{
+// statusOf is the run r's status, whose summary is sum.
+func statusOf(r *store.Run, sum *store.RunSummary) *RunStatus {
+	s := summaryStatus(sum)
+	s.Diagnostics = r.Diagnostics
+	return s
+}
+
+// summaryStatus is the status of the run whose summary is r, without its
+// problems.
+func summaryStatus(r *store.RunSummary) *RunStatus {
+	s := &RunStatus{
 		ID: r.ID, State: RunState(r.State), Outcome: r.Outcome, Reason: r.Reason, RunDir: r.RunDir,
 		Name: r.Name, Location: r.Location, PlanVersion: r.PlanVersion,
 		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
-		StoppedAt: r.StoppedAt, StopReason: r.StopReason, Diagnostics: r.Diagnostics,
+		StoppedAt: r.StoppedAt, StopReason: r.StopReason, Descendants: r.Descendants,
 	}
+	if l := r.Parent; l != nil {
+		s.Parent, s.Root = &Caller{Run: l.Run, Job: l.Job, Attempt: r.ParentAttempt, Step: l.Step, Try: l.Try}, l.Root
+	}
+	return s
 }
 
 // Status returns the run id as the store holds it now, or ErrRunNotFound.
@@ -86,34 +105,52 @@ func (c *Coordinator) Status(ctx context.Context, id string) (*RunStatus, error)
 		if err != nil {
 			return err
 		}
-		s = statusOf(r)
+		sum, err := tx.RunSummary(id)
+		if err != nil {
+			return err
+		}
+		s = statusOf(r, sum)
 		return nil
 	})
 	return s, err
 }
 
-// Runs returns the store's last limit runs, the newest first, without
-// their problems.
-func (c *Coordinator) Runs(ctx context.Context, limit int) ([]RunStatus, error) {
+// Runs returns the store's last limit runs that no step called, the newest
+// first, or, with all, of every run, the runs steps called among them,
+// without their problems.
+func (c *Coordinator) Runs(ctx context.Context, limit int, all bool) ([]RunStatus, error) {
 	var runs []store.RunSummary
 	err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
-		runs, err = tx.RecentRuns(limit)
+		runs, err = tx.RecentRuns(limit, all)
 		return err
 	})
-	if err != nil {
-		return nil, err
+	return statuses(runs), err
+}
+
+// Children returns the runs the steps of the run id called, its children,
+// in the order of their IDs, without their problems: ErrRunNotFound for a
+// run the store doesn't have.
+func (c *Coordinator) Children(ctx context.Context, id string) ([]RunStatus, error) {
+	var runs []store.RunSummary
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		runs, err = tx.Children(id)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, ErrRunNotFound
 	}
+	return statuses(runs), err
+}
+
+// statuses are the statuses of the runs whose summaries are runs.
+func statuses(runs []store.RunSummary) []RunStatus {
 	out := make([]RunStatus, len(runs))
-	for i, r := range runs {
-		out[i] = RunStatus{
-			ID: r.ID, State: RunState(r.State), Outcome: r.Outcome, Reason: r.Reason, RunDir: r.RunDir,
-			Name: r.Name, Location: r.Location, PlanVersion: r.PlanVersion,
-			CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
-			StoppedAt: r.StoppedAt, StopReason: r.StopReason,
-		}
+	for i := range runs {
+		out[i] = *summaryStatus(&runs[i])
 	}
-	return out, nil
+	return out
 }
 
 // A JobState is where a job, or a matrix instance, is in its life.

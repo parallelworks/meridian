@@ -2,11 +2,15 @@ description: >-
   A step whose uses: names a workflow runs it as a run of its own, with the
   step's with: as its inputs and the step's environment under its own, in
   subworkflows/<job>/step_<n> under the step's run's directory, where the
-  step's job reads what it left. A step whose run fails fails, as a step
-  that fails does, and the job's steps after it don't run, but one whose
-  if: says so.
+  step's job reads what it left. What the step made from a secret is
+  masked in the run's logs, however short. A step whose run fails fails,
+  as a step that fails does, and the job's steps after it don't run, but
+  one whose if: says so.
 source: Meridian
 repositories: [github/conformance/calls]
+contexts:
+  vars: {token: s3cr3t}
+secret-variables: [token]
 expect:
   run:
     outcome: failure
@@ -16,3 +20,18 @@ expect:
         logs:
           - {step: 1, text: "hello from the caller, as github.conformance.calls, where its caller looks\n"}
           - {step: 4, text: "the call failed\n"}
+        calls:
+          - step: 0
+            run:
+              outcome: success
+              jobs:
+                greet:
+                  outcome: success
+                  logs:
+                    - {step: 0, text: "greeting hello, token ***\n"}
+          - step: 2
+            run:
+              outcome: failure
+              jobs:
+                fails:
+                  outcome: failure

@@ -162,6 +162,19 @@ type JobEnd struct {
 	// is masked: a secret's text, wherever a step prints it, is ***. The
 	// job's other logs aren't checked.
 	Logs []Log `yaml:"logs,omitempty"`
+	// Calls are the runs its steps whose uses: names a workflow called,
+	// each a run of its own: every one of them, of its last attempt.
+	Calls []Call `yaml:"calls,omitempty"`
+}
+
+// A Call is the run a try of a job's step called, and how it ends, as a
+// run does.
+type Call struct {
+	// Step is the step's index, from 0, and Try the try, from 0.
+	Step int `yaml:"step"`
+	Try  int `yaml:"try,omitempty"`
+	// Run is how the run ends: its outcome, and how each of its jobs does.
+	Run RunEnd `yaml:"run"`
 }
 
 // A Log is the log of a try of a job's step, or of its cleanup:, which is
