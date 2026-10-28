@@ -369,7 +369,7 @@ func (a *attempt) setUp() *problem.Problem {
 // other's as it is, as the meridian command makes a root's private.
 func (a *attempt) makeRunDir() error {
 	if tree := a.claim.Tree; tree != nil {
-		if rel, ok := inDir(tree.RootDir, a.claim.RunDir); ok {
+		if rel, ok := plan.InDir(tree.RootDir, a.claim.RunDir); ok {
 			return makeDirIn(tree.RootDir, rel, false)
 		}
 	}
