@@ -663,6 +663,36 @@
       "Escribe la referencia tal cual en el uses: del paso, y el archivo y el servidor en su with:."
     ]
   },
+  "checkout_not_known": {
+    "title": "Repositorio o revisión del checkout que no se conoce al crear la ejecución",
+    "why": "El repo y la branch de un paso parallelworks/checkout se fijan a un commit al crear la ejecución, a través de la interfaz Sources, para que sea el coordinador, y no el worker, quien elija qué se descarga y con qué credenciales, y para que la ejecución y sus repeticiones descarguen el mismo árbol. Por eso ambos deben estar escritos, no leídos de una expresión, como permite el formato 1.",
+    "fix": [
+      "Escribe el repositorio y la branch en el with: del paso.",
+      "Para elegir entre repositorios, da a cada uno un paso propio, con un if:."
+    ]
+  },
+  "checkout_not_found": {
+    "title": "No existe el repositorio o la revisión que descargar",
+    "why": "La interfaz Sources, que fija el repositorio y la branch de un paso parallelworks/checkout a un commit al crear la ejecución, no encontró esa revisión, sin decir por qué.",
+    "fix": [
+      "Comprueba la URL del repositorio, y la branch, la etiqueta o el commit completo que nombra el paso."
+    ]
+  },
+  "checkout_repo_invalid": {
+    "title": "Checkout de un repositorio que Meridian no descarga",
+    "why": "El coordinador descarga el repo de un paso parallelworks/checkout al crear la ejecución, con git y las credenciales de quien la ejecuta, así que Meridian solo acepta una URL https o ssh, o una al estilo de scp, como usuario@host:ruta, en cualquier host, sin credenciales. Otro transporte, como una ruta local, file:// o ext::, haría que el coordinador leyera archivos de su host o ejecutara un comando allí; git:// y http:// no tienen TLS ni SSH, así que nada de lo descargado estaría autenticado; y un usuario y una contraseña, o un token, en la URL pondrían un secreto en el plan, que lee todo el que puede ver la ejecución.",
+    "fix": [
+      "Nombra el repositorio con una URL https:// o ssh://, o como usuario@host:ruta.",
+      "Da a git su credencial a través de su propia configuración, como un credential helper o una clave ssh, en lugar de en la URL."
+    ]
+  },
+  "checkout_path_invalid": {
+    "title": "Entrada de checkout parcial que no es una ruta",
+    "why": "Meridian lee cada entrada del sparse_checkout de un paso parallelworks/checkout como una ruta literal desde la raíz del repositorio, a un archivo o a un directorio, que puede terminar en una barra. Una vacía, que empieza por una barra, que contiene un nombre vacío, . o .., que contiene *, ? o [ de un patrón glob, que empieza por !, que el formato 1 puede leer como un patrón, o que contiene un carácter de control, no lo es.",
+    "fix": [
+      "Nombra cada archivo o directorio que descargar por su ruta desde la raíz del repositorio, sin patrones."
+    ]
+  },
   "expression_failed": {
     "title": "La expresión falló",
     "why": "Una expresión falló de una forma que Meridian no describe. Es un problema de Meridian.",
@@ -2003,6 +2033,13 @@
     "why": "Una ejecución a la que llama un paso tiene un directorio propio, subworkflows/<job>/step_<n> bajo el directorio de trabajo del paso, como en el formato 1. Meridian hace privado el directorio de una ejecución raíz, y el directorio de una hija dentro de él es privado con él; uno en otro sitio no lo sería, y Meridian aún no crea uno allí.",
     "fix": [
       "Da al paso un working-directory: dentro del directorio de la ejecución, o ninguno."
+    ]
+  },
+  "child_not_created": {
+    "title": "Ejecución del flujo de trabajo llamado no creada",
+    "why": "Un paso cuyo uses: nombra un flujo de trabajo lo ejecuta como una ejecución propia, que el coordinador crea a partir del with: del paso cuando el paso se ejecuta, como hace el formato 1. Crearla falló, por ejemplo por una entrada obligatoria que el with: no da, así que el paso falla, con los problemas de la ejecución después de este.",
+    "fix": [
+      "Corrige los problemas que siguen, en el with: del paso o en el flujo de trabajo al que llama."
     ]
   },
   "owner_unmapped": {

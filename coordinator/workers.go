@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // ServeWorkers serves the worker API to the workers of the attempts the
@@ -25,10 +27,11 @@ func (c *Coordinator) ServeWorkers(ctx context.Context, l net.Listener, logs Log
 	}
 	srv, err := workerapisrv.New(workerapisrv.Options{
 		Store: c.store, Logs: logs, Sealer: c.sealer,
-		Readier: claimReadier{c},
-		Actions: actions{c},
-		Wake:    c.wakeWorkerJob,
-		Log:     c.log,
+		Readier:  claimReadier{c},
+		Actions:  actions{c},
+		Children: childAPI{c},
+		Wake:     c.wakeWorkerJob,
+		Log:      c.log,
 	})
 	if err != nil {
 		return err
@@ -107,7 +110,64 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	case res.Job == nil:
 		return nil, fmt.Errorf("coordinator: run %s's job %q readies again as no job to run", run.ID, a.Job)
 	}
-	return &workerapisrv.Ready{Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs)}, nil
+	tree, err := r.tree(ctx, run, p)
+	if err != nil {
+		return nil, err
+	}
+	return &workerapisrv.Ready{Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs), Tree: tree}, nil
+}
+
+// tree returns what an attempt of the child run run, of the plan p, has of
+// its tree (workerapi.Tree): its root's identity, format 1's name for the
+// call, and the strings the worker of the step that called it masked,
+// from its secret record (plan.Inherited.Masked); or nil for a run no step
+// called.
+func (r claimReadier) tree(ctx context.Context, run *store.Run, p *plan.Plan) (*workerapi.Tree, error) {
+	if run.Parent == nil {
+		return nil, nil
+	}
+	c := r.c
+	var root *store.Run
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		root, err = tx.Run(run.Parent.Root)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	rec, err := c.openRecord(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	tree := &workerapi.Tree{JobID: root.ID, RootDir: root.RunDir, WorkflowName: p.Run.Source.Ref.CallName()}
+	if rec.Inherited != nil {
+		tree.Masked = rec.Inherited.Masked
+	}
+	return tree, nil
+}
+
+// Needs returns the oldest version of the worker API that has all the
+// attempt's job uses: workerapi.Version3, of child runs, for a job of a
+// child run, whose claim says what it has of its tree, and for one with a
+// step whose uses: names a workflow, which asks for its child; and 1 for
+// any other.
+func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attempt) (int, error) {
+	if run.Parent != nil {
+		return workerapi.Version3, nil
+	}
+	p, err := r.c.plans.get(run)
+	if err != nil {
+		return 0, err
+	}
+	name, _, _ := strings.Cut(a.Job, "#")
+	if j := p.Job(name); j != nil {
+		for _, s := range j.Steps {
+			if s.Source != nil {
+				return workerapi.Version3, nil
+			}
+		}
+	}
+	return 1, nil
 }
 
 // Steps returns how many steps the attempt's job has, as the plan says.

@@ -83,7 +83,7 @@ func TestRunEvents(t *testing.T) {
 				return err
 			}
 		}
-		if err := tx.EndAttempt(b.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeSuccess, CompleteDigest: make([]byte, 32)}); err != nil {
+		if err := tx.EndAttempt(b.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeSuccess}); err != nil {
 			return err
 		}
 		if err := tx.EndJob(id, "build", JobEnd{Result: plan.JobResult{Outcome: plan.OutcomeSuccess}}); err != nil {

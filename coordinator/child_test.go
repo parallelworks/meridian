@@ -45,6 +45,14 @@ func (s childSources) Read(_ context.Context, source plan.Source) (*compile.Work
 	return s.workflow(source.Ref)
 }
 
+// Pin pins every checkout to childCommit.
+func (s childSources) Pin(context.Context, string, string) (string, error) {
+	return childCommit, nil
+}
+
+// childCommit is the commit childSources pins every checkout to.
+const childCommit = "fedcba9876543210fedcba9876543210fedcba98"
+
 // closingVariables are a test's variables, which refuse to be read once
 // closed: a child run reads its root's, never these.
 type closingVariables struct {
@@ -60,7 +68,8 @@ func (v *closingVariables) Read(ctx context.Context, names []string, secrets boo
 }
 
 // treeSources are the workflows of a tree: a child that reads a variable
-// its root doesn't, in its env: and its step, and calls a grandchild.
+// its root doesn't, in its env: and its step, calls a grandchild, and
+// checks out a repository.
 var treeSources = childSources{
 	"github/t/child@main": `on:
   execute:
@@ -74,13 +83,16 @@ jobs:
       - run: echo ${{ vars.CHILD_VAR }}
       - uses: github/t/grand@main
         with: {$yaml: w.yaml}
+      - uses: parallelworks/checkout
+        with: {repo: https://example.com/app.git, branch: main}
 `,
 	"github/t/grand@main": "jobs:\n  g:\n    steps:\n      - run: echo grand\n",
 }
 
 // treeRoot is the root of the tree: its job build's first step calls the
 // child, tried again 20 times at most; and its third does too, and
-// outlives its run's stop.
+// outlives its run's stop; and its fourth does too, and stops once a job
+// of its run has failed.
 const treeRoot = `jobs:
   build:
     steps:
@@ -92,6 +104,9 @@ const treeRoot = `jobs:
         if: always()
         with: {$yaml: w.yaml, region: east}
         retry: {max-retries: 20}
+      - uses: github/t/child@main
+        early-cancel: any-job-failed
+        with: {$yaml: w.yaml, region: east}
 `
 
 // createTree creates a run of treeRoot, as the meridian command does, with
@@ -116,7 +131,8 @@ func createTree(t *testing.T, c *Coordinator, vars compile.Variables) (string, *
 // root's Start reads the variables of its whole tree once, and the child's
 // Create and Start read them from the root's secret record, never from the
 // coordinator's Variables; that the child's own steps are pinned as the
-// root pinned them, and its remote context is its pin's; and that the root
+// root pinned them, its checkout among them, and its remote context is
+// its pin's; and that the root
 // doesn't end before the child, which wakes it as it ends.
 func TestCreateChild(t *testing.T) {
 	parallel(t)
@@ -176,6 +192,10 @@ func TestCreateChild(t *testing.T) {
 	grand, ok := rootPlan.FindCall(pin.Digest, "/jobs/main/steps/1")
 	if s := p.Jobs[0].Steps[1].Source; !ok || s == nil || s.Digest != grand.Digest {
 		t.Errorf("the child's step is pinned to %+v, want the root's pin %+v", s, grand)
+	}
+	checkout, ok := rootPlan.FindCheckout(pin.Digest, "/jobs/main/steps/2")
+	if co := p.Jobs[0].Steps[2].Checkout; !ok || co == nil || *co != checkout || co.Commit != childCommit {
+		t.Errorf("the child's checkout is pinned to %+v, want the root's pin %+v", co, checkout)
 	}
 	// The child starts with the root's variables.
 	waitFor(t, func() bool { return storedRun(t, c, child).StartState != nil })
@@ -247,7 +267,7 @@ func TestCreateChildRefuses(t *testing.T) {
 	}
 	for name, req := range map[string]ChildRequest{
 		"a step that calls no workflow": {Attempt: attempt.ID, Step: 1},
-		"a step the job hasn't":         {Attempt: attempt.ID, Step: 3},
+		"a step the job hasn't":         {Attempt: attempt.ID, Step: 4},
 		"a try past the step's retry:":  {Attempt: attempt.ID, Step: 0, Try: 21, With: with},
 		"no attempt":                    {Attempt: "0123", Step: 0},
 	} {

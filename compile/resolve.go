@@ -172,9 +172,12 @@ func variableReads(doc *format.Document) []string {
 // which pins it in the step (plan.Step.Source), and loads and validates
 // it; and then the workflows those call, down the tree (walkCalls), whose
 // pins the plan holds (plan.Plan.Calls), with the variables they read
-// (plan.Run.TreeVariables). A child run's steps' workflows are those its
-// root pinned (pinFromRoot). What needs a resolver that isn't there is
-// resolver_missing. It returns an error, a resolver's that couldn't
+// (plan.Run.TreeVariables); and each parallelworks/checkout step's
+// repository and revision, of the run's own steps (plan.Step.Checkout)
+// and of the tree's (plan.Plan.Checkouts), with Sources, to a commit
+// (pinCheckout). A child run's steps' workflows and checkouts are those
+// its root pinned (pinFromRoot). What needs a resolver that isn't there
+// is resolver_missing. It returns an error, a resolver's that couldn't
 // answer, or ctx's.
 func (c *compiler) checkResolved(ctx context.Context, p *plan.Plan) error {
 	asked := map[string]error{}
@@ -194,8 +197,15 @@ func (c *compiler) checkResolved(ctx context.Context, p *plan.Plan) error {
 	}
 	var first []node
 	for i := range p.Jobs {
-		for k := range p.Jobs[i].Steps {
-			n, err := c.pinSource(ctx, t, root, &p.Jobs[i].Steps[k])
+		j := &p.Jobs[i]
+		for k := range j.Steps {
+			if j.Steps[k].Uses == plan.CheckoutUses {
+				if err := c.pinOwnCheckout(ctx, t, &j.Steps[k]); err != nil {
+					return err
+				}
+				continue
+			}
+			n, err := c.pinSource(ctx, t, root, &j.Steps[k])
 			if err != nil {
 				return err
 			}
@@ -209,6 +219,7 @@ func (c *compiler) checkResolved(ctx context.Context, p *plan.Plan) error {
 	}
 	p.Calls = t.planCalls()
 	p.Run.TreeVariables = t.variables()
+	p.Checkouts = t.planCheckouts()
 	c.texts = t.texts()
 	return ctx.Err()
 }
@@ -219,7 +230,8 @@ func (c *compiler) checkResolved(ctx context.Context, p *plan.Plan) error {
 // JSON Pointer in it, with no resolver: the root's Create checked the
 // whole tree, so a child's checks none of it again. A step whose pin the
 // root doesn't hold, as one of a root a release created that didn't pin
-// its whole tree, is child_not_pinned.
+// its whole tree, is child_not_pinned. So it pins each checkout step
+// (pinCheckoutFromRoot).
 func (c *compiler) pinFromRoot(p *plan.Plan) {
 	for i := range p.Jobs {
 		for k := range p.Jobs[i].Steps {
@@ -230,6 +242,10 @@ func (c *compiler) pinFromRoot(p *plan.Plan) {
 			}
 			step, _ := jsonptr.Lookup(c.doc.Value, loc)
 			stepMap, _ := step.(map[string]any)
+			if s.Uses == plan.CheckoutUses {
+				c.pinCheckoutFromRoot(p, s, loc, stepMap)
+				continue
+			}
 			ref, ok := stepRef(&c.reporter, loc, stepMap)
 			if !ok {
 				continue
@@ -246,6 +262,28 @@ func (c *compiler) pinFromRoot(p *plan.Plan) {
 			s.Source = &source
 		}
 	}
+}
+
+// pinCheckoutFromRoot pins s, a checkout step of a child run's workflow,
+// step at loc, to the commit its root pinned it to (Parent.Checkout). One
+// whose repo or branch is "" has no pin, as a root's own has none then;
+// another that the root holds no pin of, as one of a root a release
+// created that didn't pin checkouts, is child_not_pinned, rather than a
+// step that would check out nothing.
+func (c *compiler) pinCheckoutFromRoot(p *plan.Plan, s *plan.Step, loc []string, step map[string]any) {
+	with, _ := step["with"].(map[string]any)
+	repo, _ := with["repo"].(string)
+	branch, _ := with["branch"].(string)
+	if repo == "" || branch == "" {
+		return
+	}
+	if pin := c.opts.Parent.Checkout; pin != nil {
+		if co, ok := pin(p.Run.Source.Digest, s.Path); ok {
+			s.Checkout = &co
+			return
+		}
+	}
+	c.reportAt(problems.ChildNotPinned, appendPath(loc, "uses"), problems.Params{"uses": plan.CheckoutUses})
 }
 
 // checkRunsOn checks where job's runs-on: runs it, when the workflow
@@ -324,6 +362,20 @@ func refProblemAt(loc []string, k *problems.Kind, params problems.Params) []stri
 		return appendPath(loc, "with", key)
 	}
 	return appendPath(loc, "uses")
+}
+
+// pinOwnCheckout pins s, a checkout step of the run's own workflow, as
+// pinCheckout does, in s itself (plan.Step.Checkout).
+func (c *compiler) pinOwnCheckout(ctx context.Context, t *tree, s *plan.Step) error {
+	loc, err := jsonptr.Split(s.Path)
+	if err != nil {
+		return err
+	}
+	step, _ := jsonptr.Lookup(c.doc.Value, loc)
+	stepMap, _ := step.(map[string]any)
+	co, err := c.pinCheckout(ctx, t, &c.reporter, loc, stepMap)
+	s.Checkout = co
+	return err
 }
 
 // pinSource pins, in the step s of the run's own workflow, the workflow

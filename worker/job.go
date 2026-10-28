@@ -36,6 +36,17 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 			a.secrets = append(a.secrets, v.Value)
 		}
 	}
+	// So are, for a child run's job, the strings the worker of the step
+	// that called it masked (workerapi.Tree.Masked), in each phase, so that
+	// one of them, however short, is masked in the job's logs, and an
+	// output that holds one is a secret.
+	if tree := a.claim.Tree; tree != nil {
+		for _, s := range tree.Masked {
+			if s != "" {
+				a.secrets = append(a.secrets, s)
+			}
+		}
+	}
 	a.mask.Add(a.secrets...)
 	problem := a.setUp()
 	if a.halted.fired() {
@@ -1074,8 +1085,10 @@ func (a *attempt) workingDirectory(rs *plan.ReadyStep) string {
 
 // variables returns the variables the worker defines, as format 1 lays
 // them over the environment the workflow gives a step: PW_JOB_ID and
-// PW_PARENT_JOB_DIR for a run of its own, unless the platform gives them;
-// the platform's (workerapi.Claim.Env); and the worker's own over them:
+// PW_PARENT_JOB_DIR for a run of its own, or its root's for a child run
+// (workerapi.Tree), unless the platform gives them; the platform's
+// (workerapi.Claim.Env); and the worker's own over them: a child run's
+// PW_WORKFLOW_NAME, format 1's name for the call that made it,
 // PW_JOB_DIR, PW_MATRIX_INDEX for a matrix instance, and the job's retry
 // counters for a job with a retry:, and, for a step, OUTPUTS, when outputs
 // isn't "", and the step's retry counters, for a try of a step with a
@@ -1084,8 +1097,15 @@ func (a *attempt) workingDirectory(rs *plan.ReadyStep) string {
 // (plan.JobState.Env); a step's process has them all.
 func (a *attempt) variables(outputs string, try *stepTry) map[string]string {
 	env := map[string]string{"PW_JOB_ID": a.claim.RunID, "PW_PARENT_JOB_DIR": a.claim.RunDir}
+	tree := a.claim.Tree
+	if tree != nil {
+		env["PW_JOB_ID"], env["PW_PARENT_JOB_DIR"] = tree.JobID, tree.RootDir
+	}
 	for name, v := range a.claim.Env {
 		env[name] = v.Value
+	}
+	if tree != nil && tree.WorkflowName != "" {
+		env["PW_WORKFLOW_NAME"] = tree.WorkflowName
 	}
 	env["PW_JOB_DIR"] = a.claim.RunDir
 	if k := strings.LastIndexByte(a.job.Key, '#'); k >= 0 && !a.job.Matrix.IsZero() {

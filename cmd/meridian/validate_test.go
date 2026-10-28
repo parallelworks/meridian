@@ -494,8 +494,10 @@ func TestValidateChecksConfig(t *testing.T) {
 		}
 	}
 	// And for a GitLab server's that sources.yaml registers, and one's
-	// that it doesn't, which Git is never asked for.
-	gitConfig := writeFile(t, "gitconfig", "[url \"file://"+filepath.ToSlash(origins)+"/\"]\n\tinsteadOf = https://github.com/\n\tinsteadOf = https://git.example.com/\n\tinsteadOf = https://other.example.com/\n")
+	// that it doesn't, which Git is never asked for. The user's own
+	// configuration may allow the file transport, as this one does, which
+	// Meridian allows only https and ssh of otherwise.
+	gitConfig := writeFile(t, "gitconfig", "[url \"file://"+filepath.ToSlash(origins)+"/\"]\n\tinsteadOf = https://github.com/\n\tinsteadOf = https://git.example.com/\n\tinsteadOf = https://other.example.com/\n[protocol \"file\"]\n\tallow = always\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	git("init", "--quiet", "--initial-branch=main")

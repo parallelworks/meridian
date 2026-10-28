@@ -146,6 +146,13 @@ type Options struct {
 	// once (workerapisrv.Server.Placed); those of other processes read
 	// them again every so often. Nil means nothing is.
 	OnPlacementsRecorded func(ctx context.Context, ids []string)
+	// OnRunsEnded is called once a transaction that ended runs (Tx.EndRun)
+	// has committed, with the transaction's context and the runs' IDs, in
+	// order, so that whoever holds polls for their ends, as children, in
+	// this process answers them at once (workerapisrv.Server.Ended); those
+	// of other processes read them again every second. Nil means nothing
+	// is.
+	OnRunsEnded func(ctx context.Context, ids []string)
 }
 
 // hostClock is the host's clock, which the store reads, unless
@@ -182,6 +189,7 @@ type Store struct {
 	onReset    func(ctx context.Context)
 	onControls func(ctx context.Context, ids []string)
 	onPlaced   func(ctx context.Context, ids []string)
+	onEnded    func(ctx context.Context, ids []string)
 	// migrated is set once Meridian's schema, which keeps the clock's
 	// mark, is there: Open sets it before it returns the store.
 	migrated bool
@@ -300,7 +308,7 @@ func openOnce(ctx context.Context, path string, log *slog.Logger, opts *Options,
 	s.maxLead = DefaultMaxLead
 	if opts != nil {
 		s.lastTry, s.retriesFor, s.clock = opts.LastTry, opts.RetriesFor, opts.Now
-		s.onReset, s.onControls, s.onPlaced = opts.OnClockReset, opts.OnControlsChanged, opts.OnPlacementsRecorded
+		s.onReset, s.onControls, s.onPlaced, s.onEnded = opts.OnClockReset, opts.OnControlsChanged, opts.OnPlacementsRecorded, opts.OnRunsEnded
 		if opts.MaxLead > 0 {
 			s.maxLead = opts.MaxLead
 		}
@@ -417,10 +425,37 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	if err := s.View(ctx, s.readID); err != nil {
 		return err
 	}
+	if err := s.Tx(ctx, func(tx *Tx) error { return tx.eraseDigests() }); err != nil {
+		return err
+	}
 	// A process that ended between a run's end and the checkpoint after it
-	// left the log holding the run's secret record.
+	// left the log holding the run's secret record; and the digests just
+	// erased are in it.
 	s.truncateWAL(ctx)
 	return nil
+}
+
+// noDigest is the digest the store overwrites a plain one with, as a
+// release before kept of an action's request: all zeros.
+const noDigest = "x'0000000000000000000000000000000000000000000000000000000000000000'"
+
+// eraseDigests erases the plain SHA-256 digests that releases before kept
+// of what can hold a secret, against which whoever holds the database
+// could test a guess at it: of attempts' ends, which the store no longer
+// keeps a digest of, and of actions' requests, whose digests it keys now
+// (Action.Keyed). The migration that stopped keeping them erased those
+// there were then; a release before it, still running on the database,
+// goes on writing them, so each process that opens the store erases them
+// again, and so does each run's end. Each finds only the rows that hold
+// one, by an index of them. The store's writes overwrite what they
+// replace with zeros (secure_delete), and the write-ahead log is truncated
+// after.
+func (tx *Tx) eraseDigests() error {
+	if _, err := tx.exec("UPDATE meridian_attempts SET complete_digest = NULL WHERE complete_digest IS NOT NULL"); err != nil {
+		return err
+	}
+	_, err := tx.exec("UPDATE meridian_actions SET digest = " + noDigest + " WHERE keyed = 0 AND digest <> " + noDigest)
+	return err
 }
 
 // checkSchema checks that a store just opened only to read it has
@@ -555,6 +590,9 @@ type Tx struct {
 	// placed are the attempts whose placements the transaction has
 	// recorded (RecordPlacement), in order.
 	placed []string
+	// ended are the runs the transaction ended (EndRun), in order, which
+	// Options.OnRunsEnded is given once it commits.
+	ended []string
 }
 
 // stmt returns the statement of query for the transaction: the store's,
@@ -696,6 +734,9 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 	}
 	if len(tx.placed) > 0 && s.onPlaced != nil {
 		s.onPlaced(context.WithoutCancel(ctx), tx.placed)
+	}
+	if len(tx.ended) > 0 && s.onEnded != nil {
+		s.onEnded(context.WithoutCancel(ctx), tx.ended)
 	}
 	if tx.erased {
 		s.truncateWAL(context.WithoutCancel(ctx))

@@ -81,6 +81,12 @@ type tree struct {
 	// found are the pins of the steps of the workflows the run calls, by
 	// their caller's digest and the step's JSON Pointer (plan.Plan.Calls).
 	found map[callKey]plan.Source
+	// checkouts are the pins of the checkout steps of the workflows the
+	// run calls, by their caller's digest and the step's JSON Pointer
+	// (plan.Plan.Checkouts); checkoutPins what Sources answered of each
+	// repository and revision, asked once for the tree.
+	checkouts    map[callKey]plan.Checkout
+	checkoutPins map[checkoutKey]checkoutAnswer
 	// reported holds what was reported once, of what more than one path
 	// reaches: a cycle, or a step too deep.
 	reported map[string]bool
@@ -96,6 +102,7 @@ func newTree(limits CallLimits) *tree {
 	return &tree{
 		limits: limits.withDefaults(), pins: map[plan.SourceRef]*pin{},
 		found: map[callKey]plan.Source{}, reported: map[string]bool{},
+		checkouts: map[callKey]plan.Checkout{}, checkoutPins: map[checkoutKey]checkoutAnswer{},
 	}
 }
 
@@ -119,7 +126,8 @@ func (n node) depth() int { return len(n.keys) - 1 }
 // walkCalls walks the paths of calls from first, the workflows the run's
 // own steps call, breadth-first: it pins the workflows each one's steps
 // call, as it pinned theirs (pinRef), checks the tree's limits and cycles,
-// and records each step's pin (tree.found). It returns an error, a
+// and records each step's pin (tree.found), and each checkout step's
+// (pinCheckout, tree.checkouts). It returns an error, a
 // resolver's that couldn't answer, or ctx's.
 func (c *compiler) walkCalls(ctx context.Context, t *tree, first []node) error {
 	queue := first
@@ -155,6 +163,16 @@ func (c *compiler) callsOf(ctx context.Context, t *tree, n node) ([]node, error)
 		for i, s := range steps {
 			step, _ := s.(map[string]any)
 			loc := []string{"jobs", name, "steps", strconv.Itoa(i)}
+			if isCheckout(step) {
+				co, err := c.pinCheckout(ctx, t, rep, loc, step)
+				if err != nil {
+					return nil, err
+				}
+				if co != nil {
+					t.checkouts[callKey{n.pin.source.Digest, jsonptr.Format(loc)}] = *co
+				}
+				continue
+			}
 			ref, ok := stepRef(rep, loc, step)
 			if !ok {
 				continue

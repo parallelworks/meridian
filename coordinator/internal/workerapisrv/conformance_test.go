@@ -2,6 +2,7 @@ package workerapisrv_test
 
 import (
 	"cmp"
+	"slices"
 	"testing"
 	"time"
 
@@ -103,5 +104,12 @@ func (tg *target) Stored(t *testing.T, id string) workerapitest.Stored {
 		t.Fatal(err)
 	}
 	s.Complete = end
+	tg.children.mu.Lock()
+	s.ChildStops = slices.Clone(tg.children.stops[id])
+	tg.children.mu.Unlock()
 	return s
+}
+
+func (tg *target) EndChild(t *testing.T, id string, step, try int, outcome plan.Outcome) {
+	tg.children.end(id, step, try, outcome)
 }

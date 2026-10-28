@@ -443,6 +443,22 @@ the SHA-256 hash of its content: 218 files.
   update-session steps name one of their run's own sessions, as
   `${{ sessions.<name> }}`. It is decided, and built with update-session
   ([Built-in actions](#built-in-actions)).
+- **`vars.*` and `org.*` read every variable of their context**, as
+  `inputs.*` reads every input's value: a list of the variables' values, in
+  the order of their names, with the rest of the path read from each, as in
+  `org.*.region`. ACTIVATE read a variable named `*`, which no variable's
+  name can be, and so gave `""` whatever the variables were. A secret
+  variable read so is one of the run's secrets, as one read by its name
+  is, and what an expression makes of it is masked
+  ([Variables and secrets](#variables-and-secrets)). ACTIVATE takes the
+  same fix by reading each variable for a `*`. It masks the text of every
+  secret variable the run has, however it was read, so one read so is
+  masked as one read by its name, and its form leaves `vars.*` to its
+  backend, which has the secret variables' values, when the user has one.
+  None of the 10,080 expressions of the 218 known workflows reads `vars.*`
+  or `org.*`, nor has a `*` in a reference to any context: 19, in 6
+  workflows, read an organization variable by its name, and none reads
+  `vars`.
 
 ## Phases
 
@@ -1475,6 +1491,34 @@ The coordinator encrypts and stores it.
   write that raced another, so the parts, however many a run's jobs and
   attempts make, take nothing from the bound on the data key's nonces
   (`seal.Sealer.SealPart`).
+- **Digests keyed, or none.** The store keeps nothing made from what can
+  hold a secret where it needn't: of an attempt's end, which holds the
+  job's outputs, it keeps no digest ([The worker API](#the-worker-api)).
+  Where it must know a value again, as a request for an action, which
+  holds a step's `with:`, is answered once, it keeps an HMAC-SHA256 of
+  it, never a plain SHA-256, against which whoever holds the store's file
+  could test a guess at a short secret. The HMAC's key is one that
+  HKDF-SHA256 derives from the run's data key, with no salt and the info
+  of the digest's purpose, a versioned label, as
+  `meridian/action-digest/1`, the store's ID, the run's, and the digest's
+  own ID among the run's of that purpose, as an action's attempt, step and
+  try, joined with NUL bytes (`seal.Sealer.Digest`). So the key is never
+  in the store, only the data key wrapped, and every replica derives it
+  again through Keys, after a restart and in `meridian resume` too. It
+  goes with the data key as the run ends, after which no one can check a
+  digest of the run, the coordinator included, and nothing needs to: a
+  request that a digest answers once is one of an attempt that still
+  holds its job. A key of the store's own, which Keys would wrap once,
+  would outlive every run, and so let a copy of the database, with that
+  key, test guesses at what runs long ended held, which the record's
+  erasure is there to prevent. Earlier releases kept plain SHA-256
+  digests of both, of ends and of actions' requests. The store erases
+  them as it is migrated, each time a process opens it, and each time a
+  run ends, so that those an earlier release still running on the
+  database goes on writing don't stay; an index of the rows that hold one
+  keeps each erase to them. An action whose digest an earlier release
+  kept can't be checked, and takes any request for its try as a repeat:
+  the attempt's worker, which alone holds its credential, sends one.
 - **Read in parts.** The coordinator reads it for Start and Ready, and gives
   each attempt, when it is claimed, the values its own job reads
   ([Variables and secrets](#variables-and-secrets)).
@@ -1592,10 +1636,13 @@ sees one version.
   (`Plan.Calls`), the variables the tree reads (`Run.TreeVariables`), each
   pin's remote context (`Source.Remote`), and a child run's link to its
   step (`Run.Parent`), with what its secret record holds of the step
-  (`Record.Inherited`), so a run that calls no workflow is of version 1. A
-  release reads every version up to its own, each by its own schemas,
-  under `plan/schema/<version>/`, and refuses what a later version added
-  in an earlier one's plan (`plan.ErrMalformed`).
+  (`Record.Inherited`); and the pins of `parallelworks/checkout` steps, a
+  run's own (`Step.Checkout`) and its called workflows'
+  (`Plan.Checkouts`). So a run that calls no workflow, and checks out
+  nothing, is of version 1. A release reads every version up to its own,
+  each by its own schemas, under `plan/schema/<version>/`, and refuses
+  what a later version added in an earlier one's plan
+  (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
   version, so a replica tells whether it reads a run without decoding its
   plan. A replica claims only runs whose version it reads, so during a
@@ -2122,10 +2169,11 @@ of a calling step's `with:` and environment that is private
 (`ReadyStep.WithPrivate` and the rest); and the coordinator's creation of
 a step's try's child, linked to it (`CreateChild`), in its directory, in
 its caller's job's group, but not yet on its member, with its root's
-variables, and the root's finisher, which waits for every run of its tree.
-The rest isn't built yet: nothing asks for a child, as the worker API has
-no path for it, and the worker fails a step that uses a workflow
-(`uses_not_supported`).
+variables, and the root's finisher, which waits for every run of its tree;
+and the worker API's paths for a child, served, and what a child's
+attempt's claim has of its tree, which its worker reads. The rest isn't
+built yet: the worker doesn't ask for a child, and fails a step that uses
+a workflow (`uses_not_supported`).
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2195,22 +2243,24 @@ no path for it, and the worker fails a step that uses a workflow
   Create fails, as for an input that a `with:` made of expressions leaves
   out, fails its step (`child_not_created`), with the child's problems,
   masked as the step's are.
-- **Its environment** is its calling step's, as in format 1: the
-  caller's workflow, job and step `env:` and the variables format 1
-  defines, under the child's own `env:`, whose expressions read it, and
-  its own other values, in the order they read each other, and its jobs'
-  and steps' over that, the variables the child's worker defines over all;
-  so a variable the child's worker doesn't define, as `PW_MATRIX_INDEX`
-  for a job that isn't a matrix's, is its caller's. Step names the
-  variables of the step's environment made from a variable or a password,
-  and from a secret (`ReadyStep.EnvPrivate`, `ReadyStep.EnvSecrets`),
-  which the child's plan doesn't hold: its secret record does, and its
-  values name them private, or secrets, as for its inputs. A value of the
-  child's own `env:` that reads its own name, which reads the caller's in
-  format 1, isn't built yet: the child fails as it starts, as one whose
-  values read each other does (`values_read_each_other`); no known
-  workflow has one. The caller's `matrix` values and `app` aren't passed
-  to it.
+- **Its environment** is its calling step's, as in format 1: the caller's
+  workflow, job and step `env:` and the variables format 1 defines, under
+  the child's own `env:`, whose expressions read it, and its own other
+  values, in the order they read each other, and its jobs' and steps' over
+  that, the variables the child's worker defines over all; so a variable
+  the child's worker doesn't define, as `PW_MATRIX_INDEX` for a job that
+  isn't a matrix's, is its caller's, and so are the step's own, as
+  `OUTPUTS`, which the child's worker sets over for each step of its own,
+  and the retry counters, which a step of the child's without a `retry:`
+  reads as its caller's, as in format 1. Step names the variables of the
+  step's environment made from a variable or a password, and from a secret
+  (`ReadyStep.EnvPrivate`, `ReadyStep.EnvSecrets`), which the child's plan
+  doesn't hold: its secret record does, and its values name them private,
+  or secrets, as for its inputs. A value of the child's own `env:` that
+  reads its own name, which reads the caller's in format 1, isn't built
+  yet: the child fails as it starts, as one whose values read each other
+  does (`values_read_each_other`); no known workflow has one. The caller's
+  `matrix` values and `app` aren't passed to it.
 - **Its identity** is its root's, as format 1 gives a child:
   `PW_JOB_ID`, `PW_JOB_NUMBER`, `PW_RUN_SLUG` and `PW_PARENT_NAME` are the
   root run's, and `PW_PARENT_JOB_DIR` is the root's run directory, which
@@ -2374,7 +2424,7 @@ that uses scheduler-agent or wait-for-agent with `action_needs_platform`
 already, and the coordinator does cancel-jobs. Until checkout and
 update-session are built, a step that uses one fails with
 `uses_not_supported`; what this section says of them is decided, and
-built next.
+built next, but for checkout's pins, which are built.
 
 - **checkout.**
   - **Pinned as the run is created.** Create pins each checkout's `repo`
@@ -2385,13 +2435,35 @@ built next.
     does. Both must be written out (`checkout_not_known`), so that the
     coordinator, not the worker, chooses what is fetched, with whose
     credentials. ACTIVATE reads the branch when the step runs. All 148
-    known checkouts write both out.
+    known checkouts write both out. A `repo` or `branch` written out as
+    `""` pins nothing, and the step checks out nothing and succeeds, as
+    format 1's does. The branch is a branch, a tag or a full commit;
+    another revision that format 1's whole checkout takes, as `git
+    checkout` does, such as a short commit or `HEAD~1`, isn't built yet,
+    and fails the run as it is created (`source_revision_not_found`). No
+    known checkout names one. A full commit the copy doesn't hold is
+    fetched by itself, which the server must allow, as Git's protocol
+    version 2 does. The pin is the step's in the plan
+    (`Step.Checkout`), and the pins of the checkouts of the workflows a
+    run calls, down the tree, are its root's (`Plan.Checkouts`), by the
+    digest of their workflow's text and the step's place in it, as calls'
+    are, so that a child run's Create reads them rather than pin them
+    again; each repository and revision is asked once for the tree. A
+    plan that holds a pin is of version 2. A written-out `sparse_checkout`
+    entry is checked as the run is created (below); one an expression
+    gives, as the step runs. The local Sources keeps a copy of each
+    repository by the SHA-256 digest of its URL as the step writes it, and
+    pins a full commit it holds without the network.
   - **Fetched by the coordinator.** Git runs on the coordinator's host,
     through Sources: with the user's own Git configuration, credential
     helpers and SSH agent where `meridian` runs, and a platform's linked
     accounts on a platform; and never prompting. A `repo` is any
-    `https://` or `ssh://` URL, or an scp-like `user@host:path`, on any
-    host, as format 1 takes; a platform's Sources may take fewer. Two are
+    `https://` or `ssh://` URL, or an scp-like `user@host:path`, with an
+    IPv6 address in brackets too, on any host, as format 1 takes; a
+    platform's Sources may take fewer. Whatever URL Git ends up at,
+    through a redirect or the user's `insteadOf`, it fetches only over
+    https and ssh (`protocol.allow`), for `uses:` workflows too, unless
+    the user's own configuration allows another transport by name. Two are
     refused as the run is created (`checkout_repo_invalid`), differences
     from format 1: another transport, as `file://` or `ext::`, so that a
     workflow can't have the coordinator read its host's files, or run a
@@ -3373,24 +3445,33 @@ and a platform that embeds Meridian serve the same API.
   the limit: up to 1 MiB less for each replica that still holds some of
   it when the attempt's uploads stop, and for each time a replica lets go
   what it holds, after ten minutes without an upload.
-- **Child runs:** ask for the child run of a workflow a step's try calls,
-  with the step's `with:` and environment as Step evaluated them, and
-  which parts of them are private or hold a secret, which a repeat answers
-  with the same child; wait for its end, held as a control is, with the
-  outcome its step takes; and stop it, with why
-  ([Workflows a step calls](#workflows-a-step-calls)). These raise the
-  API's own version. They aren't built yet: the worker fails a step that
-  uses a workflow (`uses_not_supported`).
+- **Child runs:** ask for the child run of a workflow a step's try calls
+  (`/v1/child`), with the step's `with:` and environment as Step evaluated
+  them, which parts of them are private or hold a secret, and the strings
+  the worker masks for the step, which a repeat answers with the same
+  child, and a child that wasn't made with why, as `child_not_created`
+  with its own problems; wait for its end (`/v1/child/end`), held as a
+  control is, with how the child run ended; and stop it, with why
+  (`/v1/child/stop`) ([Workflows a step calls](#workflows-a-step-calls)).
+  The coordinator reads which workflow the step calls, and whether it
+  outlives its job's cancellation, from the run's plan, never from the
+  request. A child's attempt's claim says what it has of its tree: its
+  root's ID and directory, the call's name, and the strings its caller's
+  worker masked, which each of its job's phases counts as secrets' own
+  texts. Version 3 adds them. The coordinator serves them, and the worker
+  has the requests, but doesn't make them yet: it fails a step that uses a
+  workflow (`uses_not_supported`).
 - **Actions:** ask the coordinator to do a step's cancel-jobs or
   update-session, from version 3, or for its checkout's tree
   ([Built-in actions](#built-in-actions)). The request has the step's
   `with:` as Step evaluated it, and its answer says how the action ended:
   success or failure, with its problems. The coordinator reads which
   action it is from the plan, never from the request. It does the action
-  once for a step's try, and keeps the answer, with a SHA-256 digest of
-  the whole request, never the `with:` itself, which can hold a secret: a
-  repeat is given the answer, and another request for the same try is
-  fenced. The answers outlive their attempt in the store, which enforces
+  once for a step's try, and keeps the answer, with a keyed digest of the
+  whole request, an HMAC-SHA256 ([The secret record](#the-secret-record)),
+  never the `with:` itself, which can hold a secret, nor a plain digest of
+  it: a repeat is given the answer, and another request for the same try
+  is fenced. The answers outlive their attempt in the store, which enforces
   no foreign keys, so nothing deletes them with it: whatever comes to
   delete attempts, as a retention of runs, deletes their answers too. A
   step whose `if:` doesn't outlive its job's cancellation, as the
@@ -3413,7 +3494,18 @@ and a platform that embeds Meridian serve the same API.
   action only a platform provides (`action_needs_platform`).
 - **Complete:** the job's result, as End gave it: its outcome, its outputs
   and its steps', and which of them are private or hold a secret
-  (`plan.JobResult`).
+  (`plan.JobResult`). The same end again, as a worker sends after a
+  dropped connection, is answered as the first was, and so is any other
+  end of an attempt that completed, which changes nothing: the end stored
+  first is the attempt's. The coordinator keeps nothing made from an end
+  to tell a repeat from another end, since an end can hold a secret, as
+  an output, which a digest of it would let whoever holds the store test
+  a guess at ([The secret record](#the-secret-record)); and it needn't,
+  since the attempt's worker, which alone holds its credential, sends one
+  end. Another coordinator that keeps what tells them apart may fence
+  another end instead, as the conformance suite allows. An end of an
+  attempt that ended otherwise, as withdrawn, lost or superseded, is
+  fenced.
 
 Every write is idempotent and carries a sequence number, so a worker
 retrying after a dropped connection can't apply a report twice. A write
@@ -3464,7 +3556,9 @@ coordinator say to each other.
   version is older before it sends anything of the run
   (`worker_api_too_old`), rather than run the job without that part. The
   attempt fails before its first step, and is placed again, as for
-  `plan_too_new`. Every job so far needs version 1.
+  `plan_too_new`. A job with a step whose `uses:` names a workflow, and
+  every job of a child run, whose claim holds what masks what it inherits,
+  needs version 3; any other, version 1.
 - **What a body carries of a run is the plan's.** The run's values, the
   job Ready evaluated and the results of the jobs it needs are encoded at
   the run's plan version, and a change to one of their types raises the
@@ -4277,7 +4371,9 @@ Meridian's must (`internal/fipsmode`).
   A platform's Keys interface wraps the data keys with its own key
   management, and the local one with AES-256-GCM under a key in a file.
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
-  digests are SHA-256.
+  digests are SHA-256, and a digest of what can hold a secret, as an
+  action's request, is an HMAC-SHA256 under a key that HKDF-SHA256
+  derives from its run's data key ([The secret record](#the-secret-record)).
 - **External tools** that Meridian runs (`git`, container runtimes,
   schedulers) run in processes of their own, outside Meridian's module.
   Their TLS and SSH are the host's cryptography, which a FIPS host

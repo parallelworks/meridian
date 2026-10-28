@@ -152,11 +152,17 @@ type Fake struct {
 	events     []workerapi.Event
 	logs       map[LogKey]*Log
 	end        *workerapi.Complete
-	endBody    []byte
 	control    workerapi.Control
 	heartbeats int
 	requests   map[string]int
 	actions    []Action
+	// children are the child runs of steps' tries, by step and try, and
+	// ended how each that has ended did, by its ID; childAsks are the
+	// requests for them, and childStops their stops, in order.
+	children   map[[2]int]string
+	ended      map[string]workerapi.Child
+	childAsks  []workerapi.ChildRequest
+	childStops []workerapi.ChildStop
 	// changed is closed, and replaced, on each change.
 	changed chan struct{}
 }
@@ -190,6 +196,9 @@ type Stored struct {
 	Events   []workerapi.Event
 	Logs     map[LogKey]Log
 	Complete *workerapi.Complete
+	// ChildStops are the stops of the attempt's steps' child runs, in
+	// order.
+	ChildStops []workerapi.ChildStop
 }
 
 // NewFake returns a Fake that serves an attempt of job, as attempt1 of
@@ -286,6 +295,7 @@ func (f *Fake) Stored() Stored {
 		end := *f.end
 		s.Complete = &end
 	}
+	s.ChildStops = slices.Clone(f.childStops)
 	return s
 }
 
@@ -465,6 +475,9 @@ var routes = map[string]route{
 	workerapi.PathLogs:      {http.MethodPost, 1},
 	workerapi.PathComplete:  {http.MethodPost, 1},
 	workerapi.PathAction:    {http.MethodPost, workerapi.Version3},
+	workerapi.PathChild:     {http.MethodPost, workerapi.Version3},
+	workerapi.PathChildEnd:  {http.MethodGet, workerapi.Version3},
+	workerapi.PathChildStop: {http.MethodPost, workerapi.Version3},
 }
 
 // handle handles a request, and returns the events it stored.
@@ -501,7 +514,7 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 		return nil
 	}
 	// A superseded attempt's writes are refused, and so is every write
-	// once the attempt has ended, but its end again.
+	// once the attempt has ended, but an end, answered as the first was.
 	if r.URL.Path != workerapi.PathControl && (f.superseded || f.end != nil && r.URL.Path != workerapi.PathComplete) {
 		problem.Write(w, problems.Fenced.Problem(nil))
 		return nil
@@ -520,8 +533,126 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request, body []byte) []wor
 		f.handleComplete(w, body)
 	case workerapi.PathAction:
 		f.handleAction(w, body)
+	case workerapi.PathChild:
+		f.handleChild(w, body)
+	case workerapi.PathChildEnd:
+		f.handleChildEnd(w, r)
+	case workerapi.PathChildStop:
+		f.handleChildStop(w, body)
 	}
 	return nil
+}
+
+// handleChild answers the ask for a step's try's child: the one it has,
+// or one made now, child-1 and on.
+func (f *Fake) handleChild(w http.ResponseWriter, body []byte) {
+	var req workerapi.ChildRequest
+	if err := workerapi.UnmarshalAt(f.Claim.APIVersion, body, &req); err != nil {
+		f.unexpected("a child's request the coordinator can't read: %v", err)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	job, err := plan.DecodeReadyJob(f.Claim.PlanVersion, f.Claim.Job)
+	if err != nil || req.Step < 0 || req.Try < 0 || req.Step >= len(job.Steps) {
+		f.unexpected("a request for the child of step %d's try %d, which its job doesn't have", req.Step, req.Try)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	f.childAsks = append(f.childAsks, req)
+	key := [2]int{req.Step, req.Try}
+	if f.children == nil {
+		f.children, f.ended = map[[2]int]string{}, map[string]workerapi.Child{}
+	}
+	id, ok := f.children[key]
+	if !ok {
+		id = "child-" + strconv.Itoa(len(f.children)+1)
+		f.children[key] = id
+	}
+	writeJSON(w, f.Claim.APIVersion, &workerapi.Child{Run: id})
+}
+
+// stepTry reads the step and the try a request names in its query.
+func stepTry(r *http.Request) (int, int, bool) {
+	step, err1 := strconv.Atoi(r.URL.Query().Get(workerapi.QueryStep))
+	try, err2 := strconv.Atoi(r.URL.Query().Get(workerapi.QueryTry))
+	return step, try, err1 == nil && err2 == nil && step >= 0 && try >= 0
+}
+
+// handleChildEnd answers a poll for a step's try's child's end: once it
+// has ended (EndChild), or after ControlHold, as it is.
+func (f *Fake) handleChildEnd(w http.ResponseWriter, r *http.Request) {
+	step, try, ok := stepTry(r)
+	if !ok {
+		f.unexpected("a poll for a child's end without its step and try: %s", r.URL.RawQuery)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	id, ok := f.children[[2]int{step, try}]
+	if !ok {
+		writeStatus(w, http.StatusNotFound)
+		return
+	}
+	timeout := time.After(ControlHold)
+	for {
+		if c, ended := f.ended[id]; ended {
+			writeJSON(w, f.Claim.APIVersion, &c)
+			return
+		}
+		changed := f.changed
+		f.mu.Unlock()
+		done := false
+		select {
+		case <-changed:
+		case <-timeout:
+			done = true
+		case <-r.Context().Done():
+			done = true
+		}
+		f.mu.Lock()
+		if done {
+			writeJSON(w, f.Claim.APIVersion, &workerapi.Child{Run: id})
+			return
+		}
+	}
+}
+
+// handleChildStop stores the stop of a step's try's child.
+func (f *Fake) handleChildStop(w http.ResponseWriter, body []byte) {
+	var stop workerapi.ChildStop
+	if err := workerapi.UnmarshalAt(f.Claim.APIVersion, body, &stop); err != nil || stop.Reason != plan.ReasonCancelled && stop.Reason != plan.ReasonTimeout {
+		f.unexpected("a child's stop the coordinator can't read: %v", err)
+		writeStatus(w, http.StatusBadRequest)
+		return
+	}
+	if _, ok := f.children[[2]int{stop.Step, stop.Try}]; !ok {
+		writeStatus(w, http.StatusNotFound)
+		return
+	}
+	f.childStops = append(f.childStops, stop)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// EndChild ends the child of the step's try, with outcome, as its run
+// ends: its end's poll is answered with it. One it has none of fails the
+// test.
+func (f *Fake) EndChild(step, try int, outcome plan.Outcome) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	defer f.notify()
+	id, ok := f.children[[2]int{step, try}]
+	if !ok {
+		f.t.Errorf("the attempt has no child of step %d's try %d", step, try)
+		return
+	}
+	f.ended[id] = workerapi.Child{Run: id, Ended: true, Outcome: outcome}
+}
+
+// ChildAsks returns the requests for child runs the Fake was sent, in
+// order.
+func (f *Fake) ChildAsks() []workerapi.ChildRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.childAsks)
 }
 
 // steps returns how many steps the attempt's job has, and false if the
@@ -715,12 +846,6 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 		writeStatus(w, http.StatusBadRequest)
 		return
 	}
-	// The end as the API writes it, which a repeat must match.
-	canonical, err := workerapi.Marshal(end)
-	if err != nil {
-		writeStatus(w, http.StatusInternalServerError)
-		return
-	}
 	result := end.Result
 	switch {
 	case result.NeedsFailed || result.Cancelled,
@@ -735,8 +860,10 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 		f.unexpected("a Complete after event %d, of the %d stored", end.Seq, len(f.events))
 		writeStatus(w, http.StatusBadRequest)
 		return
-	case f.end != nil && !bytes.Equal(f.endBody, canonical):
-		problem.Write(w, problems.Fenced.Problem(nil))
+	case f.end != nil:
+		// The end stored first is the attempt's, whatever a later one
+		// holds.
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	for key, l := range f.logs {
@@ -744,7 +871,7 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 			f.unexpected("the attempt completed before its log %v ended", key)
 		}
 	}
-	f.end, f.endBody = end, canonical
+	f.end = end
 	w.WriteHeader(http.StatusNoContent)
 }
 

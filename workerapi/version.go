@@ -24,7 +24,8 @@ var since = map[string]int{
 	"Claim.attempt": 1, "Claim.group": 1, "Claim.member": 1,
 	"Claim.leaseSeconds": 1, "Claim.heartbeatSeconds": 1, "Claim.selfFencing": 1,
 	"Claim.run": 1, "Claim.needs": 1, "Claim.runDir": 1, "Claim.env": 1, "Claim.retry": 1,
-	"Claim.container": 1, "Claim.traceParent": 1, "Claim.control": 2,
+	"Claim.container": 1, "Claim.traceParent": 1, "Claim.control": 2, "Claim.tree": 3,
+	"Tree.jobID": 3, "Tree.rootDir": 3, "Tree.workflowName": 3, "Tree.masked": 3,
 	"EnvVar.value": 1, "EnvVar.secret": 1,
 	"Container.runtime": 1, "Container.image": 1,
 
@@ -44,6 +45,12 @@ var since = map[string]int{
 
 	"ActionRequest.step": 3, "ActionRequest.try": 3, "ActionRequest.with": 3,
 	"ActionAnswer.outcome": 3, "ActionAnswer.reason": 3, "ActionAnswer.diagnostics": 3,
+
+	"ChildRequest.step": 3, "ChildRequest.try": 3, "ChildRequest.with": 3, "ChildRequest.env": 3,
+	"ChildRequest.withPrivate": 3, "ChildRequest.withSecrets": 3, "ChildRequest.envPrivate": 3,
+	"ChildRequest.envSecrets": 3, "ChildRequest.masked": 3, "ChildRequest.workingDirectory": 3,
+	"Child.run": 3, "Child.ended": 3, "Child.outcome": 3, "Child.reason": 3, "Child.diagnostics": 3,
+	"ChildStop.step": 3, "ChildStop.try": 3, "ChildStop.reason": 3,
 }
 
 // CheckVersion returns an error if v, a body of an attempt of version of

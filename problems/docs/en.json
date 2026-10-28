@@ -569,6 +569,32 @@
       "Write the reference out in the step's uses:, and the file and the server in its with:."
     ]
   },
+  "checkout_not_known": {
+    "why": "A parallelworks/checkout step's repo and branch are pinned to a commit as the run is created, through the Sources interface, so that the coordinator, not the worker, chooses what is fetched, with whose credentials, and so that the run and its reruns check out the same tree. So both must be written out, not read from an expression, as format 1 allows.",
+    "fix": [
+      "Write the repository and the branch out in the step's with:.",
+      "To choose among repositories, give each a step of its own, with an if:."
+    ]
+  },
+  "checkout_not_found": {
+    "why": "The Sources interface, which pins a parallelworks/checkout step's repository and branch to a commit as the run is created, found no such revision, without saying why.",
+    "fix": [
+      "Check the repository's URL, and the branch, tag or full commit the step names."
+    ]
+  },
+  "checkout_repo_invalid": {
+    "why": "The coordinator fetches a parallelworks/checkout step's repo, as the run is created, with git and the credentials of whoever runs it, so Meridian takes only an https or ssh URL, or an scp-like one, as user@host:path, on any host, with no credential in it. Another transport, as a local path, file:// or ext::, would have the coordinator read its host's files, or run a command there; git:// and http:// have no TLS or SSH, so nothing fetched would be authenticated; and a user and a password, or a token, in the URL would put a secret in the plan, which everyone who can see the run reads.",
+    "fix": [
+      "Name the repository by an https:// or ssh:// URL, or as user@host:path.",
+      "Give git its credential through its own configuration, as a credential helper or an ssh key, rather than in the URL."
+    ]
+  },
+  "checkout_path_invalid": {
+    "why": "Meridian reads each entry of a parallelworks/checkout step's sparse_checkout as a literal path from the repository's root, to a file or a directory, which a slash can end. One that is empty, starts with a slash, holds an empty name, . or .., holds a glob's *, ? or [, starts with !, which format 1 can read as a pattern, or holds a control character, isn't one.",
+    "fix": [
+      "Name each file or directory to check out by its path from the repository's root, with no pattern."
+    ]
+  },
   "expression_failed": {
     "why": "An expression failed in a way Meridian doesn't describe. This is a problem in Meridian.",
     "fix": [
@@ -1723,6 +1749,12 @@
     "why": "A run that a step calls has a directory of its own, subworkflows/<job>/step_<n> under the step's working directory, as in format 1. Meridian makes a root run's directory private, and a child's directory under it is private with it; one elsewhere wouldn't be, and Meridian doesn't make one there yet.",
     "fix": [
       "Give the step a working-directory: inside the run's directory, or none."
+    ]
+  },
+  "child_not_created": {
+    "why": "A step whose uses: names a workflow runs it as a run of its own, which the coordinator creates from the step's with: as the step runs, as format 1 does. Creating it failed, as for an input it requires that the with: leaves out, so the step fails, with the run's problems after this one.",
+    "fix": [
+      "Fix the problems that follow, in the step's with: or in the workflow it calls."
     ]
   },
   "owner_unmapped": {

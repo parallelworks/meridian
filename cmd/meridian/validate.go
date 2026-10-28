@@ -195,6 +195,14 @@ func (s *cacheSources) Read(ctx context.Context, source plan.Source) (*compile.W
 	return sources.Read(ctx, source)
 }
 
+func (s *cacheSources) Pin(ctx context.Context, repo, revision string) (string, error) {
+	sources, err := s.open()
+	if err != nil {
+		return "", err
+	}
+	return sources.Pin(ctx, repo, revision)
+}
+
 // located returns diags, the run's problems as it starts, which have no
 // file position, each where the workflow writes what it is about, in the
 // file name, which holds data.

@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/parallelworks/foundation/problem"
+
+	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
@@ -173,13 +176,25 @@ func (s *Server) serveAction(w http.ResponseWriter, r *http.Request, a *store.At
 		return
 	}
 	// The digest of the request as the API writes it, which a repeat
-	// matches, however its JSON was written.
+	// matches, however its JSON was written: keyed, since its with: can
+	// hold a secret (Server.digest).
 	canonical, err := workerapi.Marshal(&call.Request)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	call.digest = sha256.Sum256(canonical)
+	id := fmt.Sprintf("%s/%d/%d", a.ID, call.Request.Step, call.Request.Try)
+	digest, err := s.digest(ctx, run.ID, seal.PurposeActionDigest, id, canonical)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		// The run has ended, and so has the attempt.
+		problem.Write(w, fenced())
+		return
+	case err != nil:
+		s.writeError(w, r, err)
+		return
+	}
+	copy(call.digest[:], digest)
 	// A repeat is answered from what is stored, without asking Actions
 	// again, which might ask a platform again.
 	var stored *workerapi.ActionAnswer
