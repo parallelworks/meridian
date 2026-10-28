@@ -1099,6 +1099,29 @@
       "Si son de la misma versión, informa del error, con la razón y el registro del worker."
     ]
   },
+  "cancel_jobs_job_unknown": {
+    "title": "Trabajo que un paso no puede cancelar",
+    "why": "El jobs: de un paso parallelworks/cancel-jobs nombra los trabajos de su ejecución que hay que cancelar. Este nombre no es el de ningún trabajo de la ejecución, o es el de un trabajo con matriz, cuyas instancias el formato 1 conoce por otros nombres, así que no cancela ninguna. Como en el formato 1, el paso no hace nada por ese nombre y tiene éxito.",
+    "fix": [
+      "Corrige el nombre del trabajo, o quítalo de jobs:."
+    ]
+  },
+  "cancel_jobs_other_run": {
+    "title": "Cancelación de los trabajos de otra ejecución",
+    "why": "Con slug, workflow y run, o solo run, un paso parallelworks/cancel-jobs cancela trabajos de otra ejecución en el formato 1. Meridian aún no lo hace, así que el paso falla cuando se ejecuta, como falla un paso cuyo comando falla: su retry: lo vuelve a intentar y su ignore-errors: permite que su último intento tenga éxito. Solo falla entonces: un if: puede omitirlo.",
+    "fix": [
+      "Quita slug, workflow y run, para cancelar trabajos de la propia ejecución del paso.",
+      "Cancela la otra ejecución directamente, como con meridian cancel."
+    ]
+  },
+  "cancel_jobs_run_missing": {
+    "title": "Cancelación de una ejecución de un flujo de trabajo sin su número",
+    "why": "El with: de un paso parallelworks/cancel-jobs nombra una ejecución que cancelar por su flujo de trabajo y su número, como los lee el formato 1: un flujo de trabajo sin run, o con uno negativo, no nombra ninguna, y el formato 1 hace fallar el paso, como hace Meridian.",
+    "fix": [
+      "Da a run: el número de la ejecución, junto con workflow:.",
+      "Quita workflow:, para cancelar trabajos de la propia ejecución del paso."
+    ]
+  },
   "step_ssh_not_supported": {
     "title": "Paso en otro host",
     "why": "El ssh: de un paso del formato 1 ejecuta el paso en otro host por SSH. Esta versión del worker de Meridian solo ejecuta pasos en el host donde se ejecuta, así que el paso falla en lugar de ejecutarse en el host equivocado.",

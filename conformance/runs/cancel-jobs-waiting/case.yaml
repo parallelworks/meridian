@@ -1,0 +1,24 @@
+description: >-
+  A parallelworks/cancel-jobs step that cancels a job still waiting on a job
+  it needs ends that job cancelled where it waits, and it never starts, a
+  bug fix to format 1, whose cancel such a job's start overwrote. The job
+  that needs it is skipped because its needs failed, and fails the run; one
+  whose if: is always() runs, and reads it as cancelled. The job it waits
+  on finishes only once the cancel is done.
+source: Meridian
+expect:
+  run:
+    outcome: failure
+    jobs:
+      first:
+        outcome: success
+      canceller:
+        outcome: success
+      waiting:
+        outcome: cancelled
+      after:
+        outcome: skipped
+      reads:
+        outcome: success
+        logs:
+          - {step: 0, text: "cancelled\n"}

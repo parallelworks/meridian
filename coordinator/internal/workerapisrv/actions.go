@@ -68,15 +68,15 @@ func (e *checkError) Unwrap() error { return e.err }
 // holds its job, and that the step's try hasn't been answered: for a
 // repeat of the request that was, it returns that answer, without calling
 // act; for another request for the same try, store.ErrFenced. Nor does it
-// call act for a step that doesn't outlive its job's cancellation
-// (workerapi.ActionRequest.OutlivesCancel), of an attempt whose control
+// call act for step, the call's as the run's plan has it, whose if:
+// doesn't outlive its job's cancellation (plan.OutlivesCancel), which it
+// reads from the plan, never from the worker, of an attempt whose control
 // asks to cancel its job, for any reason but the run's timeout (cancel):
 // its answer is cancelled, for the control's reason, as though the worker
-// had read the control before the step; nor for step, the call's as the
-// run's plan has it, whose early-cancel: is any-job-failed, once a job of
-// the run has failed, as its control says (Control.AnyJobFailed): its
-// answer is cancelled, with no reason, as the worker would have stopped
-// the step. act answers success or failure,
+// had read the control before the step; nor for one whose early-cancel:
+// is any-job-failed, once a job of the run has failed, as its control
+// says (Control.AnyJobFailed): its answer is cancelled, with no reason, as
+// the worker would have stopped the step. act answers success or failure,
 // and Commit adds the cancel the attempt's control asks once act is done,
 // as when the action cancelled the step's own job, so that the worker
 // cancels it before the next step. An error act returns ends the
@@ -98,7 +98,7 @@ func (c *ActionCall) Commit(ctx context.Context, step *plan.Step, act func(tx *s
 			return err
 		}
 		switch cancel := cancelOf(ctl); {
-		case cancel != "" && !c.Request.OutlivesCancel:
+		case cancel != "" && !plan.OutlivesCancel(step.If):
 			answer = workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled, Reason: cancel}
 		case ctl.AnyJobFailed && step.EarlyCancel == plan.EarlyCancelAnyJobFailed:
 			answer = workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled}

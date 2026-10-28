@@ -21,6 +21,7 @@ func (r *rig) claimedAction(c *client) (*store.Attempt, string) {
 	job := &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{
 		{Run: plan.Literal("true"), Path: "/jobs/build/steps/0"},
 		{Uses: "parallelworks/cancel-jobs", With: plan.Literal(map[string]any{"jobs": []any{"x"}}), Path: "/jobs/build/steps/1"},
+		{Uses: "parallelworks/cancel-jobs", If: plan.Literal("always"), With: plan.Literal(map[string]any{"jobs": []any{"x"}}), Path: "/jobs/build/steps/2"},
 	}}
 	r.readier.set(run, &workerapisrv.Ready{Job: job, Run: plan.RunValues{Format: 1}})
 	return r.claimedIn(c, run, "build", placed{})
@@ -111,12 +112,14 @@ func TestActionPerformedOnce(t *testing.T) {
 	}
 }
 
-// A step that doesn't outlive its job's cancellation, of an attempt whose
-// control asks to cancel its job, is answered cancelled, for the control's
-// reason, without performing its action; but not for the run's timeout,
-// which stops the job as its own timeout does. One that outlives it is
-// performed, and its answer says the cancel; and so does that of an action
-// that cancelled the step's own job.
+// A step whose if: doesn't outlive its job's cancellation, as the run's
+// plan has it, of an attempt whose control asks to cancel its job, is
+// answered cancelled, for the control's reason, without performing its
+// action; but not for the run's timeout, which stops the job as its own
+// timeout does. One whose if: outlives it is performed, and its answer
+// says the cancel; and so does that of an action that cancelled the
+// step's own job. A request can't say otherwise: one that says its step
+// outlives a cancel is one the API doesn't have, 400.
 func TestActionOfACancelledJob(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
@@ -144,20 +147,31 @@ func TestActionOfACancelledJob(t *testing.T) {
 	}
 	r.actions.setAnswer(nil)
 	for try, tc := range []struct {
-		reason   plan.Reason
-		outlives bool
-		want     string
+		reason plan.Reason
+		// step is 1, whose if: doesn't outlive a cancel, or 2, whose if:
+		// does.
+		step int
+		want string
 	}{
-		{plan.ReasonTimeout, false, `{"outcome":"success"}`},
-		{plan.ReasonFailFast, false, `{"outcome":"cancelled","reason":"fail-fast"}`},
-		{plan.ReasonFailFast, true, `{"outcome":"success","reason":"fail-fast"}`},
+		{plan.ReasonTimeout, 1, `{"outcome":"success"}`},
+		{plan.ReasonFailFast, 1, `{"outcome":"cancelled","reason":"fail-fast"}`},
+		{plan.ReasonFailFast, 2, `{"outcome":"success","reason":"fail-fast"}`},
 	} {
 		r.inTx(func(tx *store.Tx) error {
 			return askControl(tx, a.ID, workerapi.Control{Cancel: true, Reason: tc.reason})
 		})
-		if got := send(workerapi.ActionRequest{Step: 1, Try: try + 1, OutlivesCancel: tc.outlives}); got != tc.want {
-			t.Errorf("an action of a job cancelled for %s, of a step that outlives that %v, was answered %s, want %s", tc.reason, tc.outlives, got, tc.want)
+		if got := send(workerapi.ActionRequest{Step: tc.step, Try: try + 1}); got != tc.want {
+			t.Errorf("an action of a job cancelled for %s, of step %d, was answered %s, want %s", tc.reason, tc.step, got, tc.want)
 		}
+	}
+	// Whether a step outlives a cancel is the plan's to say, not the
+	// worker's: a request that says so isn't one.
+	claims := []byte(`{"step":1,"try":9,"with":{"jobs":["x"]},"outlivesCancel":true}`)
+	if status, body, err := c.send(http.MethodPost, workerapi.PathAction, claims, credential); err != nil || status != http.StatusBadRequest {
+		t.Errorf("a request that says its step outlives a cancel was answered %d, %v: %s", status, err, body)
+	}
+	if got := send(workerapi.ActionRequest{Step: 1, Try: 9}); got != `{"outcome":"cancelled","reason":"fail-fast"}` {
+		t.Errorf("the step that doesn't outlive a cancel, asked again, was answered %s", got)
 	}
 	if n := r.actions.times(); n != 3 {
 		t.Errorf("the action was performed %d times, not 3", n)
@@ -172,7 +186,7 @@ func TestActionEarlyCancelled(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	run := r.newRun(nil)
-	cancels := plan.Step{Uses: "parallelworks/cancel-jobs", With: plan.Literal(map[string]any{"jobs": []any{"x"}}), Path: "/jobs/build/steps/0", EarlyCancel: plan.EarlyCancelAnyJobFailed}
+	cancels := plan.Step{Uses: "parallelworks/cancel-jobs", If: plan.Literal("always"), With: plan.Literal(map[string]any{"jobs": []any{"x"}}), Path: "/jobs/build/steps/0", EarlyCancel: plan.EarlyCancelAnyJobFailed}
 	plain := cancels
 	plain.Path, plain.EarlyCancel = "/jobs/build/steps/1", ""
 	job := &plan.ReadyJob{Key: "build", Name: "build", Path: "/jobs/build", Steps: []plan.Step{cancels, plain}}
@@ -180,7 +194,7 @@ func TestActionEarlyCancelled(t *testing.T) {
 	a, credential := r.claimedIn(c, run, "build", placed{})
 	r.inTx(func(tx *store.Tx) error { return askControl(tx, a.ID, workerapi.Control{AnyJobFailed: true}) })
 	for step, want := range []string{`{"outcome":"cancelled"}`, `{"outcome":"success"}`} {
-		body, err := workerapi.Marshal(&workerapi.ActionRequest{Step: step, With: plan.DataOf(map[string]any{"jobs": []any{"x"}}), OutlivesCancel: true})
+		body, err := workerapi.Marshal(&workerapi.ActionRequest{Step: step, With: plan.DataOf(map[string]any{"jobs": []any{"x"}})})
 		if err != nil {
 			t.Fatal(err)
 		}

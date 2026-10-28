@@ -1099,6 +1099,29 @@
       "如果它们属于同一发行版本，请附上原因和工作进程的日志，报告这个缺陷。"
     ]
   },
+  "cancel_jobs_job_unknown": {
+    "title": "步骤无法取消的作业",
+    "why": "parallelworks/cancel-jobs 步骤的 jobs: 指定要取消的、其运行中的作业。此名称不属于该运行的任何作业，或者属于矩阵作业，而格式 1 以其他名称识别矩阵作业的实例，因此不会取消其中任何一个。与格式 1 一样，该步骤对此名称不做任何事，并且成功。",
+    "fix": [
+      "更正作业的名称，或将其从 jobs: 中删除。"
+    ]
+  },
+  "cancel_jobs_other_run": {
+    "title": "取消另一个运行的作业",
+    "why": "在格式 1 中，parallelworks/cancel-jobs 步骤通过 slug、workflow 和 run，或仅通过 run，取消另一个运行的作业。Meridian 尚不支持这样做，因此该步骤会在运行时失败，就像命令失败的步骤那样：它的 retry: 会重试，它的 ignore-errors: 会让最后一次尝试成功。只有那时才会失败：if: 可以跳过它。",
+    "fix": [
+      "删除 slug、workflow 和 run，以取消该步骤自身运行中的作业。",
+      "直接取消另一个运行，例如使用 meridian cancel。"
+    ]
+  },
+  "cancel_jobs_run_missing": {
+    "title": "取消工作流的运行却没有其编号",
+    "why": "parallelworks/cancel-jobs 步骤的 with: 按格式 1 的读法，通过工作流及其编号指定要取消的运行：没有 run，或 run 为负数的工作流不指定任何运行，格式 1 会使该步骤失败，Meridian 也是如此。",
+    "fix": [
+      "在 workflow: 之外，为 run: 提供运行的编号。",
+      "删除 workflow:，以取消该步骤自身运行中的作业。"
+    ]
+  },
   "step_ssh_not_supported": {
     "title": "在另一台主机上运行的步骤",
     "why": "格式 1 中步骤的 ssh: 会通过 SSH 在另一台主机上运行该步骤。此版本的 Meridian 工作进程只在它自己所在的主机上运行步骤，因此该步骤会失败，而不是在错误的主机上运行。",

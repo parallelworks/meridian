@@ -25,16 +25,19 @@ type actions struct{ c *Coordinator }
 
 var _ workerapisrv.Actions = actions{}
 
-// Act performs the action the step of call's attempt uses. An action of
-// the coordinator's that it doesn't perform yet fails the step, as the
-// worker failed it before it asked the coordinator.
+// Act performs the action the step of call's attempt uses: cancel-jobs
+// (cancelJobs). An action of the coordinator's that it doesn't perform
+// yet, update-session, fails the step, as the worker failed it before it
+// asked the coordinator.
 func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error) {
 	step, err := r.c.actionStep(ctx, call)
 	if err != nil {
 		return workerapi.ActionAnswer{}, err
 	}
 	switch step.Uses {
-	case actionCancelJobs, actionUpdateSession:
+	case actionCancelJobs:
+		return r.c.cancelJobs(ctx, call, step)
+	case actionUpdateSession:
 		return call.Commit(ctx, step, func(*store.Tx) (workerapi.ActionAnswer, error) {
 			return actionFailed(problems.UsesNotSupported.At("", problems.Position{}, step.Path, problems.Params{"uses": step.Uses})), nil
 		})

@@ -971,7 +971,7 @@ func actionWith() plan.Data {
 // answered with how it ended, once: a repeat, however its JSON is written,
 // is given the same answer, and another request for the same try is
 // fenced, as is any request once the attempt is superseded. Once the
-// attempt's control asks to cancel its job, a step that doesn't outlive
+// attempt's control asks to cancel its job, a step whose if: doesn't outlive
 // that is answered cancelled, for the control's reason; and so, with no
 // reason, is a step whose early-cancel: is any-job-failed, once a job of
 // the run has failed. A request of
@@ -1011,22 +1011,29 @@ func checkActions(t *testing.T, target Target) {
 		t.Errorf("an action's next try was answered %d: %s", a.status, a.body)
 	}
 
-	// Once the attempt's control asks to cancel its job, a step that
-	// doesn't outlive that is answered cancelled, for the control's
-	// reason, and one that does has its action performed; each answer says
-	// the cancel.
+	// Once the attempt's control asks to cancel its job, a step whose if:
+	// doesn't outlive that, as the run's plan has it, is answered
+	// cancelled, for the control's reason, and one whose if: does has its
+	// action performed; each answer says the cancel.
 	target.Control(t, w.attemptID, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
-	for _, outlives := range []bool{false, true} {
-		next.Try++
-		next.OutlivesCancel = outlives
-		a := w.post(workerapi.PathAction, next)
+	outliving := actionAttempt()
+	outliving.Job.Steps[actionStep].If = plan.Literal("always")
+	ow := newWorker(t, target, outliving).claimed()
+	target.Control(t, ow.attemptID, workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled})
+	next.Try++
+	for _, tc := range []struct {
+		w        *worker
+		req      workerapi.ActionRequest
+		outlives bool
+	}{{w, next, false}, {ow, req, true}} {
+		a := tc.w.post(workerapi.PathAction, tc.req)
 		var answer workerapi.ActionAnswer
 		if a.status != http.StatusOK || workerapi.UnmarshalAt(workerapi.Version3, a.body, &answer) != nil {
-			t.Errorf("an action of a cancelled job, of a step that outlives that %v, was answered %d: %s", outlives, a.status, a.body)
+			t.Errorf("an action of a cancelled job, of a step that outlives that %v, was answered %d: %s", tc.outlives, a.status, a.body)
 			continue
 		}
-		if cancelled := answer.Outcome == plan.OutcomeCancelled; cancelled == outlives || answer.Reason != plan.ReasonCancelled {
-			t.Errorf("an action of a cancelled job, of a step that outlives that %v, was answered %s", outlives, a.body)
+		if cancelled := answer.Outcome == plan.OutcomeCancelled; cancelled == tc.outlives || answer.Reason != plan.ReasonCancelled {
+			t.Errorf("an action of a cancelled job, of a step that outlives that %v, was answered %s", tc.outlives, a.body)
 		}
 	}
 
@@ -1035,11 +1042,10 @@ func checkActions(t *testing.T, target Target) {
 	// its job's cancellation.
 	early := actionAttempt()
 	early.Job.Steps[actionStep].EarlyCancel = plan.EarlyCancelAnyJobFailed
+	early.Job.Steps[actionStep].If = plan.Literal("always")
 	ew := newWorker(t, target, early).claimed()
 	target.Control(t, ew.attemptID, workerapi.Control{AnyJobFailed: true})
-	outlives := req
-	outlives.OutlivesCancel = true
-	if a := ew.post(workerapi.PathAction, outlives); a.status != http.StatusOK || string(a.body) != `{"outcome":"cancelled"}` {
+	if a := ew.post(workerapi.PathAction, req); a.status != http.StatusOK || string(a.body) != `{"outcome":"cancelled"}` {
 		t.Errorf("an action of a step that early-cancels, once a job failed, was answered %d: %s", a.status, a.body)
 	}
 
@@ -1052,6 +1058,7 @@ func checkActions(t *testing.T, target Target) {
 		{"an action of a step before the first", []byte(`{"step":-1}`)},
 		{"an action of a try before the first", []byte(`{"step":1,"try":-1}`)},
 		{"an action's request with a member it doesn't have", []byte(`{"step":1,"uses":"parallelworks/checkout"}`)},
+		{"an action's request that says its step outlives a cancel, which the plan says", []byte(`{"step":1,"outlivesCancel":true}`)},
 		{"an action's request whose with: is null", []byte(`{"step":1,"with":null}`)},
 		{"an action's request that isn't JSON", []byte(`{"step":`)},
 	} {

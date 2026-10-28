@@ -58,30 +58,33 @@ func (tx *Tx) MarkJobFailed(run string) (bool, error) {
 
 // StartControl gives the new attempt id, as its first control, what every
 // attempt like it tells its worker from then on: that a job of its run
-// failed (MarkJobFailed), and, for an instance of a matrix job whose
-// instances fail-fast: stopped, to cancel its job (MarkFailFast).
+// failed (MarkJobFailed); for an instance of a matrix job whose instances
+// fail-fast: stopped, to cancel its job (MarkFailFast); and for a job a
+// step of its run cancelled, to cancel it (CancelJob).
 // NewAttempt calls it, so that no attempt misses either, as one made as
 // they are marked.
 func (tx *Tx) StartControl(id string) error {
-	var failed, failFast sql.NullInt64
-	err := tx.queryRow(`SELECT r.any_job_failed_at, p.fail_fast_at FROM meridian_attempts a
+	var failed, failFast, cancelled sql.NullInt64
+	err := tx.queryRow(`SELECT r.any_job_failed_at, p.fail_fast_at, j.cancelled_at FROM meridian_attempts a
 JOIN meridian_runs r ON r.id = a.run_id
 JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key = a.job_key
 LEFT JOIN meridian_jobs p ON p.run_id = j.run_id AND p.key = j.name AND j.instance IS NOT NULL
-WHERE a.id = ?`, id).Scan(&failed, &failFast)
+WHERE a.id = ?`, id).Scan(&failed, &failFast, &cancelled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if !failed.Valid && !failFast.Valid {
+	if !failed.Valid && !failFast.Valid && !cancelled.Valid {
 		return nil
 	}
-	// Both at one version, the attempt's first control.
+	// All at one version, the attempt's first control. No step cancels a
+	// matrix instance, so fail-fast and a step's cancel never meet.
 	_, err = tx.UpdateControl(id, func(c *workerapi.Control) bool {
 		changed := failed.Valid && askJobFailed(c)
-		return failFast.Valid && askFailFast(c) || changed
+		changed = failFast.Valid && askFailFast(c) || changed
+		return cancelled.Valid && askCancelled(c) || changed
 	})
 	return err
 }

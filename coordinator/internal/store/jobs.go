@@ -64,6 +64,12 @@ type Job struct {
 	Expansion  *plan.Expansion
 	TurnAt     time.Time
 	FailFastAt time.Time
+	// CancelledAt is when a step of the run cancelled the job, through
+	// parallelworks/cancel-jobs (CancelJob), or the zero time before; and
+	// CancelledBy that step, as /jobs/<its job's key>/steps/<its index>,
+	// as in /jobs/build#1/steps/2.
+	CancelledAt time.Time
+	CancelledBy string
 }
 
 // A NewJob is a job, or an instance of a matrix job, to store.
@@ -123,7 +129,7 @@ func instanceOf(name, key string) (int, bool) {
 
 const jobColumns = `run_id, key, name, instance, supervisor_id, fence, attempts, attempts_started, created_at,
   outcome, reason, result, ended_at, ready_at, readied_stopped, any_choices, wake, place_tries, diagnostics,
-  expansion, turn_at, fail_fast_at`
+  expansion, turn_at, fail_fast_at, cancelled_at, cancelled_by`
 
 // Job returns the run's job with the key key.
 func (tx *Tx) Job(run, key string) (*Job, error) {
@@ -169,18 +175,19 @@ func scanJob(row scanner) (*Job, error) {
 		j                              Job
 		run, created                   int64
 		instance, ended, ready, halted sql.NullInt64
-		turn, failFast                 sql.NullInt64
-		outcome, reason                sql.NullString
+		turn, failFast, cancelled      sql.NullInt64
+		outcome, reason, cancelledBy   sql.NullString
 		result, choices, diags, x      []byte
 	)
 	if err := row.Scan(&run, &j.Key, &j.Name, &instance, &j.SupervisorID, &j.Fence, &j.Attempts, &j.AttemptsStarted, &created,
 		&outcome, &reason, &result, &ended, &ready, &halted, &choices, &j.Wake, &j.PlaceTries, &diags,
-		&x, &turn, &failFast); err != nil {
+		&x, &turn, &failFast, &cancelled, &cancelledBy); err != nil {
 		return nil, err
 	}
 	j.Run, j.CreatedAt, j.EndedAt = runID(run), time.UnixMicro(created).UTC(), timeOf(ended)
 	j.ReadyAt, j.ReadiedStopped = timeOf(ready), halted.Int64 != 0
 	j.TurnAt, j.FailFastAt = timeOf(turn), timeOf(failFast)
+	j.CancelledAt, j.CancelledBy = timeOf(cancelled), cancelledBy.String
 	if x != nil {
 		j.Expansion = new(plan.Expansion)
 		if err := workerapi.Unmarshal(x, j.Expansion); err != nil {

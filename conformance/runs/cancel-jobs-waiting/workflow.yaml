@@ -1,0 +1,23 @@
+jobs:
+  first:
+    steps:
+      - run: until [ -f cancelled ]; do sleep 0.05; done
+  canceller:
+    steps:
+      - uses: parallelworks/cancel-jobs
+        with:
+          jobs: [waiting]
+      - run: touch cancelled
+  waiting:
+    needs: [first]
+    steps:
+      - run: echo ran
+  after:
+    needs: [waiting]
+    steps:
+      - run: echo after
+  reads:
+    needs: [waiting]
+    if: ${{ always() }}
+    steps:
+      - run: echo ${{ needs.waiting.result }}

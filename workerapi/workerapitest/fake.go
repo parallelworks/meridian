@@ -883,8 +883,8 @@ func (f *Fake) handleComplete(w http.ResponseWriter, body []byte) {
 // handleAction performs the action a step's try asks for, once, and
 // answers a repeat as it answered the first: a request of a step that
 // uses no built-in action is one it can't read, and another request for
-// the same try is fenced. A step that doesn't outlive its job's
-// cancellation, of a job its control asks to cancel, for any reason but
+// the same try is fenced. A step whose if: doesn't outlive its job's
+// cancellation (plan.OutlivesCancel), of a job its control asks to cancel, for any reason but
 // the run's timeout, is answered cancelled, for that reason, without Act;
 // so is a step whose early-cancel: is any-job-failed, once a job of the
 // run failed, as the control says, with no reason; and another's answer
@@ -924,7 +924,7 @@ func (f *Fake) handleAction(w http.ResponseWriter, body []byte) {
 		cancel = c.Reason
 	}
 	switch {
-	case cancel != "" && !req.OutlivesCancel:
+	case cancel != "" && !plan.OutlivesCancel(job.Steps[req.Step].If):
 		answer = workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled, Reason: cancel}
 	case f.control.AnyJobFailed && job.Steps[req.Step].EarlyCancel == plan.EarlyCancelAnyJobFailed:
 		answer = workerapi.ActionAnswer{Outcome: plan.OutcomeCancelled}

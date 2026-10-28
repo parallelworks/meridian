@@ -190,6 +190,12 @@ func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, 
 			return c.matrixStep(ctx, run, job, done)
 		}
 	}
+	// A job a step cancelled, between attempts, as when its worker was
+	// lost after the cancel, ends cancelled: nothing places it again. One
+	// without an attempt the cancel ended at once (cancelJobTx).
+	if !job.CancelledAt.IsZero() && betweenAttempts(a) {
+		return 0, c.endJob(ctx, run.ID, job.Key, cancelledEnd, done)
+	}
 	// A job between attempts as its run stops, which it doesn't outlive,
 	// ends as the stop says: nothing places it again.
 	if stopped, err := c.placesNoMore(ctx, run, job, a); err != nil || stopped {
