@@ -32,6 +32,7 @@ import (
 
 	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/internal/hint"
 	"github.com/parallelworks/meridian/problems"
@@ -92,6 +93,10 @@ type cli struct {
 	// ssh changes how the ssh backend connects to hosts, as a test has it
 	// read a config of its own; nil for nothing.
 	ssh func(*backendssh.Options)
+	// serveMembers serves the sockets forwarded to the hosts the store's
+	// workers run on, as coordinator.ServeMembers does, which a test
+	// replaces; nil for it.
+	serveMembers func(*coordinator.Coordinator, context.Context, coordinator.Logs) error
 	// sources is what a test gives in place of the user's Git
 	// repositories (cacheSources) for the workflows a workflow's steps
 	// call, nil for theirs.
