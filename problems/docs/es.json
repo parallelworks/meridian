@@ -1190,7 +1190,7 @@
   },
   "uses_not_supported": {
     "title": "Paso con uses: que una versión anterior de Meridian no puede ejecutar",
-    "why": "Un paso que usa con uses: una acción que realiza el coordinador, como parallelworks/checkout, o un flujo de trabajo, se lo pide al coordinador a través de la versión 3 de la API de workers, y el commit de un checkout se fija al crear su ejecución. Un worker al que le da el paso un coordinador de una versión anterior, que habla una versión anterior de la API, no puede pedirlo, y el checkout de una ejecución que creó una versión anterior de Meridian no tiene ningún commit que descargar, así que el paso falla.",
+    "why": "Un paso que usa con uses: una acción que realiza el coordinador, como parallelworks/checkout, o un flujo de trabajo, se lo pide al coordinador a través de la versión 3 de la API de workers, y lo que ejecuta un checkout o una llamada a un flujo de trabajo se fija al crear su ejecución. Un worker al que le da el paso un coordinador de una versión anterior, que habla una versión anterior de la API, no puede pedirlo, y un checkout, o una llamada a un flujo de trabajo, de una ejecución que creó una versión anterior de Meridian no tiene nada fijado, así que el paso falla.",
     "fix": [
       "Actualiza el coordinador a la versión de Meridian del worker.",
       "Ejecuta el flujo de trabajo de nuevo, como una ejecución nueva, en lugar de retomar una ejecución que creó una versión anterior de Meridian."

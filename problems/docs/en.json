@@ -1021,7 +1021,7 @@
     ]
   },
   "uses_not_supported": {
-    "why": "A step that uses: an action the coordinator performs, such as parallelworks/checkout, or a workflow asks the coordinator for it through version 3 of the worker API, and a checkout's commit is pinned as its run is created. A worker given the step by a coordinator of an earlier version, which speaks an earlier version of the API, can't ask for it, and a checkout of a run an earlier version of Meridian created has no commit to check out, so the step fails.",
+    "why": "A step that uses: an action the coordinator performs, such as parallelworks/checkout, or a workflow asks the coordinator for it through version 3 of the worker API, and what a checkout or a call of a workflow runs is pinned as its run is created. A worker given the step by a coordinator of an earlier version, which speaks an earlier version of the API, can't ask for it, and a checkout, or a call of a workflow, of a run an earlier version of Meridian created has no pin, so the step fails.",
     "fix": [
       "Upgrade the coordinator to the worker's version of Meridian.",
       "Run the workflow again, as a new run, rather than resume a run an earlier version of Meridian created."

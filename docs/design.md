@@ -3769,7 +3769,10 @@ coordinator say to each other.
   masks what it inherits, needs version 3; any other, version 1. A later
   worker, in an attempt an earlier coordinator serves at an earlier
   version, fails such a step (`uses_not_supported`), rather than run it
-  otherwise.
+  otherwise. The same problem fails, as it runs, a step that has no pin:
+  a checkout of a run created before checkouts were pinned, which the
+  coordinator fails, and a call of a workflow of one created before calls
+  were, which the worker fails.
 - **What a body carries of a run is the plan's.** The run's values, the
   job Ready evaluated and the results of the jobs it needs are encoded at
   the run's plan version, and a change to one of their types raises the
