@@ -163,14 +163,14 @@ func (s *Session) Close() error {
 	return err
 }
 
-// NewSession opens a session, once fewer than the connection's limit are
+// newSession opens a session, once fewer than the connection's limit are
 // open. One sshd refuses, as for its MaxSessions, is asked for again, with
 // a backoff, until ctx is done: a refusal says nothing of whether the
 // connection is alive. It returns once ctx is done, or the connection
 // closes, whether or not the host has answered: x/crypto/ssh waits for its
 // answer with no bound, and for ever where the connection closed as it
 // asked.
-func (c *Conn) NewSession(ctx context.Context) (*Session, error) {
+func (c *Conn) newSession(ctx context.Context) (*Session, error) {
 	select {
 	case c.sessions <- struct{}{}:
 	case <-ctx.Done():

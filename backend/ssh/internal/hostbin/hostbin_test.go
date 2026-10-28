@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	jsonv2 "encoding/json/v2"
 	"encoding/pem"
 	"errors"
 	"os"
@@ -37,6 +38,12 @@ type rig struct {
 // nor a config.
 func newRig(t *testing.T, env ...string) *rig {
 	t.Helper()
+	return newRigWith(t, sshtest.Options{}, env...)
+}
+
+// newRigWith is newRig, with a host that takes opts as well.
+func newRigWith(t *testing.T, opts sshtest.Options, env ...string) *rig {
+	t.Helper()
 	r := &rig{t: t, home: t.TempDir()}
 	client := t.TempDir()
 	if err := os.Mkdir(filepath.Join(client, ".ssh"), 0o700); err != nil {
@@ -56,7 +63,8 @@ func newRig(t *testing.T, env ...string) *rig {
 		t.Fatal(err)
 	}
 	env = append([]string{"HOME=" + r.home, "XDG_CACHE_HOME=", "MERIDIAN_CACHE_DIR="}, env...)
-	r.server = sshtest.New(t, sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: env})
+	opts.Authorized, opts.Env = []ssh.PublicKey{signer.PublicKey()}, env
+	r.server = sshtest.New(t, opts)
 	write(t, filepath.Join(client, ".ssh", "known_hosts"), []byte(r.server.KnownHosts("")))
 	d := &sshconn.Dialer{SSH: filepath.Join(client, "no-ssh"), ConfigFile: filepath.Join(client, "no-config"), Home: client, User: "tester", Getenv: func(string) string { return "" }}
 	if r.conn, err = d.Dial(t.Context(), sshconn.Target{Host: r.server.Addr()}); err != nil {
@@ -121,10 +129,10 @@ func paramsOf(t *testing.T, err error, k *problems.Kind) problems.Params {
 	return p.Params
 }
 
-// uploads counts the commands that copied a binary.
-func uploads(commands []string) int {
+// uploads counts the scripts that copied a binary.
+func uploads(scripts []string) int {
 	n := 0
-	for _, c := range commands {
+	for _, c := range scripts {
 		if strings.Contains(c, `cat > "$f"`) {
 			n++
 		}
@@ -209,8 +217,39 @@ func TestInstall(t *testing.T) {
 	if err != nil || again != got {
 		t.Fatalf("a second Install gave %+v, %v", again, err)
 	}
-	if n := uploads(r.server.Commands()); n != 1 {
+	if n := uploads(r.server.Scripts()); n != 1 {
 		t.Errorf("two Installs copied the binary %d times, want once", n)
+	}
+}
+
+// readAheadSh writes a sh that reads its script as dash's and BusyBox's
+// do, ahead of the command it runs, and returns its path: once what is
+// written to it promptly has come, it takes what there is of its standard
+// input, up to 64 KiB, with one read, and runs its first line, the
+// script, with the system's sh, whose commands read only what comes after.
+func readAheadSh(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	sh := filepath.Join(dir, "sh")
+	write(t, sh, []byte("#!/bin/sh\nsleep 0.2\nb="+dir+"/$$\ndd bs=65536 count=1 of=\"$b\" 2>/dev/null\nhead -n 1 \"$b\" > \"$b.sh\"\nexec /bin/sh \"$b.sh\"\n"))
+	if err := os.Chmod(sh, 0o700); err != nil { //nolint:gosec // a test's sh, which runs
+		t.Fatal(err)
+	}
+	return sh
+}
+
+// TestInstallReadAhead checks that the binary is copied whole to a host
+// whose sh reads ahead of the command it runs: once the script has said
+// that it is ready for it, and not with the script, which such a sh would
+// take as more of it.
+func TestInstallReadAhead(t *testing.T) {
+	r := newRigWith(t, sshtest.Options{Sh: readAheadSh(t)})
+	got, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(got.Path); err != nil || string(data) != "a meridian binary\n" {
+		t.Errorf("the host has %q, %v", data, err)
 	}
 }
 
@@ -412,7 +451,7 @@ func TestScriptOwners(t *testing.T) {
 	if err := os.Chmod(file, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	say := func(u, check string) string {
+	run := func(u, check string) string {
 		t.Helper()
 		out, err := exec.Command("sh", "-c", prelude()+wayScript+"u="+u+"; "+check+"; exit 0", "sh", dir, file).Output() //nolint:noctx // a script of the test's, which ends
 		if err != nil {
@@ -429,12 +468,13 @@ func TestScriptOwners(t *testing.T) {
 		{other, `own "$1" && echo yes`, ""},
 		{me, `held "$2" "$1"; echo held`, "held"},
 	} {
-		if got := say(tc.u, tc.check); got != tc.want {
+		if got := run(tc.u, tc.check); got != tc.want {
 			t.Errorf("as %s, %s says %q, want %q", tc.u, tc.check, got, tc.want)
 		}
 	}
-	if got, _ := marked(say(other, `held "$2" "$1"; echo held`), "MERIDIAN-UNUSABLE"); !strings.HasPrefix(got, "file_not_owned ") {
-		t.Errorf("as another user, held says %q", got)
+	var got said
+	if err := jsonv2.Unmarshal([]byte(run(other, `held "$2" "$1"; echo held`)), &got); err != nil || got.Said != "unusable" || got.Reason != hex.EncodeToString([]byte("file_not_owned")) {
+		t.Errorf("as another user, held says %+v, %v", got, err)
 	}
 }
 
@@ -587,7 +627,7 @@ func TestCacheVariables(t *testing.T) {
 	_, _, err = Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
 	paramsOf(t, err, problems.HomeUnknown)
 
-	home := filepath.Join(t.TempDir(), "a\nMERIDIAN-INSTALLED 2f")
+	home := filepath.Join(t.TempDir(), "a\n{\"said\":\"installed\",\"at\":\"2f\"}")
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -620,17 +660,5 @@ func TestSystem(t *testing.T) {
 		if goos != tc.goos || goarch != tc.goarch || ok != tc.ok {
 			t.Errorf("system(%q, %q) = %q, %q, %v", tc.os, tc.machine, goos, goarch, ok)
 		}
-	}
-}
-
-// TestMarked checks that what a login script prints is never taken for
-// what the script says.
-func TestMarked(t *testing.T) {
-	out := "Welcome!\nMERIDIAN-HOSTS are many\nMERIDIAN-HOST Linux x86_64 /home/a b/.cache/meridian/bin\n"
-	if got, ok := marked(out, "MERIDIAN-HOST"); !ok || got != "Linux x86_64 /home/a b/.cache/meridian/bin" {
-		t.Errorf("marked gave %q, %v", got, ok)
-	}
-	if _, ok := marked("MERIDIAN-INSTALLEDx\n", "MERIDIAN-INSTALLED"); ok {
-		t.Error("a line that only starts with the marker was taken for it")
 	}
 }

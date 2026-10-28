@@ -4,17 +4,14 @@
 // before it is kept, so that meridian host and the workers it starts run
 // it (docs/design.md, The ssh backend).
 //
-// It talks to the host through exec sessions whose commands are /bin/sh
-// -c and one line of script, with no single quote in it, so that a user's
-// login shell, which reads the command first, csh among them, passes it to
-// sh as it is. What the script prints that matters is on lines of its own
-// that start with MERIDIAN-, which a login script's own output, as a
-// message of the day, can't be taken for, with each path in hex, so that
-// one that holds a newline can't cut its line short.
+// It talks to the host through scripts that sh runs there
+// (sshconn.Conn.Script). What a script says is a line of JSON of its own
+// (said), which a login script's own output, as a message of the day,
+// can't be taken for, with each value in hex, so that a path, whatever it
+// holds, passes whole.
 package hostbin
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -133,16 +130,40 @@ type Host struct {
 // first holds, which another user could change. Tests change it.
 var hostPath = "/usr/bin:/bin:/usr/sbin:/sbin"
 
+// A said is what a script says, a line of JSON (sshconn.Next): what it
+// says, in Said, and the values it says it with, each in hex (hx).
+type said struct {
+	Said   string `json:"said"`
+	OS     string `json:"os"`
+	Arch   string `json:"arch"`
+	Cache  string `json:"cache"`
+	Value  string `json:"value"`
+	Reason string `json:"reason"`
+	Dir    string `json:"dir"`
+	At     string `json:"at"`
+	Digest string `json:"digest"`
+}
+
+// say is sh that says what (said), with values, each a field's name and
+// the sh word that gives it, which it writes in hex (hx).
+func say(what string, values ...string) string {
+	var format, args strings.Builder
+	format.WriteString(`printf '{"said":"` + what + `"`)
+	for i := 0; i+1 < len(values); i += 2 {
+		format.WriteString(`,"` + values[i] + `":"%s"`)
+		args.WriteString(` "$(hx ` + values[i+1] + `)"`)
+	}
+	return format.String() + `}\n'` + args.String() + `; `
+}
+
 // prelude starts every script: hostPath; hx, which writes its argument in
-// hex, as one word, so that a path, whatever it holds, passes on one line
-// as one field; no, which
-// says why a directory can't be used, as a problem's code, with the
-// directory and where on the way to it, and ends the script; and the
-// user's ID.
+// hex, as one word; no, which says why a directory can't be used, as a
+// problem's code, with the directory and where on the way to it, and ends
+// the script; and the user's ID.
 func prelude() string {
 	return `PATH=` + hostPath + `; export PATH; ` +
 		`hx() { set -- $(printf "%s" "$1" | od -An -v -tx1); _h=; for b; do _h="$_h$b"; done; echo "$_h"; }; ` +
-		`no() { printf "MERIDIAN-UNUSABLE %s %s %s\n" "$1" "$(hx "$2")" "$(hx "$3")"; exit 0; }; ` +
+		`no() { ` + say("unusable", "reason", `"$1"`, "dir", `"$2"`, "at", `"$3"`) + `exit 0; }; ` +
 		`u=$(id -u); `
 }
 
@@ -152,11 +173,11 @@ func prelude() string {
 // ~/Library/Caches/Meridian, or else $XDG_CACHE_HOME/meridian, if it is
 // absolute, or ~/.cache/meridian, where HOME must be absolute. It says
 // which of those isn't, and ends the script.
-const cacheScript = `s=$(uname -s); x=; case "$XDG_CACHE_HOME" in /*) x=1;; esac; ` +
+var cacheScript = `s=$(uname -s); x=; case "$XDG_CACHE_HOME" in /*) x=1;; esac; ` +
 	`if [ -n "$MERIDIAN_CACHE_DIR" ]; then case "$MERIDIAN_CACHE_DIR" in /*) c="$MERIDIAN_CACHE_DIR";; ` +
-	`*) printf "MERIDIAN-RELATIVE %s\n" "$(hx "$MERIDIAN_CACHE_DIR")"; exit 0;; esac; ` +
+	`*) ` + say("relative", "value", `"$MERIDIAN_CACHE_DIR"`) + `exit 0;; esac; ` +
 	`elif [ "$s" != Darwin ] && [ -n "$x" ]; then c="$XDG_CACHE_HOME/meridian"; ` +
-	`else case "$HOME" in /*) ;; *) printf "MERIDIAN-NOHOME\n"; exit 0;; esac; ` +
+	`else case "$HOME" in /*) ;; *) ` + say("nohome") + `exit 0;; esac; ` +
 	`if [ "$s" = Darwin ]; then c="$HOME/Library/Caches/Meridian"; else c="$HOME/.cache/meridian"; fi; fi; ` +
 	`c="$c/bin"; `
 
@@ -193,15 +214,6 @@ const hashScript = `if command -v sha256sum >/dev/null 2>&1; then h=$(sha256sum 
 	`elif command -v openssl >/dev/null 2>&1; then h=$(openssl dgst -sha256 < "$f"); h=${h##* }; ` +
 	`else h=none; fi; h=${h%% *}; `
 
-// command is the exec command that runs script with sh, which mustn't hold
-// a single quote, and so passes through any login shell as it is.
-func command(script string) string {
-	if strings.Contains(script, "'") {
-		panic("hostbin: a script with a single quote: " + script) //nolint:forbidigo // the scripts are this package's own, with only a hex digest put in: a quote is a bug here
-	}
-	return "/bin/sh -c '" + script + "'"
-}
-
 // Install puts the binary for host's system in its cache of binaries, by
 // its digest, as its cache's <hex>/meridian, if it isn't there already,
 // and returns where it is there, as a physical path: the host's system,
@@ -236,16 +248,16 @@ func Install(ctx context.Context, conn *sshconn.Conn, host string, b *Binaries) 
 	// that got it has it.
 	// The binary is checked, and hashed, at the physical path the way to
 	// which way checked, which is where it is said to be.
-	out, err := run(ctx, conn, prelude()+cacheScript+wayScript+`d="$c/`+hexDigest+`"; f="$d/meridian"; `+
+	saids, err := run(ctx, conn, prelude()+cacheScript+wayScript+`d="$c/`+hexDigest+`"; f="$d/meridian"; `+
 		`if [ -e "$f" ] || [ -L "$f" ]; then way "$d"; f="$p/meridian"; held "$f" "$d"; `+
-		hashScript+`printf "MERIDIAN-DIGEST %s %s\n" "$h" "$(hx "$f")"; fi`, nil)
+		hashScript+say("digest", "digest", `"$h"`, "at", `"$f"`)+`fi`, nil)
 	if err != nil {
 		return Binary{}, h, err
 	}
-	if err := saidUnusable(out, host); err != nil {
+	if err := saidUnusable(saids, host); err != nil {
 		return Binary{}, h, err
 	}
-	if found, at, err := digestSaid(out); err != nil {
+	if found, at, err := digestSaid(saids); err != nil {
 		return Binary{}, h, err
 	} else if found == hexDigest {
 		h.Cache = path.Dir(path.Dir(at))
@@ -260,21 +272,27 @@ func Install(ctx context.Context, conn *sshconn.Conn, host string, b *Binaries) 
 	// and all of it after. The new file is made with noclobber, which
 	// doesn't open one that is there, in a directory way checked that no
 	// other user can change; and it is removed if the script stops before
-	// it is renamed.
-	out, err = run(ctx, conn, prelude()+cacheScript+wayScript+`set -e; umask 077; d="$c/`+hexDigest+`"; `+
+	// it is renamed. The binary is copied once the script says it is ready
+	// for it, as cat reads it.
+	saids, err = run(ctx, conn, prelude()+cacheScript+wayScript+`set -e; umask 077; d="$c/`+hexDigest+`"; `+
 		`e="$d"; while [ -n "$e" ] && [ ! -d "$e" ]; do e="${e%/*}"; done; way "${e:-/}"; mkdir -p "$d"; way "$d"; `+
-		`f="$p/.meridian.$$"; trap "rm -f \"\$f\"" 0; trap "exit 1" 1 2 13 15; set -C; cat > "$f"; set +C; `+
-		hashScript+`if [ "$h" = "`+hexDigest+`" ]; then chmod 700 "$f"; mv -f "$f" "$p/meridian"; printf "MERIDIAN-INSTALLED %s\n" "$(hx "$p/meridian")"; `+
-		`else rm -f "$f"; printf "MERIDIAN-DIGEST %s\n" "$h"; fi`, f)
+		`f="$p/.meridian.$$"; trap "rm -f \"\$f\"" 0; trap "exit 1" 1 2 13 15; set -C; `+say(ready)+`cat > "$f"; set +C; `+
+		hashScript+`if [ "$h" = "`+hexDigest+`" ]; then chmod 700 "$f"; mv -f "$f" "$p/meridian"; `+say("installed", "at", `"$p/meridian"`)+
+		`else rm -f "$f"; `+say("digest", "digest", `"$h"`)+`fi`, f)
 	if err != nil {
 		return Binary{}, h, err
 	}
-	if err := saidUnusable(out, host); err != nil {
+	if err := saidUnusable(saids, host); err != nil {
 		return Binary{}, h, err
 	}
-	installed, ok := marked(out, "MERIDIAN-INSTALLED")
-	if !ok {
-		found, _ := marked(out, "MERIDIAN-DIGEST")
+	installed := saids["installed"]
+	if installed == nil {
+		var found string
+		if d := saids["digest"]; d != nil {
+			if found, err = unhex(d.Digest); err != nil {
+				return Binary{}, h, err
+			}
+		}
 		if found != "none" {
 			found = "sha256:" + found
 		}
@@ -282,7 +300,7 @@ func Install(ctx context.Context, conn *sshconn.Conn, host string, b *Binaries) 
 			"host": host, "path": h.Cache + "/" + hexDigest + "/meridian", "digest": local.Digest, "found": found,
 		})
 	}
-	at, err := unhex(installed)
+	at, err := unhex(installed.At)
 	if err != nil {
 		return Binary{}, h, err
 	}
@@ -294,28 +312,31 @@ func Install(ctx context.Context, conn *sshconn.Conn, host string, b *Binaries) 
 // variable it can't use is a problem, as meridian's own there would be:
 // problems.DirectoryVariableRelative or problems.HomeUnknown.
 func probe(ctx context.Context, conn *sshconn.Conn, host string) (*Host, error) {
-	out, err := run(ctx, conn, prelude()+cacheScript+`printf "MERIDIAN-HOST %s %s %s\n" "$s" "$(uname -m)" "$(hx "$c")"`, nil)
+	saids, err := run(ctx, conn, prelude()+cacheScript+say("host", "os", `"$s"`, "arch", `"$(uname -m)"`, "cache", `"$c"`), nil)
 	if err != nil {
 		return nil, err
 	}
-	if value, ok := marked(out, "MERIDIAN-RELATIVE"); ok {
-		v, err := unhex(value)
+	if s := saids["relative"]; s != nil {
+		v, err := unhex(s.Value)
 		if err != nil {
 			return nil, err
 		}
 		return nil, problems.DirectoryVariableRelative.Problem(problems.Params{"variable": "MERIDIAN_CACHE_DIR", "value": v})
 	}
-	if _, ok := marked(out, "MERIDIAN-NOHOME"); ok {
+	if saids["nohome"] != nil {
 		return nil, problems.HomeUnknown.Problem(problems.Params{"variable": "MERIDIAN_CACHE_DIR"})
 	}
-	said, _ := marked(out, "MERIDIAN-HOST")
-	fields := strings.SplitN(said, " ", 3)
-	if len(fields) != 3 {
-		return nil, fmt.Errorf("hostbin: %s didn't say its system: %q", host, out)
+	s := saids["host"]
+	if s == nil {
+		return nil, fmt.Errorf("hostbin: %s didn't say its system", host)
 	}
-	h := &Host{OS: fields[0], Arch: fields[1]}
-	if h.Cache, err = unhex(fields[2]); err != nil || !strings.HasPrefix(h.Cache, "/") {
-		return nil, fmt.Errorf("hostbin: %s didn't say its cache: %q", host, out)
+	v, err := unhexes(s.OS, s.Arch, s.Cache)
+	if err != nil {
+		return nil, err
+	}
+	h := &Host{OS: v[0], Arch: v[1], Cache: v[2]}
+	if !strings.HasPrefix(h.Cache, "/") {
+		return nil, fmt.Errorf("hostbin: %s didn't say its cache: %q", host, h.Cache)
 	}
 	// Cleaned, as meridian's own is. The host's paths are a POSIX
 	// system's, whatever this one's are.
@@ -329,45 +350,51 @@ func probe(ctx context.Context, conn *sshconn.Conn, host string) (*Host, error) 
 
 // saidUnusable returns the problem with a directory a script said it
 // can't use, or nil if it said none.
-func saidUnusable(out, host string) error {
-	said, ok := marked(out, "MERIDIAN-UNUSABLE")
-	if !ok {
+func saidUnusable(saids map[string]*said, host string) error {
+	s := saids["unusable"]
+	if s == nil {
 		return nil
 	}
-	fields := strings.SplitN(said, " ", 3)
-	if len(fields) != 3 {
-		return fmt.Errorf("hostbin: %s said a directory can't be used, but not which: %q", host, said)
-	}
-	dir, err := unhex(fields[1])
+	v, err := unhexes(s.Reason, s.Dir, s.At)
 	if err != nil {
 		return err
 	}
-	at, err := unhex(fields[2])
-	if err != nil {
-		return err
-	}
-	return problems.SSHHostDirUnusable.Problem(problems.Params{"host": host, "path": dir, "at": at, "reason": fields[0]})
+	return problems.SSHHostDirUnusable.Problem(problems.Params{"host": host, "path": v[1], "at": v[2], "reason": v[0]})
 }
 
 // digestSaid returns the digest the script said the binary in the cache
 // has, and where it is, or "" if it said none.
-func digestSaid(out string) (digest, at string, err error) {
-	said, ok := marked(out, "MERIDIAN-DIGEST")
-	if !ok {
+func digestSaid(saids map[string]*said) (digest, at string, err error) {
+	s := saids["digest"]
+	if s == nil {
 		return "", "", nil
 	}
-	digest, rest, _ := strings.Cut(said, " ")
-	at, err = unhex(rest)
-	return digest, at, err
+	v, err := unhexes(s.Digest, s.At)
+	if err != nil {
+		return "", "", err
+	}
+	return v[0], v[1], nil
 }
 
-// unhex reads what hx wrote: bytes in hex, with spaces between them.
+// unhex reads what hx wrote: bytes in hex.
 func unhex(s string) (string, error) {
-	b, err := hex.DecodeString(strings.ReplaceAll(s, " ", ""))
+	b, err := hex.DecodeString(s)
 	if err != nil {
 		return "", fmt.Errorf("hostbin: %q isn't hex: %w", s, err)
 	}
 	return string(b), nil
+}
+
+// unhexes reads each of values, as unhex does.
+func unhexes(values ...string) ([]string, error) {
+	out := make([]string, len(values))
+	for i, v := range values {
+		var err error
+		if out[i], err = unhex(v); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // system returns Go's names for a system uname names, and false for one
@@ -398,46 +425,47 @@ func system(os, machine string) (goos, goarch string, ok bool) {
 	return goos, goarch, true
 }
 
-// marked returns what follows marker on the last line of out that starts
-// with it, alone or before a space, and false if no line does.
-func marked(out, marker string) (string, bool) {
-	var last string
-	found := false
-	s := bufio.NewScanner(strings.NewReader(out))
-	s.Buffer(nil, 1<<20)
-	for s.Scan() {
-		if rest, ok := strings.CutPrefix(s.Text(), marker); ok && (rest == "" || rest[0] == ' ') {
-			last, found = strings.TrimPrefix(rest, " "), true
+// ready is what a script says once it is ready for what run copies to it.
+const ready = "ready"
+
+// run runs script on conn (sshconn.Conn.Script), and returns what it said
+// (said), the last it said of each. With stdin, which isn't nil, it copies
+// stdin to the script once it says it is ready for it. One that fails is
+// an error with what it wrote to its standard error.
+func run(ctx context.Context, conn *sshconn.Conn, script string, stdin io.Reader) (map[string]*said, error) {
+	sc, err := conn.Script(ctx, script)
+	if err != nil {
+		return nil, err
+	}
+	defer sc.Close()
+	if stdin == nil {
+		_ = sc.CloseWrite()
+	}
+	saids := map[string]*said{}
+	for {
+		s, err := sshconn.Next(sc, func(s *said) bool { return s.Said != "" })
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("hostbin: %w", err)
+		}
+		saids[s.Said] = s
+		if s.Said == ready && stdin != nil {
+			// One whose copy stops, as one whose cat failed, ends saying
+			// why.
+			_, _ = io.Copy(sc, stdin)
+			_ = sc.CloseWrite()
 		}
 	}
-	return last, found
-}
-
-// run runs script on conn, with stdin, if it isn't nil, as its standard
-// input, and returns what it wrote to its standard output. One that fails
-// is an error with what it wrote to its standard error.
-func run(ctx context.Context, conn *sshconn.Conn, script string, stdin io.Reader) (string, error) {
-	s, err := conn.NewSession(ctx)
-	if err != nil {
-		return "", err
+	if err := sc.Wait(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("hostbin: %w: %s", err, problems.EscapeControl(strings.TrimSpace(sc.Stderr())))
 	}
-	defer s.Close()
-	var stdout, stderr strings.Builder
-	s.Stdout, s.Stderr = &stdout, &stderr
-	if stdin != nil {
-		s.Stdin = stdin
-	}
-	done := make(chan error, 1)
-	go func() { done <- s.Run(command(script)) }()
-	select {
-	case err = <-done:
-	case <-ctx.Done():
-		_ = s.Close()
-		<-done
-		return "", ctx.Err()
-	}
-	if err != nil {
-		return "", fmt.Errorf("hostbin: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.String(), nil
+	return saids, nil
 }
