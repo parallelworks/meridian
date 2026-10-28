@@ -98,7 +98,7 @@
   "source_not_known": "The step's {key} reads what isn't known when the run is created, but the workflow its uses: names is pinned then.",
   "checkout_not_known": "The step's with: {key} reads what isn't known when the run is created, but the step is pinned to a commit then.",
   "checkout_not_found": "There is no revision \"{revision}\" of the repository {repo} here.",
-  "checkout_repo_invalid": "Meridian doesn't check out {repo}: {reason, select, transport {it is reached by another transport than https or ssh} credential {its URL holds a credential} other {it isn't a URL git takes}}.",
+  "checkout_repo_invalid": "Meridian doesn't check out {repo}: {reason, select, transport {it is reached by another transport than https or ssh} credential {its URL holds a credential} name {its host or its user holds what ssh would read as more than a name} other {it isn't a URL git takes}}.",
   "checkout_path_invalid": "The sparse_checkout entry \"{path}\" isn't a path from the repository's root that Meridian takes as it is written.",
   "checkout_revision_invalid": "Meridian doesn't check out the revision \"{revision}\": git could take it for an option, or refuses it as a branch's or a tag's name.",
   "checkout_path_not_found": "The sparse_checkout entry \"{path}\" names nothing in the commit the step checks out.",

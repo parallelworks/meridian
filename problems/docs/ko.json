@@ -680,10 +680,11 @@
   },
   "checkout_repo_invalid": {
     "title": "Meridian이 가져오지 않는 저장소의 체크아웃",
-    "why": "parallelworks/checkout 단계의 repo는 실행을 만들 때 실행하는 사람의 자격 증명으로 git을 써서 코디네이터가 가져옵니다. 그래서 Meridian은 어떤 호스트든 https나 ssh URL, 또는 user@host:path 같은 scp 형식의 URL 가운데 자격 증명이 없는 것만 받습니다. 로컬 경로, file://, ext:: 같은 다른 전송 방식은 코디네이터가 호스트의 파일을 읽거나 그곳에서 명령을 실행하게 합니다. git://와 http://에는 TLS나 SSH가 없어서 가져온 것이 하나도 인증되지 않습니다. URL에 든 사용자와 비밀번호, 또는 토큰은 실행을 볼 수 있는 모두가 읽는 플랜에 비밀을 넣게 됩니다.",
+    "why": "parallelworks/checkout 단계의 repo는 실행을 만들 때 실행하는 사람의 자격 증명으로 git을 써서 코디네이터가 가져옵니다. 그래서 Meridian은 어떤 호스트든 https나 ssh URL, 또는 user@host:path 같은 scp 형식의 URL 가운데 자격 증명이 없는 것만 받습니다. 로컬 경로, file://, ext:: 같은 다른 전송 방식은 코디네이터가 호스트의 파일을 읽거나 그곳에서 명령을 실행하게 합니다. git://와 http://에는 TLS나 SSH가 없어서 가져온 것이 하나도 인증되지 않습니다. URL에 든 사용자와 비밀번호, 또는 토큰은 실행을 볼 수 있는 모두가 읽는 플랜에 비밀을 넣게 됩니다. ssh로 가져올 때는 호스트와 사용자가 이름이어야만 합니다. git은 이것들을 ssh에 넘기고, ssh는 사용자의 ssh 설정에 있는 ProxyCommand 같은 명령에 이것들을 넣으며, 셸이 그 명령을 실행합니다. 그래서 OpenSSH 10.1 이후는 셸의 특수 문자가 든 호스트나 사용자를 거부하고, Meridian도 설치된 ssh와 관계없이 같은 것을 거부합니다.",
     "fix": [
       "저장소를 https:// 또는 ssh:// URL이나 user@host:path로 가리키세요.",
-      "자격 증명은 URL에 넣지 말고, 자격 증명 도우미나 ssh 키 같은 git 자체의 설정으로 주세요."
+      "자격 증명은 URL에 넣지 말고, 자격 증명 도우미나 ssh 키 같은 git 자체의 설정으로 주세요.",
+      "호스트와 사용자는 $, `, ;, |, & 같은 문자 없이 이름만으로 쓰세요."
     ]
   },
   "checkout_path_invalid": {

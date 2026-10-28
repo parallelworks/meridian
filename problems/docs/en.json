@@ -583,10 +583,11 @@
     ]
   },
   "checkout_repo_invalid": {
-    "why": "The coordinator fetches a parallelworks/checkout step's repo, as the run is created, with git and the credentials of whoever runs it, so Meridian takes only an https or ssh URL, or an scp-like one, as user@host:path, on any host, with no credential in it. Another transport, as a local path, file:// or ext::, would have the coordinator read its host's files, or run a command there; git:// and http:// have no TLS or SSH, so nothing fetched would be authenticated; and a user and a password, or a token, in the URL would put a secret in the plan, which everyone who can see the run reads.",
+    "why": "The coordinator fetches a parallelworks/checkout step's repo, as the run is created, with git and the credentials of whoever runs it, so Meridian takes only an https or ssh URL, or an scp-like one, as user@host:path, on any host, with no credential in it. Another transport, as a local path, file:// or ext::, would have the coordinator read its host's files, or run a command there; git:// and http:// have no TLS or SSH, so nothing fetched would be authenticated; and a user and a password, or a token, in the URL would put a secret in the plan, which everyone who can see the run reads. Over ssh, its host and its user must be names alone: git gives them to ssh, which puts them in the commands of the user's ssh config, as a ProxyCommand, that a shell runs. So OpenSSH 10.1 and later refuses a host or a user that holds a shell's special characters, and Meridian refuses the same, whichever ssh is installed.",
     "fix": [
       "Name the repository by an https:// or ssh:// URL, or as user@host:path.",
-      "Give git its credential through its own configuration, as a credential helper or an ssh key, rather than in the URL."
+      "Give git its credential through its own configuration, as a credential helper or an ssh key, rather than in the URL.",
+      "Write the host and the user as names alone, without characters such as $, `, ;, | or &."
     ]
   },
   "checkout_path_invalid": {

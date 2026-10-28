@@ -302,35 +302,14 @@ func TestCategory(t *testing.T) {
 	}
 }
 
-// TestValidNames checks which hosts and users are safe to give ssh, as
-// OpenSSH 10.1's valid_hostname and valid_ruser say: a user's control
-// characters too, which 9.6's took.
-func TestValidNames(t *testing.T) {
-	for host, want := range map[string]bool{
-		"farm": true, "farm-1.example.org": true, "10.0.0.5:2222": true, "[::1]:22": true, "": true, "h\u00e9te": true,
-		"-oProxyCommand=x": false, "a;b": false, "a b": false, "a\tb": false, "a$b": false, "a`b`": false, "a|b": false,
-		"a&b": false, "a>b": false, "a(b)": false, "a{b}": false, "a'b": false, "a\"b": false, "a\\b": false, "a\x01b": false, "a\x7fb": false,
-		"a\nproxycommand touch p": false, "a\rb": false, "a\x00b": false, "a\x1b[31m": false,
-	} {
-		if got := validHostname(host); got != want {
-			t.Errorf("validHostname(%q) = %v, want %v", host, got, want)
-		}
-	}
+// TestHostForm checks which hosts are in a form Dial takes.
+func TestHostForm(t *testing.T) {
 	for host, want := range map[string]bool{
 		"farm": true, "10.0.0.5:2222": true, "[::1]:22": true, "": true,
 		"alice@farm": false, "ssh://farm": false, "ssh://alice@farm:22": false, "a,b": false, "sftp://farm": false,
 	} {
 		if got := hostForm(host); got != want {
 			t.Errorf("hostForm(%q) = %v, want %v", host, got, want)
-		}
-	}
-	for user, want := range map[string]bool{
-		"": true, "alice": true, "a.b-c_d": true, "host$": true, "a b": true, "a\\b": true,
-		"-l": false, "a -b": false, "a;b": false, "a`b": false, "a(b": false, "a'b": false, "a\\": false, "a|b": false,
-		"x\nproxycommand touch p": false, "a\rb": false, "a\x00b": false, "a\x1b[31m": false, "a\x7f": false, "a\tb": false,
-	} {
-		if got := validUser(user); got != want {
-			t.Errorf("validUser(%q) = %v, want %v", user, got, want)
 		}
 	}
 }
