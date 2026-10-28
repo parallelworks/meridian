@@ -557,7 +557,7 @@ func (e *evaluation) decide(v Value, pointer string, gated bool) (d decision, ok
 // or an expression that calls always() or cancelled(), or negates
 // success() or failure() (expr.Expr.StatusChecks). The coordinator asks
 // it of a step's plan, rather than take a worker's word for it, as a
-// step's child is asked for (coordinator.CreateChild). Of an if: whose
+// step's child is asked for (workerapi.ChildRequest). Of an if: whose
 // value is the word always only once it is evaluated, as one that reads
 // an input that holds it, only Step can tell.
 func OutlivesCancel(cond Value) bool {

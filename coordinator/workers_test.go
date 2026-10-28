@@ -8,10 +8,12 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // TestClaimReadier checks what a claim of an attempt gives of its job, as
@@ -94,5 +96,52 @@ jobs:
 	prep := ready.Needs["prep"]
 	if prep.Outcome != plan.OutcomeSuccess || prep.Outputs["x"] != "private-x" || !slices.Equal(prep.Private, []string{"x"}) {
 		t.Errorf("the job reads %+v of prep", prep)
+	}
+}
+
+// TestNeedsActions checks the version of the worker API a job's attempt
+// needs: version 3 for a job with a step that uses an action the
+// coordinator performs, which the step asks it for through a path of that
+// version, as for one that calls a workflow; and version 1 for a job of
+// run: steps alone, or one whose step uses an action only a platform
+// provides, which the worker fails itself.
+func TestNeedsActions(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{})
+	created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(`
+jobs:
+  checkout:
+    steps:
+      - uses: parallelworks/checkout
+        with: {repo: "https://example.com/app.git", branch: main}
+  cancel:
+    steps:
+      - run: echo first
+      - uses: parallelworks/cancel-jobs
+        with: {jobs: [plain]}
+  session:
+    steps:
+      - uses: parallelworks/update-session
+        with: {name: desktop}
+  agent:
+    steps:
+      - uses: parallelworks/wait-for-agent
+        with: {agentId: a}
+  plain:
+    steps:
+      - run: echo plain
+`), nil, compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Sources: pinSources{}})
+	if err != nil || created == nil || diags.HasErrors() {
+		t.Fatalf("the workflow doesn't create: %v, %v", diags, err)
+	}
+	id, err := c.CreateRun(t.Context(), created, runOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := storedRun(t, c, id)
+	for job, want := range map[string]int{"checkout": workerapi.Version3, "cancel": workerapi.Version3, "session": workerapi.Version3, "agent": 1, "plain": 1} {
+		if got, err := (claimReadier{c}).Needs(t.Context(), run, &store.Attempt{Run: id, Job: job}); err != nil || got != want {
+			t.Errorf("the job %s needs version %d, %v; want %d", job, got, err, want)
+		}
 	}
 }

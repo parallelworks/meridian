@@ -22,6 +22,13 @@ const (
 	actionUpdateSession = "parallelworks/update-session"
 )
 
+// asksCoordinator reports whether a step whose uses: is uses asks the
+// coordinator for the action it uses, through version 3 of the worker API
+// (workerapi.PathAction): checkout, cancel-jobs or update-session.
+func asksCoordinator(uses string) bool {
+	return uses == plan.CheckoutUses || uses == actionCancelJobs || uses == actionUpdateSession
+}
+
 // actions is the coordinator's workerapisrv.Actions: it performs the
 // built-in action a step asks for, which it reads from the step in its
 // run's plan, never from the request.
@@ -32,7 +39,7 @@ var _ workerapisrv.Actions = actions{}
 // Act performs the action the step of call's attempt uses: checkout
 // (checkout), cancel-jobs (cancelJobs) or update-session (updateSession).
 func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error) {
-	step, err := r.c.actionStep(ctx, call)
+	step, err := r.c.actionStep(call)
 	if err != nil {
 		return workerapi.ActionAnswer{}, err
 	}
@@ -109,7 +116,7 @@ func (c *Coordinator) sessionRun(ctx context.Context, run *store.Run) (compile.S
 // Tree writes the tree of the parallelworks/checkout step of call's
 // attempt, as the run's plan pins it.
 func (r actions) Tree(ctx context.Context, call *workerapisrv.ActionCall, w io.Writer) error {
-	step, err := r.c.actionStep(ctx, call)
+	step, err := r.c.actionStep(call)
 	if err != nil {
 		return err
 	}
@@ -122,27 +129,12 @@ func (r actions) Tree(ctx context.Context, call *workerapisrv.ActionCall, w io.W
 // actionStep returns the step of call's attempt's job that call names, as
 // the run's plan has it: an error that wraps workerapisrv.ErrNotAction if
 // the job has no such step.
-func (c *Coordinator) actionStep(ctx context.Context, call *workerapisrv.ActionCall) (*plan.Step, error) {
-	p, err := c.plans.get(call.Run)
-	if err != nil {
-		return nil, err
+func (c *Coordinator) actionStep(call *workerapisrv.ActionCall) (*plan.Step, error) {
+	_, step, err := c.planStep(call.Run, call.Attempt, call.Request.Step)
+	if err == nil && step == nil {
+		err = fmt.Errorf("%w: job %q has no step %d", workerapisrv.ErrNotAction, call.Attempt.Job, call.Request.Step)
 	}
-	var job *store.Job
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		job, err = tx.Job(call.Run.ID, call.Attempt.Job)
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	pj := p.Job(job.Name)
-	if pj == nil {
-		return nil, fmt.Errorf("coordinator: run %s's plan has no job %q", call.Run.ID, job.Name)
-	}
-	if i := call.Request.Step; i >= len(pj.Steps) {
-		return nil, fmt.Errorf("%w: job %q has no step %d", workerapisrv.ErrNotAction, job.Name, i)
-	}
-	return &pj.Steps[call.Request.Step], nil
+	return step, err
 }
 
 // actionFailed is the answer of an action that failed, for diags.

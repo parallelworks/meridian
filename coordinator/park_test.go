@@ -13,6 +13,7 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // capacityDriver is a workerDriver whose members each run one job at a
@@ -175,12 +176,12 @@ func TestParkedFor(t *testing.T) {
 		return a
 	}
 	caller := latest(root, "build")
-	child, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: caller.ID, Step: 0, Try: 0, With: map[string]any{"$yaml": "w.yaml", "region": "east"}})
+	child, diags, err := askChild(t, c, caller.ID, workerapi.ChildRequest{Step: 0, Try: 0, With: plan.DataOf(map[string]any{"$yaml": "w.yaml", "region": "east"})})
 	if err != nil || diags.HasErrors() {
 		t.Fatal(child, diags, err)
 	}
 	childCaller := latest(child, "main")
-	grand, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: childCaller.ID, Step: 1, Try: 0, With: map[string]any{"$yaml": "w.yaml"}})
+	grand, diags, err := askChild(t, c, childCaller.ID, workerapi.ChildRequest{Step: 1, Try: 0, With: plan.DataOf(map[string]any{"$yaml": "w.yaml"})})
 	if err != nil || diags.HasErrors() {
 		t.Fatal(grand, diags, err)
 	}

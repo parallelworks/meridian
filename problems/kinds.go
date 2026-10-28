@@ -281,6 +281,10 @@ var (
 	// with: sparse_checkout, path, that isn't a literal path from the
 	// repository's root (plan.CheckCheckoutPath).
 	CheckoutPathInvalid = define(Error, "checkout_path_invalid", "Sparse checkout entry that isn't a path", "path")
+	// CheckoutRevisionInvalid is a parallelworks/checkout step's with:
+	// branch, revision, that a Sources resolver doesn't ask git for: one git
+	// could take for an option, or refuses as a branch's or a tag's name.
+	CheckoutRevisionInvalid = define(Error, "checkout_revision_invalid", "Checkout's revision that isn't a name git takes", "revision")
 )
 
 // Running a workflow: what the phases after Start evaluate, and the
@@ -371,7 +375,7 @@ var (
 	JobVersionUnsupported = define(Error, "job_version_unsupported", "Job of a plan version the worker doesn't read", "version", "supported")
 	RunDirUnusable        = define(Error, "run_dir_unusable", "Run directory the worker couldn't use", "path", "reason")
 	EnvNameInvalid        = define(Error, "env_name_invalid", "Platform's variable with a name no variable can have", "name")
-	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step the worker can't run yet", "uses")
+	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step an earlier version of Meridian can't run", "uses")
 	ActionNeedsPlatform   = define(Error, "action_needs_platform", "Built-in action only a platform provides", "uses")
 	ActionRequestFailed   = define(Error, "action_request_failed", "Request to the coordinator for a built-in action that failed", "uses", "reason")
 	CancelJobsJobUnknown  = define(Warning, "cancel_jobs_job_unknown", "Job a step can't cancel", "job", "suggested", "suggestion")
