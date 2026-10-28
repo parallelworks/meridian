@@ -11,7 +11,7 @@ import (
 )
 
 // storedPlan returns a run id of p, as the store gives it.
-func storedPlan(t *testing.T, id string, p *plan.Plan) *store.Run {
+func storedPlan(t testing.TB, id string, p *plan.Plan) *store.Run {
 	t.Helper()
 	data, err := plan.Encode(p)
 	if err != nil {

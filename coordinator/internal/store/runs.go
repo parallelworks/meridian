@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"cmp"
 	"database/sql"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/compile"
+	"github.com/parallelworks/meridian/internal/lru"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -314,13 +316,21 @@ func (tx *Tx) Run(id string) (*Run, error) {
 // large. A kept start state is shared by whoever reads the run, which
 // mustn't change it, as a plan from the coordinator's cache of plans is.
 //
-// It keeps maxStarts runs' at most, and forgets the one it decoded first to
-// keep another: a process that reads more runs than that in rotation
+// It keeps the runs' read most recently, maxStarts of them at most, and
+// as many as maxStartBytes of their encodings hold: a run's tree, whose
+// every step that calls a workflow, or runs on another host, makes a run
+// of its own, is as many runs as it has, each read by its own workers'
+// requests. A process that reads more runs than it keeps in rotation
 // decodes each start state at each read, as it did before any was kept.
 type startCache struct {
-	mu      sync.Mutex
-	decoded map[int64]keptStart
-	order   []int64
+	// maxCount and maxBytes, which a test sets, bound it: maxStarts and
+	// maxStartBytes for 0.
+	maxCount int
+	maxBytes int64
+
+	mu    sync.Mutex
+	runs  lru.Cache[int64, keptStart] // by run number
+	bytes int64
 }
 
 // A keptStart is a start state, decoded, with the bytes it was decoded
@@ -330,15 +340,19 @@ type keptStart struct {
 	state *compile.StartState
 }
 
-// maxStarts is how many runs' start states a store keeps decoded at most.
-const maxStarts = 64
+// The start-state cache's bounds: how many runs' start states it keeps
+// decoded, and how many bytes of their encodings, at most.
+const (
+	maxStarts     = 4096
+	maxStartBytes = 64 << 20
+)
 
 // decode returns raw, run n's start state, decoded: the one kept of the run
 // when it was decoded from the same bytes, as one a transaction that rolled
 // back may not have been.
 func (c *startCache) decode(n int64, raw []byte) (*compile.StartState, error) {
 	c.mu.Lock()
-	kept, ok := c.decoded[n]
+	kept, ok := c.runs.Get(n)
 	c.mu.Unlock()
 	if ok && bytes.Equal(kept.raw, raw) {
 		return kept.state, nil
@@ -347,19 +361,21 @@ func (c *startCache) decode(n int64, raw []byte) (*compile.StartState, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxCount, maxBytes := cmp.Or(c.maxCount, maxStarts), cmp.Or(c.maxBytes, maxStartBytes)
+	if int64(len(raw)) > maxBytes {
+		return state, nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.decoded == nil {
-		c.decoded = map[int64]keptStart{}
+	if old, ok := c.runs.Remove(n); ok {
+		c.bytes -= int64(len(old.raw))
 	}
-	if _, ok := c.decoded[n]; !ok {
-		if len(c.order) >= maxStarts {
-			delete(c.decoded, c.order[0])
-			c.order = c.order[1:]
-		}
-		c.order = append(c.order, n)
+	c.runs.Put(n, keptStart{raw: raw, state: state})
+	c.bytes += int64(len(raw))
+	for c.runs.Len() > maxCount || c.bytes > maxBytes {
+		_, old, _ := c.runs.RemoveOldest()
+		c.bytes -= int64(len(old.raw))
 	}
-	c.decoded[n] = keptStart{raw: raw, state: state}
 	return state, nil
 }
 

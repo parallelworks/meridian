@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
 )
@@ -89,6 +90,42 @@ func BenchmarkRunOfMatrix(b *testing.B) {
 			}
 			return err
 		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkPlansInTurn gets, in turn, the plans of a tree wider than the
+// coordinator once kept the plans of, as its supervisors' looks get them:
+// 200 runs, each of a plan of 20 jobs of 5 steps.
+func BenchmarkPlansInTurn(b *testing.B) {
+	const runs = 200
+	var w strings.Builder
+	w.WriteString("jobs:\n")
+	for j := range 20 {
+		fmt.Fprintf(&w, "  job%d:\n    steps:\n", j)
+		for s := range 5 {
+			fmt.Fprintf(&w, "      - run: echo job %d step %d ${{ inputs.x }}\n", j, s)
+		}
+	}
+	created, diags, err := compile.Create(b.Context(), "w.yaml", []byte(w.String()), nil, compile.Options{})
+	if err != nil || created == nil {
+		b.Fatal(diags, err)
+	}
+	stored := make([]*store.Run, runs)
+	for i := range stored {
+		stored[i] = storedPlan(b, strconv.Itoa(i+1), created.Plan)
+	}
+	c := newPlanCache(planCacheCount, planCacheBytes)
+	// Each run's first get decodes its plan, as any cache does.
+	for _, r := range stored {
+		if _, err := c.get(r); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; b.Loop(); i++ {
+		if _, err := c.get(stored[i%runs]); err != nil {
 			b.Fatal(err)
 		}
 	}

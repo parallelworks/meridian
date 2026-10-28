@@ -68,35 +68,52 @@ func TestStartStateKept(t *testing.T) {
 	}
 }
 
-// TestStartsForgotten checks that the store keeps maxStarts runs' start
-// states at most, forgetting the one it decoded first to keep another.
+// TestStartsForgotten checks that the store keeps the start states of the
+// runs read most recently, as many as its count and its bytes allow,
+// forgetting the one read longest ago to keep another; and doesn't keep
+// one larger than its bytes.
 func TestStartsForgotten(t *testing.T) {
 	t.Parallel()
 	raw, err := compile.EncodeStartState(testState())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var c startCache
-	first, err := c.decode(1, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for n := range int64(maxStarts - 1) {
-		if _, err := c.decode(n+2, raw); err != nil {
+	decode := func(c *startCache, n int64) *compile.StartState {
+		t.Helper()
+		st, err := c.decode(n, raw)
+		if err != nil {
 			t.Fatal(err)
 		}
+		return st
 	}
-	if again, _ := c.decode(1, raw); again != first {
-		t.Fatal("a start state was forgotten before the store kept maxStarts")
+	if maxStarts < 1024 || maxStartBytes < 16<<20 {
+		t.Errorf("the store keeps %d start states, and %d bytes of them, at most: too few for a tree of runs", maxStarts, maxStartBytes)
 	}
-	if _, err := c.decode(maxStarts+1, raw); err != nil {
-		t.Fatal(err)
+	for name, c := range map[string]*startCache{
+		"by count": {maxCount: 4},
+		"by bytes": {maxBytes: 4 * int64(len(raw))},
+	} {
+		first, second := decode(c, 1), decode(c, 2)
+		decode(c, 3)
+		decode(c, 4)
+		if again := decode(c, 1); again != first {
+			t.Errorf("%s: a start state was forgotten before the store was full", name)
+		}
+		decode(c, 5)
+		if c.runs.Len() != 4 || c.bytes != 4*int64(len(raw)) {
+			t.Errorf("%s: the store keeps %d start states, of %d bytes", name, c.runs.Len(), c.bytes)
+		}
+		if again := decode(c, 1); again != first {
+			t.Errorf("%s: the start state read last was forgotten", name)
+		}
+		if again := decode(c, 2); again == second {
+			t.Errorf("%s: the start state read longest ago wasn't forgotten", name)
+		}
 	}
-	if len(c.decoded) != maxStarts || len(c.order) != maxStarts {
-		t.Errorf("the store keeps %d start states, in an order of %d", len(c.decoded), len(c.order))
-	}
-	if again, _ := c.decode(1, raw); again == first {
-		t.Error("the start state decoded first wasn't forgotten")
+	c := &startCache{maxBytes: int64(len(raw)) - 1}
+	decode(c, 1)
+	if c.runs.Len() != 0 || c.bytes != 0 {
+		t.Errorf("a start state larger than the store's bytes was kept: %d, of %d bytes", c.runs.Len(), c.bytes)
 	}
 }
 

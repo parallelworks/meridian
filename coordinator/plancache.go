@@ -10,9 +10,13 @@ import (
 )
 
 // The plan cache's bounds: how many plans it holds, and how many bytes of
-// their encodings, at most.
+// their encodings, at most. A run's tree, whose every step that calls a
+// workflow makes a run of its own, with a plan of its own, is as many
+// plans as it has runs that call one, each read by its supervisors'
+// looks: the bytes bound the cache, and the count only what a tree of
+// small plans keeps beside them.
 const (
-	planCacheCount = 64
+	planCacheCount = 4096
 	planCacheBytes = 256 << 20
 )
 
