@@ -12,6 +12,7 @@
 package hostbin
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -376,11 +377,15 @@ func digestSaid(saids map[string]*said) (digest, at string, err error) {
 	return v[0], v[1], nil
 }
 
-// unhex reads what hx wrote: bytes in hex.
+// unhex reads what hx wrote: bytes in hex, which hold no NUL, as no path,
+// nor anything else a script says, can.
 func unhex(s string) (string, error) {
 	b, err := hex.DecodeString(s)
-	if err != nil {
+	switch {
+	case err != nil:
 		return "", fmt.Errorf("hostbin: %q isn't hex: %w", s, err)
+	case bytes.IndexByte(b, 0) >= 0:
+		return "", fmt.Errorf("hostbin: %q holds NUL, which no path can", s)
 	}
 	return string(b), nil
 }

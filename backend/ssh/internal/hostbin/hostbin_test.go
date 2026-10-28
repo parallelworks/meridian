@@ -45,8 +45,27 @@ func newRig(t *testing.T, env ...string) *rig {
 func newRigWith(t *testing.T, opts sshtest.Options, env ...string) *rig {
 	t.Helper()
 	r := &rig{t: t, home: t.TempDir()}
-	client := t.TempDir()
-	if err := os.Mkdir(filepath.Join(client, ".ssh"), 0o700); err != nil {
+	c := newClient(t)
+	env = append([]string{"HOME=" + r.home, "XDG_CACHE_HOME=", "MERIDIAN_CACHE_DIR="}, env...)
+	opts.Authorized, opts.Env = []ssh.PublicKey{c.key.PublicKey()}, env
+	r.server = sshtest.New(t, opts)
+	r.conn = c.dial(r.server.KnownHosts(""), sshconn.Target{Host: r.server.Addr()})
+	return r
+}
+
+// A client is the test's side of a connection: a home with a key of its
+// own.
+type client struct {
+	t   *testing.T
+	dir string
+	key ssh.Signer
+}
+
+// newClient makes a client's home, with a new key.
+func newClient(t *testing.T) *client {
+	t.Helper()
+	c := &client{t: t, dir: t.TempDir()}
+	if err := os.Mkdir(filepath.Join(c.dir, ".ssh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -57,21 +76,26 @@ func newRigWith(t *testing.T, opts sshtest.Options, env ...string) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(client, ".ssh", "id_ecdsa"), pem.EncodeToMemory(block))
-	signer, err := ssh.NewSignerFromKey(k)
+	write(t, filepath.Join(c.dir, ".ssh", "id_ecdsa"), pem.EncodeToMemory(block))
+	if c.key, err = ssh.NewSignerFromKey(k); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// dial connects to target, whose host's key knownHosts holds, with
+// OpenSSH's defaults, there being no ssh client named, nor a config, until
+// the test ends.
+func (c *client) dial(knownHosts string, target sshconn.Target) *sshconn.Conn {
+	c.t.Helper()
+	write(c.t, filepath.Join(c.dir, ".ssh", "known_hosts"), []byte(knownHosts))
+	d := &sshconn.Dialer{SSH: filepath.Join(c.dir, "no-ssh"), ConfigFile: filepath.Join(c.dir, "no-config"), Home: c.dir, User: "tester", Getenv: func(string) string { return "" }}
+	conn, err := d.Dial(c.t.Context(), target)
 	if err != nil {
-		t.Fatal(err)
+		c.t.Fatal(err)
 	}
-	env = append([]string{"HOME=" + r.home, "XDG_CACHE_HOME=", "MERIDIAN_CACHE_DIR="}, env...)
-	opts.Authorized, opts.Env = []ssh.PublicKey{signer.PublicKey()}, env
-	r.server = sshtest.New(t, opts)
-	write(t, filepath.Join(client, ".ssh", "known_hosts"), []byte(r.server.KnownHosts("")))
-	d := &sshconn.Dialer{SSH: filepath.Join(client, "no-ssh"), ConfigFile: filepath.Join(client, "no-config"), Home: client, User: "tester", Getenv: func(string) string { return "" }}
-	if r.conn, err = d.Dial(t.Context(), sshconn.Target{Host: r.server.Addr()}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = r.conn.Close() })
-	return r
+	c.t.Cleanup(func() { _ = conn.Close() })
+	return conn
 }
 
 func write(t *testing.T, path string, data []byte) {

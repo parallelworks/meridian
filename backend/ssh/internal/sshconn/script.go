@@ -60,8 +60,13 @@ type Script struct {
 // The script prints first a nonce of its own, a random word that nothing
 // else knows, and Next reads only what follows it: nothing a login script
 // prints before sh runs, by accident or by design, is taken for what the
-// script says. The session is closed once ctx is done, or by Close.
+// script says. A script can't hold NUL, which sh drops, so that a value
+// that holds one, which no path can, isn't taken for another. The session
+// is closed once ctx is done, or by Close.
 func (c *Conn) Script(ctx context.Context, script string) (*Script, error) {
+	if strings.ContainsRune(script, 0) {
+		return nil, errScriptNUL
+	}
 	s, err := c.newSession(ctx)
 	if err != nil {
 		return nil, err
@@ -89,6 +94,9 @@ func (c *Conn) Script(ctx context.Context, script string) (*Script, error) {
 	return sc, nil
 }
 
+// errScriptNUL is the error of a script that holds NUL.
+var errScriptNUL = errors.New("sshconn: a script holds NUL, which sh drops")
+
 // Write writes p to the script's standard input, after the script.
 func (sc *Script) Write(p []byte) (int, error) { return sc.stdin.Write(p) }
 
@@ -98,9 +106,12 @@ func (sc *Script) CloseWrite() error { return sc.stdin.Close() }
 
 // Wait waits for the script to end, and returns how it did: nil for one
 // that exited 0, an error for one that didn't, or ctx's error once the
-// context the script runs in is done.
+// context the script runs in is done. What the script writes that the
+// caller hasn't read is discarded, so that a script that writes more than
+// the session takes unread, as a login script can, ends.
 func (sc *Script) Wait() error {
 	sc.waitOnce.Do(func() {
+		_, _ = io.Copy(io.Discard, sc.out)
 		sc.waitErr = sc.s.Wait()
 		if sc.waitErr == nil {
 			sc.waitErr = sc.written

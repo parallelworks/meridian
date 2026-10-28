@@ -909,7 +909,25 @@ func TestScript(t *testing.T) {
 		t.Errorf("a script that exited 3 gave %v, and wrote %q", err, failed.Stderr())
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
+	if _, err := c.Script(t.Context(), "echo 'a\x00b'"); err == nil {
+		t.Error("a script that holds NUL ran")
+	}
+
+	// One that writes more than the session takes unread ends, as one whose
+	// login script prints much does.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	loud, err := c.Script(ctx, "head -c 4194304 /dev/zero | tr '\\0' a; echo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loud.Close()
+	_ = loud.CloseWrite()
+	if err := loud.Wait(); err != nil {
+		t.Errorf("a script that wrote 4 MiB nobody read gave %v", err)
+	}
+
+	ctx, cancel = context.WithCancel(t.Context())
 	// It waits for what it is never written.
 	slow, err := c.Script(ctx, "read x")
 	if err != nil {
