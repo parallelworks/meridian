@@ -351,10 +351,11 @@ const (
 // Get returns the pool's connection to t. Where it has none that is open,
 // it dials t, and waits for the dial until ctx is done: the dial goes on,
 // bounded by the Dialer's own timeouts (Dialer.Dial), and what it makes is
-// the pool's, for the next Get. While another Get's dial
-// of t is going on, or before the backoff from failing to reach t has
-// passed, it dials nothing, and answers at once, a *DialError that is
-// Waiting. A dial that fails is a *DialError, which counts it. Only the pool's Close ends a dial early.
+// the pool's, for the next Get. While another Get's dial of t is going
+// on, or before the backoff from failing to reach t has passed, it dials
+// nothing, and answers at once, a *DialError that is Waiting. A dial that
+// fails, its own bounds included, is a *DialError, which counts it; the
+// pool's Close ends one early, and counts nothing.
 func (p *Pool) Get(ctx context.Context, t Target) (*Conn, error) {
 	key := t.key()
 	p.mu.Lock()
