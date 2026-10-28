@@ -16,9 +16,9 @@ import (
 // all of it: before 10.1, a user's control characters, as a newline, which
 // starts a line of ssh -G's output of its own (CVE-2025-61984). So the
 // check is Meridian's own, as OpenSSH 10.1's valid_hostname and
-// valid_ruser make it, whichever ssh is installed (sshname). A value it refuses is
-// problems.SSHTargetUnsafe, of format 1's key for it, with the value
-// escaped (escape).
+// valid_ruser make it, whichever ssh is installed (sshname). A value it
+// refuses is problems.SSHTargetUnsafe, of format 1's key for it, with the
+// value escaped (escape).
 //
 // It then refuses a host in a form Dial doesn't take
 // (problems.SSHHostFormUnsupported): one that names a user, or is a URL,

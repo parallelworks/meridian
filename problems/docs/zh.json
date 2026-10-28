@@ -680,7 +680,7 @@
   },
   "checkout_repo_invalid": {
     "title": "检出 Meridian 不获取的仓库",
-    "why": "parallelworks/checkout 步骤的 repo 由协调器在创建运行时使用 git 和运行者的凭据获取，因此 Meridian 只接受任意主机上的 https 或 ssh URL，或者 user@host:path 这样的类 scp URL，且其中不能包含凭据。其他传输方式，例如本地路径、file:// 或 ext::，会让协调器读取其主机上的文件或在那里运行命令；git:// 和 http:// 没有 TLS 或 SSH，因此获取的内容都不会经过认证；而 URL 中的用户名和密码或令牌会把秘密放进计划，而能看到该运行的每个人都能读取计划。 通过 ssh 获取时，主机和用户只能是名字：git 会把它们交给 ssh，而 ssh 会把它们放进用户 ssh 配置中的命令（例如 ProxyCommand），再由 shell 运行。因此 OpenSSH 10.1 及更高版本会拒绝包含 shell 特殊字符的主机或用户，而无论安装的是哪个 ssh，Meridian 都会拒绝同样的名字。",
+    "why": "parallelworks/checkout 步骤的 repo 由协调器在创建运行时使用 git 和运行者的凭据获取，因此 Meridian 只接受任意主机上的 https 或 ssh URL，或者 user@host:path 这样的类 scp URL，且其中不能包含凭据。其他传输方式，例如本地路径、file:// 或 ext::，会让协调器读取其主机上的文件或在那里运行命令；git:// 和 http:// 没有 TLS 或 SSH，因此获取的内容都不会经过认证；而 URL 中的用户名和密码或令牌会把秘密放进计划，而能看到该运行的每个人都能读取计划。通过 ssh 获取时，主机和用户只能是名字：git 会把它们交给 ssh，而 ssh 会把它们放进用户 ssh 配置中的命令（例如 ProxyCommand），再由 shell 运行。因此 OpenSSH 10.1 及更高版本会拒绝包含 shell 特殊字符的主机或用户，而无论安装的是哪个 ssh，Meridian 都会拒绝同样的名字。",
     "fix": [
       "用 https:// 或 ssh:// URL，或者 user@host:path 来指定仓库。",
       "通过 git 自己的配置（例如凭据助手或 ssh 密钥）提供凭据，而不要放在 URL 中。",

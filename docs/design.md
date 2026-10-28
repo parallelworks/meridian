@@ -2583,12 +2583,13 @@ checkout.
     secret in the plan; and, over ssh, a host or a user that holds what
     ssh would read as more than a name, by the rules OpenSSH 10.1 and
     later checks its own command line with, as Meridian checks an `ssh:`'s
-    ([Connections](#connections)), with a URL's percent-escapes decoded,
-    as Git decodes them: Git gives them to ssh, which puts them in the
-    commands of the user's ssh config, as a `ProxyCommand`, that a shell
-    runs, and an older ssh takes them. None of the known workflows'
-    checkouts names one. Git is the `git`
-    command, not a client in Go
+    ([Connections](#connections)). They are checked as Git gives them
+    to ssh, with a URL's percent-escapes decoded, and an address's
+    brackets and a port taken out, and as ssh splits the user from the
+    host, at the last `@`. ssh puts them in the commands of the user's ssh
+    config, as a `ProxyCommand`, that a shell runs, and an older ssh takes
+    them. None of the known workflows' checkouts names one. Git is the
+    `git` command, not a client in Go
     ([FIPS 140-3](#fips-140-3)). ACTIVATE runs `git` on the step's host,
     with that host's credentials, and through the platform, with the run's
     owner's linked account, where that fails. The worker's host needs no

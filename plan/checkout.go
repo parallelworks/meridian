@@ -99,10 +99,10 @@ var sshSchemes = []string{"ssh", "git+ssh", "ssh+git"}
 // is written, wherever the run is created: a URL git takes over https or
 // ssh, as https://host/path, ssh://[user@]host[:port]/path, or
 // [user@]host:path, scp-like, with an IPv6 address in brackets, as
-// [::1]:path, on any host, as format 1 takes, with no
-// credential in it, and, over ssh, a host and a user that ssh would read
-// as names alone (sshname), as git decodes them from a URL's
-// percent-escapes. Anything else is a checkout_repo_invalid problem, with
+// [::1]:path, on any host, as format 1 takes, with no credential in it,
+// and, over ssh, a host and a user that ssh would read as names alone
+// (sshname), as git gives them to ssh and ssh splits them (sshRepo).
+// Anything else is a checkout_repo_invalid problem, with
 // the repository as ShowRepo shows it, and the reason: RepoTransport,
 // RepoCredential, RepoForm or RepoName. A Sources resolver can refuse
 // more, as a platform's can refuse a host.
@@ -123,18 +123,19 @@ func CheckRepo(repo string) error {
 		if scheme != "https" && !slices.Contains(sshSchemes, scheme) {
 			return invalid(RepoTransport)
 		}
-		authority, path, _ := strings.Cut(rest, "/")
-		user, host, hasUser := strings.Cut(authority, "@")
-		if !hasUser {
-			host, user = user, ""
+		if scheme == "https" {
+			authority, path, _ := strings.Cut(rest, "/")
+			switch {
+			case strings.Contains(authority, "@"):
+				return invalid(RepoCredential)
+			case authority == "" || strings.HasPrefix(authority, "-") || strings.Trim(path, "/") == "":
+				return invalid(RepoForm)
+			}
+			return nil
 		}
-		switch {
-		case hasUser && (scheme == "https" || strings.Contains(user, ":")):
-			return invalid(RepoCredential)
-		case host == "" || strings.HasPrefix(host, "-") || strings.HasPrefix(user, "-") || strings.Trim(path, "/") == "":
-			return invalid(RepoForm)
-		case scheme != "https" && !sshNames(urlDecode(host), urlDecode(user)):
-			return invalid(RepoName)
+		// git decodes the URL's percent-escapes before it reads its host.
+		if reason := sshRepo(urlDecode(rest), '/'); reason != "" {
+			return invalid(reason)
 		}
 		return nil
 	}
@@ -147,42 +148,94 @@ func CheckRepo(repo string) error {
 	if scpUserinfo(repo) >= 0 {
 		return invalid(RepoCredential)
 	}
-	if user, address, path, ok := scpBracketed(repo); ok {
-		if address == "" || strings.HasPrefix(address, "-") || strings.HasPrefix(user, "-") || strings.Trim(path, "/") == "" {
-			return invalid(RepoForm)
+	if _, _, _, bracketed := scpBracketed(repo); !bracketed {
+		authority, path, scp := strings.Cut(repo, ":")
+		if !scp || strings.Contains(authority, "/") || strings.HasPrefix(path, ":") {
+			return invalid(RepoTransport)
 		}
-		if !sshNames(address, user) {
-			return invalid(RepoName)
-		}
-		return nil
 	}
-	authority, path, scp := strings.Cut(repo, ":")
-	if !scp || strings.Contains(authority, "/") || strings.HasPrefix(path, ":") {
-		return invalid(RepoTransport)
-	}
-	user, host, hasUser := strings.Cut(authority, "@")
-	if !hasUser {
-		host, user = user, ""
-	}
-	if host == "" || strings.HasPrefix(host, "-") || strings.HasPrefix(user, "-") || strings.Trim(path, "/") == "" {
-		return invalid(RepoForm)
-	}
-	if !sshNames(host, user) {
-		return invalid(RepoName)
+	if reason := sshRepo(repo, ':'); reason != "" {
+		return invalid(reason)
 	}
 	return nil
 }
 
-// sshNames reports whether host, with its port, if it has one, or an
-// address in brackets, and user, of a repository git reaches over ssh,
-// are safe to give ssh (sshname).
-func sshNames(host, user string) bool {
-	return sshname.ValidHost(host) && sshname.ValidUser(user)
+// sshRepo checks s, a repository git reaches over ssh: an ssh URL after
+// its scheme and ://, decoded, or an scp-like one, whose path follows the
+// first sep after its host, as git reads it. It returns why it refuses it,
+// or "". What it checks is what git gives ssh, its destination
+// (sshDestination), split at its last @, as ssh splits it: a user with a
+// colon holds a password; an empty host, a host or a user that starts
+// with -, and an empty path aren't a repository's; and a host or a user
+// that ssh would read as more than a name (sshname) is RepoName.
+func sshRepo(s string, sep byte) string {
+	end := hostEnd(s)
+	i := strings.IndexByte(s[end:], sep)
+	if i < 0 {
+		return RepoForm
+	}
+	dest, path := sshDestination(s[:end+i]), s[end+i+1:]
+	user, host, hasUser := strings.CutLast(dest, "@")
+	if !hasUser {
+		user, host = "", dest
+	}
+	switch {
+	case strings.Contains(user, ":"):
+		return RepoCredential
+	case host == "" || strings.HasPrefix(host, "-") || strings.HasPrefix(user, "-") || strings.Trim(path, "/") == "":
+		return RepoForm
+	case !sshname.ValidHost(host) || !sshname.ValidUser(user):
+		return RepoName
+	}
+	return ""
+}
+
+// hostEnd returns where the host of s, a repository's [user@]host and
+// what follows it, ends, as git's host_end finds it: past an address in
+// brackets, which starts s, or follows its first @[; and otherwise 0,
+// from where git looks for the separator before its path.
+func hostEnd(s string) int {
+	start := 0
+	if i := strings.Index(s, "@["); i >= 0 {
+		start = i + 1
+	}
+	if strings.HasPrefix(s[start:], "[") {
+		if j := strings.IndexByte(s[start+1:], ']'); j >= 0 {
+			return start + 1 + j + 1
+		}
+	}
+	return 0
+}
+
+// sshDestination returns what git gives ssh of hostport, a repository's
+// [user@]host[:port], as its get_host_and_port makes it: an address's
+// brackets taken out, and what follows them, a port, cut off; or else,
+// after the first colon, a port, a number from 0 to 65535, or nothing,
+// cut off.
+func sshDestination(hostport string) string {
+	start := 0
+	if i := strings.Index(hostport, "@["); i >= 0 {
+		start = i + 1
+	}
+	if strings.HasPrefix(hostport[start:], "[") {
+		if j := strings.IndexByte(hostport[start+1:], ']'); j >= 0 {
+			return hostport[:start] + hostport[start+1:start+1+j]
+		}
+	}
+	if before, port, ok := strings.Cut(hostport, ":"); ok {
+		if n, err := strconv.ParseInt(port, 10, 64); port == "" || err == nil && n >= 0 && n < 65536 {
+			return before
+		}
+	}
+	return hostport
 }
 
 // urlDecode decodes s, a part of a URL, as git does a URL it reaches over
 // ssh before it gives ssh its host and user: each % and two hex digits is
-// the byte they write, and anything else is as it is.
+// the byte they write, and anything else is as it is. git leaves %00 as
+// it is, where this decodes it to a NUL, which no host or user takes: a
+// repository refused for that, git would take, so this is stricter than
+// git, never looser.
 func urlDecode(s string) string {
 	if !strings.Contains(s, "%") {
 		return s

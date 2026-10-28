@@ -119,6 +119,15 @@ func TestCheckRepo(t *testing.T) {
 		{"ssh://x%24%28id%29@host/app", plan.RepoName, "ssh://" + problems.Masked + "@host/app"},
 		{"ssh://h%60id%60/app", plan.RepoName, ""},
 		{"ssh://h%0aProxyCommand%20x/app", plan.RepoName, ""},
+		// ssh splits the user from the host at the last @ of what git
+		// gives it: the host, without its brackets or port, decoded.
+		{"ssh://a@b@-oProxyCommand=x/app", plan.RepoForm, "ssh://" + problems.Masked + "@-oProxyCommand=x/app"},
+		{"a@b@-oProxyCommand=x:app", plan.RepoForm, ""},
+		{"ssh://u@[-oProxyCommand=x]/app", plan.RepoForm, "ssh://" + problems.Masked + "@[-oProxyCommand=x]/app"},
+		{"u@[a@-x]:app", plan.RepoForm, ""},
+		{"ssh://a@host%40-x/app", plan.RepoForm, "ssh://" + problems.Masked + "@host%40-x/app"},
+		{"git+ssh://u@[-x]:22/app", plan.RepoForm, "git+ssh://" + problems.Masked + "@[-x]:22/app"},
+		{"ssh://a@b:c@host/app", plan.RepoCredential, "ssh://" + problems.Masked + "@host/app"},
 	} {
 		p := kindtest.Want(t, plan.CheckRepo(tc.repo), problems.CheckoutRepoInvalid)
 		shown := tc.shown

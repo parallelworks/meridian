@@ -75,11 +75,11 @@ const systemConfig = "/etc/ssh/ssh_config"
 // expands it, as in UserKnownHostsFile and RevokedHostKeys, or expand
 // does, as in IdentityFile, see the same user, as with ssh. The host and
 // the user are ones their callers checked, as Target.check checks a
-// target's (sshname.ValidHost, sshname.ValidUser): an ssh before 10.1 prints a user as
-// it is given, so a newline in one would start a line of its own, which
-// parse could take for the config's (CVE-2025-61984). It refuses others,
-// unchecked, before anything runs. Without an ssh client, OpenSSH's
-// defaults apply (defaults). A config ssh can't read is
+// target's (sshname.ValidHost, sshname.ValidUser): an ssh before 10.1
+// prints a user as it is given, so a newline in one would start a line of
+// its own, which parse could take for the config's (CVE-2025-61984). It
+// refuses others, unchecked, before anything runs. Without an ssh client,
+// OpenSSH's defaults apply (defaults). A config ssh can't read is
 // problems.SSHConfigUnreadable.
 func (d *Dialer) resolve(ctx context.Context, host, port, user string) (*hostConfig, error) {
 	if !sshname.ValidHost(host) || !sshname.ValidUser(user) {
