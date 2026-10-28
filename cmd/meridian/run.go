@@ -248,16 +248,17 @@ type followed struct {
 }
 
 // followRun shows the run id on rs.progress as it goes, its events and,
-// unless rs.follow is nil, its steps' logs, until it has ended or ctx is
-// done: then it sends how it ended, with the event that says so, which it
-// leaves to finished to show.
+// unless rs.follow is nil, its steps' logs, and those of the runs its steps
+// call, under their steps, until it has ended or ctx is done: then it
+// sends how it ended, with the event that says so, which it leaves to
+// finished to show.
 func followRun(ctx context.Context, coord *coordinator.Coordinator, id string, rs runSupervision) followed {
 	f := followed{ended: make(chan runEnd, 1), done: make(chan struct{})}
 	go func() {
 		defer close(f.done)
 		var end runEnd
-		opts := coordinator.FollowOptions{Event: func(e coordinator.Event) error {
-			if e.Kind == coordinator.RunFinished {
+		opts := coordinator.FollowOptions{Tree: true, Event: func(e coordinator.Event) error {
+			if e.Kind == coordinator.RunFinished && len(e.Callers) == 0 {
 				end.event = e
 				return nil
 			}

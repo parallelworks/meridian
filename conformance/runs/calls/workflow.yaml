@@ -13,6 +13,7 @@ jobs:
         with:
           $yaml: greet.yaml
           greeting: ${{ inputs.greeting }}
+          token: ${{ vars.token }}
       - run: cat subworkflows/main/step_0/said
       - uses: github/conformance/calls
         with:

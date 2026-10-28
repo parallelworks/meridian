@@ -190,7 +190,14 @@ WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_
 	if err != nil {
 		return err
 	}
-	return oneRow(res, fmt.Errorf("store: the run ID %s wasn't given by NewRunID", r.ID))
+	if err := oneRow(res, fmt.Errorf("store: the run ID %s wasn't given by NewRunID", r.ID)); err != nil {
+		return err
+	}
+	if !link.run.Valid {
+		return nil
+	}
+	// The run whose step called the child says so, as a step's event.
+	return tx.addChildEvent(link.run.Int64, EventChildCreated, link.job.String, link.attmpt.String, n)
 }
 
 const runColumns = `id, created_at, plan, plan_version, plan_digest, name, location, release,
@@ -448,6 +455,9 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	if err := tx.addEvent(n, EventRunFinished, "", "", 0); err != nil {
 		return err
 	}
+	if err := tx.childEnded(n); err != nil {
+		return err
+	}
 	tx.ended = append(tx.ended, id)
 	if _, err := tx.exec("DELETE FROM meridian_records WHERE run_id = ?", n); err != nil {
 		return err
@@ -460,6 +470,23 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	}
 	tx.erased = true
 	return nil
+}
+
+// childEnded adds child.ended to the events of the run whose step called
+// the run numbered n, which has ended, unless that run has ended too, as a
+// child's caller that isn't its root can, whose events end with its end.
+func (tx *Tx) childEnded(n int64) error {
+	var (
+		parent       sql.NullInt64
+		job, attempt sql.NullString
+		state        sql.NullString
+	)
+	err := tx.queryRow(`SELECT c.parent_run, c.parent_job, c.parent_attempt, p.state
+FROM meridian_runs c LEFT JOIN meridian_runs p ON p.id = c.parent_run WHERE c.id = ?`, n).Scan(&parent, &job, &attempt, &state)
+	if err != nil || !parent.Valid || state.String == string(RunEnded) {
+		return err
+	}
+	return tx.addChildEvent(parent.Int64, EventChildEnded, job.String, attempt.String, n)
 }
 
 // StopRun stores the run's stop record: that it is stopped early now, for

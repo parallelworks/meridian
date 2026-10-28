@@ -33,6 +33,11 @@ const maxLine = 64 << 10
 //	14:02:07 build#2 attempt 1 running on local/host
 //	build#2 step 0| compiling
 //
+// and those of a run a step called, after the step, as
+//
+//	14:02:08 build step 1 › run 7 created
+//	build step 1 › main step 0| testing
+//
 // or as JSON, one object a line (ProgressVersion). A log's lines are each
 // written once whole, prefixed with what they are the log of, as the job's
 // step 0's, or its retry 1's, or its cleanup's; its setup log, of how its
@@ -41,37 +46,45 @@ const maxLine = 64 << 10
 type Progress struct {
 	out, errs io.Writer
 	json      bool
-	// lines are the logs' parts that don't end a line yet, by log.
-	lines map[coordinator.LogKey][]byte
+	// lines are the logs' parts that don't end a line yet, by log, and
+	// callers the steps that called the run of each, as Follow gave them.
+	lines   map[coordinator.LogKey][]byte
+	callers map[coordinator.LogKey][]coordinator.Caller
 }
 
 // NewProgress returns a Progress that writes to out, as JSON when json is
 // set, and what a person reads of problems to errs.
 func NewProgress(out, errs io.Writer, json bool) *Progress {
-	return &Progress{out: out, errs: errs, json: json, lines: map[coordinator.LogKey][]byte{}}
+	return &Progress{out: out, errs: errs, json: json, lines: map[coordinator.LogKey][]byte{}, callers: map[coordinator.LogKey][]coordinator.Caller{}}
 }
 
 // A progressLine is one of the JSON lines Progress writes: an event, as
 // coordinator.Event says, the creation of a run, a run left running, or a
 // part of a log, with what each has.
 type progressLine struct {
-	Version  int       `json:"version"`
-	Kind     string    `json:"kind"`
-	Seq      int64     `json:"seq,omitzero"`
-	Time     time.Time `json:"time,omitzero"`
-	Run      string    `json:"run"`
-	RunDir   string    `json:"runDir,omitempty"`
-	Job      string    `json:"job,omitempty"`
-	Attempt  int       `json:"attempt,omitzero"`
-	Member   string    `json:"member,omitempty"`
-	Part     string    `json:"part,omitempty"`
-	Step     *int      `json:"step,omitempty"`
-	Try      int       `json:"try,omitzero"`
-	Cleanup  bool      `json:"cleanup,omitzero"`
-	End      string    `json:"end,omitempty"`
-	Outcome  string    `json:"outcome,omitempty"`
-	Reason   string    `json:"reason,omitempty"`
-	ExitCode *int      `json:"exitCode,omitempty"`
+	Version int       `json:"version"`
+	Kind    string    `json:"kind"`
+	Seq     int64     `json:"seq,omitzero"`
+	Time    time.Time `json:"time,omitzero"`
+	Run     string    `json:"run"`
+	// Callers are the tries of the steps that called the run, from the run
+	// the command follows down, of a line of a run a step called, at any
+	// depth; and Child the run a child.created or child.ended event of a
+	// run's is about, which its job's step's try called.
+	Callers  []progressCaller `json:"callers,omitempty"`
+	Child    string           `json:"child,omitempty"`
+	RunDir   string           `json:"runDir,omitempty"`
+	Job      string           `json:"job,omitempty"`
+	Attempt  int              `json:"attempt,omitzero"`
+	Member   string           `json:"member,omitempty"`
+	Part     string           `json:"part,omitempty"`
+	Step     *int             `json:"step,omitempty"`
+	Try      int              `json:"try,omitzero"`
+	Cleanup  bool             `json:"cleanup,omitzero"`
+	End      string           `json:"end,omitempty"`
+	Outcome  string           `json:"outcome,omitempty"`
+	Reason   string           `json:"reason,omitempty"`
+	ExitCode *int             `json:"exitCode,omitempty"`
 	// Text is a log's line, with the newline that ends it, if one does,
 	// and its bytes that aren't UTF-8 replaced. Ended is set on a log's
 	// last line, once the log has ended, and Cut instead once its attempt
@@ -80,6 +93,26 @@ type progressLine struct {
 	Ended       bool                 `json:"ended,omitzero"`
 	Cut         bool                 `json:"cut,omitzero"`
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
+}
+
+// A progressCaller is the try of a step that called a run, in a JSON line
+// of Progress's: its run, its job's key, the number of the attempt that ran
+// the step, the step's index and its try.
+type progressCaller struct {
+	Run     string `json:"run"`
+	Job     string `json:"job"`
+	Attempt int    `json:"attempt"`
+	Step    int    `json:"step"`
+	Try     int    `json:"try,omitzero"`
+}
+
+// callersOf is callers as JSON lines have them.
+func callersOf(callers []coordinator.Caller) []progressCaller {
+	var out []progressCaller
+	for _, c := range callers {
+		out = append(out, progressCaller{Run: c.Run, Job: c.Job, Attempt: c.Attempt, Step: c.Step, Try: c.Try})
+	}
+	return out
 }
 
 // The kinds of JSON line Progress writes besides the events'.
@@ -123,11 +156,11 @@ func (p *Progress) Flush() error {
 	return nil
 }
 
-// compareKeys orders logs by their job, attempt, which of the attempt's
-// logs each is, step and try.
+// compareKeys orders logs by their run, job, attempt, which of the
+// attempt's logs each is, step and try.
 func compareKeys(a, b coordinator.LogKey) int {
-	return cmp.Or(cmp.Compare(a.Job, b.Job), cmp.Compare(a.Attempt, b.Attempt), cmp.Compare(a.Part, b.Part),
-		cmp.Compare(a.Step, b.Step), cmp.Compare(a.Try, b.Try))
+	return cmp.Or(cmp.Compare(len(a.Run), len(b.Run)), cmp.Compare(a.Run, b.Run), cmp.Compare(a.Job, b.Job), cmp.Compare(a.Attempt, b.Attempt),
+		cmp.Compare(a.Part, b.Part), cmp.Compare(a.Step, b.Step), cmp.Compare(a.Try, b.Try))
 }
 
 // Left writes that the command leaves the run id running, and how to pick
@@ -142,23 +175,30 @@ func (p *Progress) Left(id string) error {
 
 // Event writes e: as JSON, every event; and as text, each but the run's
 // start, and its end, which the command writes itself, and an attempt's
-// end that completed it, which its job's end says.
+// end that completed it, which its job's end says. Of a run a step called,
+// it writes its end, but not its start, which its caller's child.created
+// says, nor its caller's child.ended, which its end says.
 func (p *Progress) Event(e coordinator.Event) error {
 	if p.json {
 		l := progressLine{
-			Kind: string(e.Kind), Seq: e.Seq, Time: e.Time, Run: e.Run, Job: e.Job, Attempt: e.Attempt, Member: e.Member,
+			Kind: string(e.Kind), Seq: e.Seq, Time: e.Time, Run: e.Run, Callers: callersOf(e.Callers), Child: e.Child,
+			Job: e.Job, Attempt: e.Attempt, Member: e.Member,
 			End: string(e.End), Outcome: string(e.Outcome), Reason: string(e.Reason), Diagnostics: e.Diagnostics,
 		}
-		if e.Kind == coordinator.StepStarted || e.Kind == coordinator.StepFinished {
+		switch e.Kind {
+		case coordinator.StepStarted, coordinator.StepFinished:
 			l.Step, l.Try, l.Cleanup = &e.Step, e.Try, e.Cleanup
+		case coordinator.ChildCreated, coordinator.ChildEnded:
+			l.Step, l.Try = &e.Step, e.Try
 		}
 		if e.Kind == coordinator.StepFinished && e.ExitCode >= 0 {
 			l.ExitCode = &e.ExitCode
 		}
 		return p.writeJSON(l)
 	}
+	child := len(e.Callers) > 0
 	switch {
-	case e.Kind == coordinator.RunStarted || e.Kind == coordinator.RunFinished:
+	case e.Kind == coordinator.RunStarted || e.Kind == coordinator.ChildEnded || e.Kind == coordinator.RunFinished && !child:
 		return nil
 	case e.Kind == coordinator.AttemptEnded && e.End == coordinator.AttemptCompleted:
 		return p.writeDiagnostics(e.Diagnostics)
@@ -174,6 +214,9 @@ func (p *Progress) Event(e coordinator.Event) error {
 // a person reads on errs.
 func (p *Progress) Log(part coordinator.LogPart) error {
 	key := part.Key
+	if len(part.Callers) > 0 {
+		p.callers[key] = part.Callers
+	}
 	held := p.lines[key]
 	held = append(held, part.Data...)
 	for {
@@ -195,13 +238,14 @@ func (p *Progress) Log(part coordinator.LogPart) error {
 		return nil
 	}
 	delete(p.lines, key)
+	defer delete(p.callers, key)
 	if len(held) > 0 || p.json {
 		if err := p.writeLog(key, held, part.Ended, part.Cut); err != nil {
 			return err
 		}
 	}
 	if part.Cut && !p.json {
-		d := problems.LogCut.At("", problems.Position{}, "", problems.Params{"log": logName(key)})
+		d := problems.LogCut.At("", problems.Position{}, "", problems.Params{"log": calledBy(p.callers[key]) + logName(key)})
 		_, err := fmt.Fprintln(p.errs, "meridian: "+d.String())
 		return err
 	}
@@ -213,7 +257,7 @@ func (p *Progress) Log(part coordinator.LogPart) error {
 func (p *Progress) writeLog(key coordinator.LogKey, text []byte, ended, cut bool) error {
 	if p.json {
 		l := progressLine{
-			Kind: kindLog, Run: key.Run, Job: key.Job, Attempt: key.Attempt, Part: string(key.Part),
+			Kind: kindLog, Run: key.Run, Callers: callersOf(p.callers[key]), Job: key.Job, Attempt: key.Attempt, Part: string(key.Part),
 			Text: strings.ToValidUTF8(string(text), "�"), Ended: ended, Cut: cut,
 		}
 		if key.Part != workerapi.LogSetup {
@@ -228,8 +272,21 @@ func (p *Progress) writeLog(key coordinator.LogKey, text []byte, ended, cut bool
 	if !bytes.HasSuffix(text, []byte("\n")) {
 		text = append(bytes.Clone(text), '\n')
 	}
-	_, err := fmt.Fprintf(p.out, "%s| %s", logName(key), text)
+	_, err := fmt.Fprintf(p.out, "%s%s| %s", calledBy(p.callers[key]), logName(key), text)
 	return err
+}
+
+// calledBy names, as a person reads them, the tries of the steps that
+// called a run, each as the log of the try is named, its attempt's number
+// after the first among it, followed by ›, as in build step 1 › main
+// attempt 2 step 0 retry 2 › , or "" for none.
+func calledBy(callers []coordinator.Caller) string {
+	var b strings.Builder
+	for _, c := range callers {
+		b.WriteString(logName(coordinator.LogKey{Job: c.Job, Attempt: c.Attempt, Part: workerapi.LogStep, Step: c.Step, Try: c.Try}))
+		b.WriteString(" › ")
+	}
+	return b.String()
 }
 
 // logName names the log key as a person reads it: its job's key, its
@@ -287,6 +344,7 @@ func line(e coordinator.Event) string {
 		b.WriteString(e.Time.In(time.Local).Format(time.TimeOnly))
 		b.WriteByte(' ')
 	}
+	b.WriteString(calledBy(e.Callers))
 	attempt := func(what string) {
 		fmt.Fprintf(&b, "%s attempt %d %s", e.Job, e.Attempt, what)
 	}
@@ -309,6 +367,11 @@ func line(e coordinator.Event) string {
 		fmt.Fprintf(&b, "%s finished: %s", e.Job, e.Outcome)
 	case coordinator.RunStopping:
 		fmt.Fprintf(&b, "run %s stopping", e.Run)
+	case coordinator.RunFinished:
+		fmt.Fprintf(&b, "run %s finished: %s", e.Run, e.Outcome)
+	case coordinator.ChildCreated:
+		b.WriteString(calledBy([]coordinator.Caller{{Job: e.Job, Attempt: e.Attempt, Step: e.Step, Try: e.Try}}))
+		fmt.Fprintf(&b, "run %s created", e.Child)
 	case coordinator.StepStarted, coordinator.StepFinished:
 		b.WriteString(logName(coordinator.LogKey{Job: e.Job, Attempt: e.Attempt, Part: stepPart(e.Cleanup), Step: e.Step, Try: e.Try}))
 		if e.Kind == coordinator.StepStarted {

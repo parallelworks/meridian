@@ -22,7 +22,7 @@ func TestRecentRuns(t *testing.T) {
 		return tx.EndRun("2", plan.OutcomeFailure, plan.ReasonTimeout)
 	})
 	inTx(t, s, func(tx *Tx) error {
-		runs, err := tx.RecentRuns(2)
+		runs, err := tx.RecentRuns(2, false)
 		if err != nil {
 			return err
 		}
@@ -39,10 +39,10 @@ func TestRecentRuns(t *testing.T) {
 		if ended.Name != p.Run.Name || ended.Location != "w.yaml" || ended.PlanVersion != 1 || ended.RunDir != "/runs/2" {
 			t.Errorf("a run's name, location, plan version and directory are %+v", ended)
 		}
-		if all, err := tx.RecentRuns(10); err != nil || len(all) != 3 || all[2].ID != "1" {
+		if all, err := tx.RecentRuns(10, false); err != nil || len(all) != 3 || all[2].ID != "1" {
 			t.Errorf("the last ten runs are %+v, %v", all, err)
 		}
-		if _, err := tx.RecentRuns(0); err == nil {
+		if _, err := tx.RecentRuns(0, false); err == nil {
 			t.Error("RecentRuns(0) returned no error")
 		}
 		r, err := tx.RunSummary("2")

@@ -91,6 +91,88 @@ func caseNamed(t *testing.T, name string) conformance.Case {
 	return conformance.Case{}
 }
 
+// TestFollowTree checks that Follow, with Tree, reports the runs a run's
+// steps call as it reports the run: each from its caller's child.created
+// on, its events and its logs, masked, each with the step's try that
+// called it; its caller's child.ended once it has ended; and the run's own
+// end last, once theirs are reported. Without Tree, it reports the run's
+// own alone.
+func TestFollowTree(t *testing.T) {
+	parallel(t)
+	r, id := startCase(t, caseNamed(t, "runs/calls"))
+	var tree followed
+	opts := tree.options(r.logs)
+	opts.Tree = true
+	status, err := r.c.Follow(t.Context(), id, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ID != id || status.Outcome != plan.OutcomeFailure {
+		t.Errorf("Follow ended with %+v", status)
+	}
+	events := tree.events()
+	called := map[string]Caller{}
+	ended := map[string]bool{}
+	finished := map[string]int{}
+	for i, e := range events {
+		switch {
+		case e.Kind == ChildCreated && e.Run == id:
+			called[e.Child] = Caller{Run: id, Job: e.Job, Attempt: e.Attempt, Step: e.Step, Try: e.Try}
+		case e.Kind == ChildEnded && e.Run == id:
+			ended[e.Child] = e.Outcome != ""
+		case e.Kind == RunFinished:
+			finished[e.Run] = i
+		}
+		if e.Run == id {
+			if len(e.Callers) > 0 {
+				t.Errorf("the run's own event %+v has callers", e)
+			}
+			continue
+		}
+		if caller, ok := called[e.Run]; !ok || len(e.Callers) != 1 || e.Callers[0] != caller {
+			t.Errorf("the event %+v of a run a step called says it was called by %+v, want %+v", e, e.Callers, caller)
+		}
+	}
+	if len(called) != 2 || len(ended) != 2 {
+		t.Errorf("the run's steps called %v, which ended %v", called, ended)
+	}
+	for child := range called {
+		if i, ok := finished[child]; !ok || i > finished[id] {
+			t.Errorf("the end of the run %s is reported at %d, and the run's at %d", child, i, finished[id])
+		}
+	}
+	if last := events[len(events)-1]; last.Kind != RunFinished || last.Run != id {
+		t.Errorf("the last event is %+v", last)
+	}
+	var greeting strings.Builder
+	for _, item := range tree.items {
+		p, ok := item.(LogPart)
+		if !ok || p.Key.Run == id {
+			continue
+		}
+		if caller, ok := called[p.Key.Run]; !ok || len(p.Callers) != 1 || p.Callers[0] != caller {
+			t.Errorf("a log of a run a step called, %+v, says it was called by %+v, want %+v", p.Key, p.Callers, caller)
+		}
+		if p.Key.Job == "greet" && p.Key.Part == workerapi.LogStep {
+			greeting.Write(p.Data)
+		}
+	}
+	if got := greeting.String(); got != "greeting hello, token ***\n" {
+		t.Errorf("the called run's log is %q", got)
+	}
+
+	// Without Tree, the run's own alone.
+	var own followed
+	if _, err := r.c.Follow(t.Context(), id, own.options(r.logs)); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range own.events() {
+		if e.Run != id {
+			t.Errorf("Follow without Tree reported %+v", e)
+		}
+	}
+}
+
 // Follow reports a run's events as it runs, from its first, in order, each
 // once, and its logs as they are stored, each whole and once, before the
 // event that ends it; then the run's end, and how it ended. Followed again,
