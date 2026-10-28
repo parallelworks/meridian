@@ -4028,10 +4028,18 @@ own runs.
   after an upload as large as one can be: a step that prints a line at a
   time has its lines sent together, rather than an upload, and the
   coordinator's work for it, for nearly each line.
-- **While the coordinator is unreachable**, a worker keeps running its steps,
-  spools logs to disk up to a limit, keeps events in memory, and delivers
-  them in order when it reconnects, unless its job fences itself
-  ([Leases and fencing](#leases-and-fencing)). Past the limit, or once the
+- **While the coordinator is unreachable**, a worker keeps running its
+  steps, spools logs to disk up to a limit, keeps events in memory, and
+  delivers them in order when it reconnects, unless its job fences itself
+  ([Leases and fencing](#leases-and-fencing)). Each try of a log's upload
+  sends what the log has by then, up to an upload's 1 MiB, and its end
+  once it has ended, not what the first try had; and each try of a report
+  of events sends the events queued by then, up to a request's 64 events
+  or 4 MiB of their outputs, which the coordinator stores but for those
+  it has. So once the coordinator is back, one upload per log sends what
+  that log has, and one report what the worker has of its events, as a
+  job that fences itself needs before its lease lapses, rather than the
+  rest, and a log's end, a round trip later. Past the limit, or once the
   disk is full, a log keeps nothing more until there is room, and the
   step's event says how much it lost. A log's file holds what the
   coordinator hasn't stored, and of what it has, less than the limit, and

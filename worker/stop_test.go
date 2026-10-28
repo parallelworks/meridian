@@ -3,11 +3,15 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -427,27 +431,39 @@ func TestHeartbeatStalls(t *testing.T) {
 }
 
 // TestFenceKeepsSending checks that a job that fences itself goes on
-// sending what it has until its lease lapses: its log reaches a
-// coordinator that comes back between the job stopping and the lease
-// lapsing.
+// sending what it has until its lease lapses, each request with what the
+// worker has by then, not what it had when the coordinator went away. The
+// coordinator answers no heartbeat, so the lease runs from the claim: the
+// worker stops the job 1.8 s after it, and the lease lapses at 3 s.
+//   - It answers an upload of a log only once the worker offers the log's
+//     end, which step 2's has only once the job has stopped: so it is back
+//     for that log once the job has stopped, whenever a loaded host gets
+//     there, and the worker sends the bytes it had before the stop, and
+//     the end, in one upload.
+//   - It answers the events of step 0's start, which the job waits for
+//     before it runs, and then only events that include step 2's start:
+//     those of step 0's end, which the worker tries to send first, before
+//     step 1 has run, are sent with it.
 func TestFenceKeepsSending(t *testing.T) {
 	t.Parallel()
-	f := workerapitest.NewFake(t, newJob(command("echo hello; sleep 30")))
+	f := workerapitest.NewFake(t, newJob(command("sleep 0.1"), command("sleep 0.1"), command("echo hello; sleep 30")))
 	f.Claim.SelfFencing, f.Claim.LeaseSeconds, f.Claim.HeartbeatSeconds = true, 3, 1
-	var cutOff atomic.Int64
-	f.OnEvent = func(e workerapi.Event) { cutOff.CompareAndSwap(0, time.Now().UnixNano()) }
 	f.Fault = func(r *http.Request) workerapitest.Fault {
-		c := cutOff.Load()
-		if c == 0 {
-			return workerapitest.Answer
-		}
-		since := time.Since(time.Unix(0, c))
 		switch {
 		case r.URL.Path == workerapi.PathHeartbeat:
 			return workerapitest.Unavailable
-		case r.URL.Path == workerapi.PathLogs && since < 2200*time.Millisecond:
-			// Back after the job has stopped, at 1.8 s, and before the
-			// lease lapses, at 3 s.
+		case r.URL.Path == workerapi.PathLogs && r.URL.Query().Get(workerapi.QueryEnd) == "":
+			return workerapitest.Unavailable
+		case r.URL.Path == workerapi.PathEvents:
+			body, err := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var events workerapi.Events
+			if err != nil || workerapi.Unmarshal(body, &events) != nil || len(events.Events) == 0 {
+				return workerapitest.Answer
+			}
+			if events.Events[0].Seq == 1 || slices.ContainsFunc(events.Events, func(e workerapi.Event) bool { return e.Step == 2 && !e.Finished }) {
+				return workerapitest.Answer
+			}
 			return workerapitest.Unavailable
 		}
 		return workerapitest.Answer
@@ -455,7 +471,16 @@ func TestFenceKeepsSending(t *testing.T) {
 	if err := runWorker(t, f, t.Context(), Config{}); !errors.Is(err, errLeaseLapsed) {
 		t.Fatalf("got %v, want %v", err, errLeaseLapsed)
 	}
-	checkLog(t, f, logKey{workerapi.LogStep, 0, 0}, "hello\n")
+	checkLog(t, f, logKey{workerapi.LogStep, 2, 0}, "hello\n")
+	var got []string
+	for _, e := range f.Events() {
+		got = append(got, fmt.Sprintf("%d step %d finished %t", e.Seq, e.Step, e.Finished))
+	}
+	if want := []string{
+		"1 step 0 finished false", "2 step 0 finished true", "3 step 1 finished false", "4 step 1 finished true", "5 step 2 finished false",
+	}; !slices.Equal(got, want) {
+		t.Errorf("the coordinator stored the events %q, want %q", got, want)
+	}
 }
 
 // TestStoppedKeepsLastWords checks that a worker stopped from outside

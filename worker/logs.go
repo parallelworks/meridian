@@ -323,7 +323,12 @@ func (s *spool) close() {
 
 // send sends the spool's logs to the coordinator as they are written, in
 // the order they were opened, until ctx is done or the coordinator refuses
-// them, which it reports to stop.
+// them, which it reports to stop. An upload that fails for a while is
+// tried again with what its log holds by then, its end too if it has
+// ended meanwhile, never as it was: so once a coordinator that was away is
+// back, one upload sends what the worker has, as a job that fences itself
+// needs before its lease lapses (attempt.fence), rather than what it had
+// before, with the rest, and the log's end, a round trip later.
 func (s *spool) send(ctx context.Context, c *client, stop func(error)) {
 	stalls := 0
 	for {
@@ -347,9 +352,19 @@ func (s *spool) send(ctx context.Context, c *client, stop func(error)) {
 		}
 		began := time.Now()
 		ack, err := c.upload(ctx, u.log.key, u.offset, data, u.end)
-		var order *outOfOrderError
+		var (
+			order *outOfOrderError
+			temp  *temporaryError
+		)
 		switch {
 		case err == nil:
+		case errors.As(err, &temp):
+			c.log.Debug("uploading a log failed; trying again", "error", err)
+			if sleep(ctx, c.timing.backoff(stalls)) != nil {
+				return
+			}
+			stalls++
+			continue
 		case errors.As(err, &order) && order.expected >= u.offset:
 			// The coordinator has more of the log than the worker sent:
 			// it has the rest of these bytes already.
