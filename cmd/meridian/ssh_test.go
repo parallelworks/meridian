@@ -18,21 +18,33 @@ import (
 
 	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
+	"github.com/parallelworks/meridian/internal/sshdtest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 )
 
 // An sshHost is a host meridian runs jobs on through the ssh backend: the
-// test's own machine, through an SSH server in the test's process, whose
-// user's home is a directory of the test's. meridian reaches it as the
-// cluster hpc of its clusters.yaml, whose host is farm, an alias that the
-// SSH config the test gives the ssh backend resolves to the server; and
-// runs the test binary there, as meridian, which it puts there as its own.
+// test's own machine, through an SSH server in the test's process, or
+// OpenSSH's sshd where sshdtest.EnvSSHD names one, as CI's ssh job runs
+// these tests, whose user's home is a directory of the test's. meridian
+// reaches it as the cluster hpc of its clusters.yaml, whose host is farm,
+// an alias that the SSH config the test gives the ssh backend resolves to
+// the server; and runs the test binary there, as meridian, which it puts
+// there as its own.
 type sshHost struct {
-	server *sshtest.Server
+	server sshServer
 	// home is the host's user's home.
 	home string
 	// setUp has meridian read the test's SSH config.
 	setUp func(*cli)
+}
+
+// An sshServer is the SSH server of an sshHost: sshtest's, or sshdtest's.
+type sshServer interface {
+	Host() string
+	Port() string
+	KnownHosts(name string) string
+	// Drop ends every connection the server has.
+	Drop()
 }
 
 // newSSHHost starts a host for meridian of the state and config
@@ -75,7 +87,16 @@ func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Optio
 	for _, f := range with {
 		f(&opts)
 	}
-	h.server = sshtest.New(t, opts)
+	if sshdtest.Path() != "" {
+		// sshd sets HOME and the rest of a session's environment itself,
+		// and then what it is told to over them.
+		h.server = sshdtest.New(t, sshdtest.Options{
+			Authorized: opts.Authorized, Env: opts.Env, NoForwarding: opts.NoForwarding,
+			KeyExchanges: opts.KeyExchanges, Ciphers: opts.Ciphers,
+		})
+	} else {
+		h.server = sshtest.New(t, opts)
+	}
 	knownHosts := filepath.Join(client, "known_hosts")
 	if err := os.WriteFile(knownHosts, []byte(h.server.KnownHosts("")), 0o600); err != nil {
 		t.Fatal(err)
@@ -271,6 +292,31 @@ func TestSSHForwardingRefused(t *testing.T) {
 	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow)))
 	if r.code != exitInvalid || !strings.Contains(r.stdout+r.stderr, "(ssh_forwarding_refused)") {
 		t.Fatalf("meridian run of a job on a host that forwards no sockets = %+v", r)
+	}
+	if placed, _ := filepath.Glob(filepath.Join(h.home, ".local", "state", "meridian", "hosts", "*", "placements", "*")); len(placed) != 0 {
+		t.Errorf("a worker was placed: %v", placed)
+	}
+}
+
+// TestSSHAlgorithmsUnapproved checks a job on a host whose sshd offers
+// only chacha20-poly1305 and curve25519, which FIPS 140-3 doesn't
+// approve: meridian can't connect to it, so it places no worker, and the
+// job fails, with ssh_algorithms_unapproved. It needs OpenSSH's sshd:
+// sshtest's server, in a process under FIPS 140-only mode, can't offer
+// them.
+func TestSSHAlgorithmsUnapproved(t *testing.T) {
+	if sshdtest.Path() == "" {
+		t.Skipf("%s names no sshd, which can offer what FIPS 140-only mode doesn't run", sshdtest.EnvSSHD)
+	}
+	env := runEnv(t)
+	h := newSSHHost(t, env, func(o *sshtest.Options) {
+		o.KeyExchanges = []string{"curve25519-sha256", "curve25519-sha256@libssh.org"}
+		o.Ciphers = []string{"chacha20-poly1305@openssh.com"}
+	})
+	h.release(t)
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow)))
+	if r.code == exitOK || !strings.Contains(r.stdout+r.stderr, "(ssh_algorithms_unapproved)") {
+		t.Fatalf("meridian run of a job on a host that offers only unapproved algorithms = %+v", r)
 	}
 	if placed, _ := filepath.Glob(filepath.Join(h.home, ".local", "state", "meridian", "hosts", "*", "placements", "*")); len(placed) != 0 {
 		t.Errorf("a worker was placed: %v", placed)

@@ -93,6 +93,39 @@ jobs:
       - name: Build what editors run as WebAssembly
         run: make wasm
 
+  # The ssh backend's tests against OpenSSH's sshd, as well as against the
+  # SSH server the tests run in process, which can't be all of OpenSSH. Each
+  # test starts the runner's sshd as the runner's user, on a port of the
+  # loopback interface, with a host key, a config and the keys it accepts
+  # made for that test alone (internal/sshdtest): the tests reach nothing
+  # beyond the runner, and need no secret.
+  openssh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "**/go.sum"
+      # The tests start sshd themselves; the system's own, which the
+      # package starts on port 22, isn't used, and is stopped.
+      - name: Install OpenSSH's server
+        run: |
+          if [ ! -x /usr/sbin/sshd ]; then
+            sudo apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends openssh-server
+          fi
+          sudo systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
+          ssh -V
+      - name: Test against OpenSSH's sshd
+        env:
+          GODEBUG: fips140=only
+          SSHD: /usr/sbin/sshd
+        run: make test-openssh
+
   # The one place cgo is enabled: on Linux, the race detector links
   # ThreadSanitizer, a C++ runtime, against the C library. Nothing built here
   # ships.
