@@ -60,3 +60,9 @@ func (s caseSources) Read(ctx context.Context, source plan.Source) (*compile.Wor
 	}
 	return w, nil
 }
+
+// Pin finds no commit: a case's repositories hold workflows that its steps
+// call, not trees that a parallelworks/checkout step checks out.
+func (caseSources) Pin(context.Context, string, string) (string, error) {
+	return "", compile.ErrNotFound
+}
