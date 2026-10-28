@@ -14,9 +14,10 @@ import (
 )
 
 // A Purpose says what a part of a run's secrets sealed apart from its
-// record is (SealPart): a label, versioned, as in meridian/job-record/1.
-// It is UTF-8, not empty, and holds no NUL. A part sealed for one purpose
-// opens for no other.
+// record is (SealPart), or what a digest of the run's is of (Digest): a
+// label, versioned, as in meridian/job-record/1. It is UTF-8, not empty,
+// and holds no NUL. A part sealed for one purpose opens for no other, and
+// a digest of one purpose is no other's.
 type Purpose string
 
 // PurposeJobRecord is a job's part of its run's secret record: what the

@@ -96,7 +96,7 @@ func TestAttempt(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if err := tx.EndAttempt(b.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeSuccess, CompleteDigest: make([]byte, 32)}); !errors.Is(err, ErrState) {
+		if err := tx.EndAttempt(b.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeSuccess}); !errors.Is(err, ErrState) {
 			t.Errorf("EndAttempt completed before the claim = %v, want ErrState", err)
 		}
 		return tx.EndAttempt(b.ID, AttemptEnd{Kind: EndSetupFailed, Reason: plan.ReasonSetupFailed})
@@ -129,16 +129,14 @@ func TestAttempt(t *testing.T) {
 		}
 		for _, end := range []AttemptEnd{
 			{Kind: "done"},
-			{Kind: EndCompleted, Outcome: plan.OutcomeSuccess},
-			{Kind: EndCompleted, Outcome: "fine", CompleteDigest: make([]byte, 32)},
-			{Kind: EndLost, CompleteDigest: make([]byte, 32)},
+			{Kind: EndCompleted, Outcome: "fine"},
+			{Kind: EndLost, Report: []byte(`{"seq":0}`)},
 		} {
 			if err := tx.EndAttempt(a.ID, end); err == nil {
 				t.Errorf("EndAttempt(%+v) succeeded", end)
 			}
 		}
-		digest := sha256.Sum256([]byte("the report"))
-		return tx.EndAttempt(a.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeFailure, CompleteDigest: digest[:]})
+		return tx.EndAttempt(a.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeFailure, Report: []byte(`{"seq":0}`)})
 	})
 
 	// An attempt that has ended no longer holds its job: what its worker
@@ -159,9 +157,8 @@ func TestAttempt(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		digest := sha256.Sum256([]byte("the report"))
 		if got.Holds || got.State != AttemptEnded || got.End.Kind != EndCompleted || got.End.Outcome != plan.OutcomeFailure ||
-			string(got.End.CompleteDigest) != string(digest[:]) || got.EndedAt.IsZero() {
+			string(got.End.Report) != `{"seq":0}` || got.EndedAt.IsZero() {
 			t.Errorf("an ended attempt is %+v", got)
 		}
 		return nil

@@ -3,7 +3,6 @@ package coordinator
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"regexp"
@@ -154,10 +153,9 @@ func (d *stopDriver) work(req backend.PlaceRequest, way string) {
 	if err != nil {
 		return
 	}
-	sum := sha256.Sum256(body)
 	if err := d.c.store.Tx(ctx, func(tx *store.Tx) error {
 		return tx.EndAttempt(a.ID, store.AttemptEnd{
-			Kind: store.EndCompleted, Outcome: report.Result.Outcome, Reason: report.Reason, CompleteDigest: sum[:], Report: body,
+			Kind: store.EndCompleted, Outcome: report.Result.Outcome, Reason: report.Reason, Report: body,
 		})
 	}); err != nil {
 		return
