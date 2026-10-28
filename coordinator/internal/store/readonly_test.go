@@ -36,6 +36,7 @@ func schemaOf(t *testing.T, path string) int {
 // still running a workflow may use, or a later one, is refused, and left
 // as it is.
 func TestOpenReadOnly(t *testing.T) {
+	t.Parallel()
 	ro := &Options{ReadOnly: true}
 	missing := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
 	if _, err := Open(t.Context(), missing, ro); !errors.Is(err, fs.ErrNotExist) {
@@ -106,6 +107,7 @@ func TestOpenReadOnly(t *testing.T) {
 // TestHoldStart checks that one holds a run's Start at a time, until it
 // lets it go, which removes the hold's file.
 func TestHoldStart(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	release, err := s.HoldStart("1")
 	if err != nil {

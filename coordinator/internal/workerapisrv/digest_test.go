@@ -18,6 +18,7 @@ import (
 // keeps nothing made from it, which can hold a secret, to tell a repeat of
 // it from another end. An end of an attempt that ended otherwise is fenced.
 func TestEndRepeated(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	a, _, credential := r.claimed(c, placed{})
@@ -61,6 +62,7 @@ func TestEndRepeated(t *testing.T) {
 // release before kept it; so is a request of an attempt whose run has
 // ended, whose data key went with it.
 func TestActionDigestKeyed(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	a, credential := r.claimedAction(c)

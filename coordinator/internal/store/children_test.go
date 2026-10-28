@@ -3,12 +3,10 @@ package store
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
 
-	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -18,6 +16,7 @@ import (
 // depth; and that a run keeps its finisher, and when it began to wait for
 // its tree.
 func TestChildLinks(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	root := createRun(t, s)
 	var attempt *Attempt
@@ -142,6 +141,7 @@ func TestChildLinks(t *testing.T) {
 // never for one that doesn't; and an error it returns is the
 // transaction's, which then stores nothing.
 func TestAttemptsEnded(t *testing.T) {
+	t.Parallel()
 	var (
 		mu        sync.Mutex
 		told      [][]string
@@ -149,7 +149,7 @@ func TestAttemptsEnded(t *testing.T) {
 		committed []string
 		fail      error
 	)
-	s, err := Open(t.Context(), filepath.Join(coordtest.PrivateDir(t), "meridian.db"), &Options{
+	s, err := Open(t.Context(), newPath(t), &Options{
 		OnAttemptsEnded: func(_ context.Context, tx *Tx, ids []string) error {
 			live, err := tx.LiveChildren(ids...)
 			if err != nil {
@@ -248,6 +248,7 @@ func TestAttemptsEnded(t *testing.T) {
 // with how many runs their trees have below them, or every run, a child
 // with its link, and a run's children.
 func TestChildEvents(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	root := createRun(t, s)
 	var attempt *Attempt

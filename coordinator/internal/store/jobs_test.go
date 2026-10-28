@@ -10,6 +10,7 @@ import (
 )
 
 func TestJobs(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
@@ -75,6 +76,7 @@ func TestJobs(t *testing.T) {
 }
 
 func TestEndJob(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	whole := plan.JobResult{
@@ -128,6 +130,7 @@ func TestEndJob(t *testing.T) {
 // each once however often it is readied, and that its end keeps them,
 // before its own problems.
 func TestNoteJob(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	empty := problems.JobSSHHostEmpty.At("", problems.Position{}, "/jobs/build/ssh", nil)
@@ -178,6 +181,7 @@ func codesOf(diags problems.Diagnostics) []string {
 // as strictly as a worker's report: a member this release doesn't know,
 // which a newer release wrote, is ErrMalformed, not dropped.
 func TestMalformedResult(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	for _, result := range []string{

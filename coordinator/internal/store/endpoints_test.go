@@ -20,6 +20,7 @@ func skipWithoutFileLocks(t *testing.T) {
 }
 
 func TestHoldEndpoint(t *testing.T) {
+	t.Parallel()
 	skipWithoutFileLocks(t)
 	s := open(t)
 	h, err := s.HoldEndpoint(t.Context(), "socket", "pid 1")
@@ -114,6 +115,7 @@ func TestHoldEndpoint(t *testing.T) {
 // endpoint, though nothing but the store reaches it, until the store is
 // closed: the garbage collector would otherwise close its lock's file.
 func TestHoldDropped(t *testing.T) {
+	t.Parallel()
 	skipWithoutFileLocks(t)
 	s := open(t)
 	other := openAt(t, s.file)
@@ -149,6 +151,7 @@ func TestHoldDropped(t *testing.T) {
 // TestEndpointHeld checks that EndpointHeld says whether a process holds an
 // endpoint, without taking it.
 func TestEndpointHeld(t *testing.T) {
+	t.Parallel()
 	skipWithoutFileLocks(t)
 	s := open(t)
 	if held, err := s.EndpointHeld("socket"); err != nil || held {

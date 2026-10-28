@@ -40,6 +40,7 @@ func callsCase(t *testing.T) conformance.Case {
 // run a step called with what called it; and shows the runs a run's steps
 // called, and what called a run a step did.
 func TestCalls(t *testing.T) {
+	parallel(t)
 	cs := callsCase(t)
 	env := runEnv(t)
 	secrets := writeVariables(t, cs, env)
@@ -172,6 +173,7 @@ func (waitSources) Pin(context.Context, string, string) (string, error) {
 // steps called that run, as their steps stop: each ends cancelled, before
 // the run does, as meridian run shows them.
 func TestCancelTree(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	file := writeFile(t, "never", "")
 	sources := waitSources{"github/t/wait": fmt.Sprintf(`jobs:

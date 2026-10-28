@@ -15,6 +15,7 @@ import (
 // backend's files of each, which the coordinator has it forget, so that
 // what the state directory holds doesn't grow run after run.
 func TestRunForgets(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	workflow := writeFile(t, "w.yaml", helloWorkflow)
 	for range 2 {

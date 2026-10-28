@@ -187,6 +187,7 @@ var onHost = &backend.Member{Name: "cluster", Backend: "ssh", Isolation: "host"}
 // state directory's its own under hosts/, by its ID and name, and the
 // sockets' of a random name in tmp, without a runtime directory.
 func TestHostHello(t *testing.T) {
+	parallel(t)
 	env, sys := runEnv(t), testHost(t)
 	h := hostHello(t, env, sys)
 	want := hostproto.Paths{
@@ -229,6 +230,7 @@ func hostHello(t *testing.T, env map[string]string, sys *hostSystem) *hostproto.
 // user's own, and which is made afresh where it is gone, or isn't, as
 // where another user made a directory of that name once it was gone.
 func TestHostSockets(t *testing.T) {
+	parallel(t)
 	env, sys := runEnv(t), testHost(t)
 	// A runtime directory is the user's own, which only they can use.
 	runtimeDir := t.TempDir()
@@ -390,6 +392,7 @@ func hostBinary(t *testing.T) (string, string) {
 // it couldn't answer; a directory that isn't the user's own,
 // ssh_host_dir_unusable; and a home that isn't an absolute path.
 func TestHostRefuses(t *testing.T) {
+	parallel(t)
 	env, sys := runEnv(t), testHost(t)
 	if msgs, code, stderr := hostCLI(t, env, sys, strings.NewReader(""), "launch"); code != exitError || len(msgs) != 1 || msgs[0].Protocol != hostproto.Version ||
 		msgs[0].Problem == nil || msgs[0].Problem.Code != problems.ArgumentsInvalid.Code() || stderr != "" {
@@ -459,6 +462,7 @@ func TestHostRefuses(t *testing.T) {
 // which so reaches only a hardened process; and one that can't harden
 // itself says so, and reads nothing.
 func TestHostHardensFirst(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	var (
 		mu     sync.Mutex
@@ -637,6 +641,7 @@ func TestHostRunsDir(t *testing.T) {
 // session that placed it is refused: hello and place say why, and probe
 // says the member can't run the job.
 func TestHostKilled(t *testing.T) {
+	parallel(t)
 	env, sys := runEnv(t), testHost(t)
 	sys.loginctl = loginctlSays(nil, map[string]string{"KillUserProcesses": "KillUserProcesses=yes\n", "Linger": "Linger=no\n"})
 	for op, r := range map[string]hostproto.Request{
@@ -833,6 +838,7 @@ func TestHostPlace(t *testing.T) {
 // hands the token to the worker it places on the socket it inherits, and
 // not in its arguments or its environment, as the worker sees them.
 func TestHostProcess(t *testing.T) {
+	parallel(t)
 	env := runEnv(t)
 	report := filepath.Join(t.TempDir(), "report.json")
 	exe, err := os.Executable()

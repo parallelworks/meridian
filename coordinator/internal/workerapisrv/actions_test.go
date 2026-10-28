@@ -43,6 +43,7 @@ func actionRequest(t *testing.T, try int) []byte {
 // Actions answers without storing, or with what an action can't answer,
 // is answered 500 too.
 func TestActionNotPerformed(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	_, credential := r.claimedAction(c)
@@ -84,6 +85,7 @@ func TestActionNotPerformed(t *testing.T) {
 // An action is performed once for a step's try, however many requests for
 // it come at once, or after: each is given the answer stored.
 func TestActionPerformedOnce(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	_, credential := r.claimedAction(c)
@@ -122,6 +124,7 @@ func TestActionPerformedOnce(t *testing.T) {
 // step's own job. A request can't say otherwise: one that says its step
 // outlives a cancel is one the API doesn't have, 400.
 func TestActionOfACancelledJob(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	a, credential := r.claimedAction(c)
@@ -192,6 +195,7 @@ func TestActionOfACancelledJob(t *testing.T) {
 // it outlives its job's cancellation; and a step without one is performed.
 // Cancelled, asked before each Commit, says what Commit then did.
 func TestActionEarlyCancelled(t *testing.T) {
+	parallel(t)
 	r := newRig(t, rigOptions{})
 	c := newClient(t, r.socket)
 	run := r.newRun(nil)

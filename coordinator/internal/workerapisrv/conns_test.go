@@ -14,6 +14,7 @@ import (
 // be answered and to wait grace; and closing the set ends an add that
 // waits.
 func TestConnSetGrace(t *testing.T) {
+	t.Parallel()
 	const grace = 100 * time.Millisecond
 	cs := newConnSet(2, grace)
 	conn := func() *peerConn {

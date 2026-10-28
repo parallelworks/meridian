@@ -38,8 +38,37 @@ func TestMain(m *testing.M) {
 	if role := os.Getenv(envChild); role != "" {
 		os.Exit(runChild(role))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	storeTemplate.Remove()
+	os.Exit(code)
 }
+
+// parallelTests bounds how many of the package's tests that run in
+// parallel run at once, beside go test's -parallel, as the coordinator's
+// tests do: each serves the worker API on a store of its own, and many at
+// once on a small runner would stretch the waits the tests time.
+var parallelTests = make(chan struct{}, 4)
+
+// parallel has the test t run in parallel with the package's other tests
+// that do, as many at a time as parallelTests allows. A test that bounds
+// how long the server takes, or that changes what the worker API's
+// versions have (versiontest), doesn't call it.
+func parallel(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	parallelTests <- struct{}{}
+	t.Cleanup(func() { <-parallelTests })
+}
+
+// storeTemplate is the store that each test's new store is a copy of
+// (coordtest.StoreTemplate).
+var storeTemplate = coordtest.StoreTemplate{Make: func(ctx context.Context, path string) error {
+	s, err := store.Open(ctx, path, nil)
+	if err != nil {
+		return err
+	}
+	return s.Close()
+}}
 
 // testWorkflow is the workflow of the tests' runs: build, of three steps,
 // which reads an input and an output of prep, which it needs.
@@ -78,11 +107,12 @@ func created(t testing.TB) *compile.Created {
 	return c
 }
 
-// openStore opens a new store with opts, which the test closes, and
-// returns it and its database's path.
+// openStore opens a new store, a copy of the store template, with opts,
+// which the test closes, and returns it and its database's path.
 func openStore(t testing.TB, opts *store.Options) (*store.Store, string) {
 	t.Helper()
 	path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
+	storeTemplate.Copy(t, path)
 	s, err := store.Open(t.Context(), path, opts)
 	if err != nil {
 		t.Fatal(err)

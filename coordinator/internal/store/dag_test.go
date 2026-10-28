@@ -3,12 +3,9 @@ package store
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
-
-	"github.com/parallelworks/meridian/coordinator/internal/coordtest"
 
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/workerapi"
@@ -34,6 +31,7 @@ func last(e workerapi.Event) workerapi.Event {
 // LastTry says, or else once the next event shows the step didn't try
 // again; and that a try that is tried again doesn't.
 func TestFailedStepMarks(t *testing.T) {
+	t.Parallel()
 	t.Run("its job's retry: lists timeout", func(t *testing.T) {
 		// Its job's deadline may have failed it, and another attempt may
 		// follow: the job marks the run as it ends.
@@ -166,6 +164,7 @@ func TestFailedStepMarks(t *testing.T) {
 // TestUpdateControl checks that a control is changed with what it asked
 // kept, at the next version, and isn't when nothing changes.
 func TestUpdateControl(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
@@ -198,8 +197,9 @@ func TestUpdateControl(t *testing.T) {
 // placements has committed, with their IDs, in the order it recorded
 // them, and not for one that rolled back.
 func TestOnPlacementsRecorded(t *testing.T) {
+	t.Parallel()
 	var heard [][]string
-	s := openWith(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"), &Options{
+	s := openWith(t, newPath(t), &Options{
 		OnPlacementsRecorded: func(_ context.Context, ids []string) { heard = append(heard, slices.Clone(ids)) },
 	})
 	id := createRun(t, s)
@@ -242,8 +242,9 @@ func TestOnPlacementsRecorded(t *testing.T) {
 // controls commits, with their IDs, in order; and not for one that rolls
 // back, nor one that changed none.
 func TestOnControlsChanged(t *testing.T) {
+	t.Parallel()
 	var heard [][]string
-	s := openWith(t, filepath.Join(coordtest.PrivateDir(t), "meridian.db"), &Options{
+	s := openWith(t, newPath(t), &Options{
 		OnControlsChanged: func(_ context.Context, ids []string) { heard = append(heard, ids) },
 	})
 	id := createRun(t, s)
@@ -291,6 +292,7 @@ func TestOnControlsChanged(t *testing.T) {
 // so, with what its control asked already; and that an attempt made after
 // it is told so from the start.
 func TestMarkJobFailed(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	n := func(job string) NewAttempt {

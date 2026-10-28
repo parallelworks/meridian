@@ -53,6 +53,7 @@ func event(seq int64, finished bool) workerapi.Event {
 // AppendEvents stores events in order, each once, and none of a batch that
 // skips one; a step's start makes the attempt running.
 func TestAppendEvents(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	a := claimedAttempt(t, s, 'a')
 	inTx(t, s, func(tx *Tx) error {
@@ -96,6 +97,7 @@ func TestAppendEvents(t *testing.T) {
 // control it is given says, which Control gives; an attempt that has ended
 // is asked nothing more.
 func TestControl(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	a := claimedAttempt(t, s, 'a')
 	inTx(t, s, func(tx *Tx) error {
@@ -132,6 +134,7 @@ func TestControl(t *testing.T) {
 // waits for it; an attempt's end keeps its report and its problem; and
 // StartedBefore counts the attempts before one that started a step.
 func TestPlacementAndEnd(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
@@ -206,6 +209,7 @@ func TestPlacementAndEnd(t *testing.T) {
 // Lapsed is set once the lease of an attempt whose job fences itself has
 // lapsed, and never for another job's.
 func TestLapsed(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {
@@ -239,6 +243,7 @@ func boolInt(b bool) int {
 
 // AddLogBytes counts an attempt's bytes of logs, which LogBytes gives.
 func TestLogBytes(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	a := claimedAttempt(t, s, 'a')
 	inTx(t, s, func(tx *Tx) error {
@@ -270,6 +275,7 @@ func TestLogBytes(t *testing.T) {
 // recorded; the problem it ends with is stored masked, since it can name
 // the member.
 func TestPrivatePlacement(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	id := createRun(t, s)
 	inTx(t, s, func(tx *Tx) error {

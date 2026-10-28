@@ -1,6 +1,7 @@
 // Package coordtest holds what the tests of the coordinator's packages
 // share: a directory only the test's user can use, as the store asks of
-// its database's; a credential as a worker makes one; and Keys that wrap
+// its database's; a store template, migrated once, which their new stores
+// are copies of; a credential as a worker makes one; and Keys that wrap
 // runs' data keys under a key of their own.
 package coordtest
 

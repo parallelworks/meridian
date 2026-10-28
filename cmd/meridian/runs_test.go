@@ -69,13 +69,14 @@ func runLines(t *testing.T, stdout string) []runLine {
 // jobs end, and the logs the case names, as its JSON lines say, and that
 // it writes no secret anywhere.
 func TestRunsConformance(t *testing.T) {
+	t.Parallel()
 	cases, err := conformance.Cases("runs")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, cs := range cases {
 		t.Run(strings.TrimPrefix(cs.Name, "runs/"), func(t *testing.T) {
-			t.Parallel()
+			parallel(t)
 			want := cs.Expect.Run
 			if want == nil {
 				t.Fatal("the case says nothing of how the run ends")

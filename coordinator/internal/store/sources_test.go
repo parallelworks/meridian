@@ -25,6 +25,7 @@ func pinned(text string) compile.PinnedText {
 // public one, share them, and the store keeps nothing but the bytes, by
 // their digest, so neither learns where the other found them.
 func TestKeepTexts(t *testing.T) {
+	t.Parallel()
 	s := open(t)
 	a, b := pinned("jobs: {a: {}}\n"), pinned("jobs: {b: {}}\n")
 	first, second := createRun(t, s), createRun(t, s)
