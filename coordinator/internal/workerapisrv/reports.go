@@ -103,10 +103,7 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 	// A step's first start makes the attempt running, which its job's
 	// supervisor counts.
 	started := a.State == store.AttemptClaimed && slices.ContainsFunc(events.Events, func(e workerapi.Event) bool { return !e.Finished })
-	var (
-		last  int64
-		after func()
-	)
+	var last int64
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		if _, err := tx.Authorize(bearer(r)); err != nil {
 			return err
@@ -121,8 +118,7 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		if last, err = tx.AppendEvents(a.ID, events.Events); err != nil || !started {
 			return err
 		}
-		after, err = s.wakeJob(ctx, tx, a.Run, a.Job)
-		return err
+		return s.wakeJob(ctx, tx, a.Run, a.Job)
 	})
 	switch {
 	case errors.Is(err, errTooMuch):
@@ -132,7 +128,6 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request, a *store.At
 		s.writeError(w, r, err)
 		return
 	}
-	committed(after)
 	writeBody(w, a.APIVersion, &workerapi.EventsAck{Seq: last})
 }
 
@@ -362,7 +357,6 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 	// any-job-failed, as format 1 tells them as the job fails. The job
 	// marks it as it ends otherwise.
 	jobFailed := result.Outcome == plan.OutcomeFailure && end.Reason != plan.ReasonSetupFailed
-	var after func()
 	for try := 1; ; try++ {
 		// The part is sealed outside the transaction that stores it, which
 		// holds the database's lock only for its writes, and stores it only
@@ -398,9 +392,7 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 					return err
 				}
 			}
-			var err error
-			after, err = s.wakeJob(ctx, tx, a.Run, a.Job)
-			return err
+			return s.wakeJob(ctx, tx, a.Run, a.Job)
 		})
 		if !errors.Is(err, store.ErrRecordChanged) || try == partTries {
 			break
@@ -432,7 +424,6 @@ func (s *Server) serveComplete(w http.ResponseWriter, r *http.Request, a *store.
 		s.writeError(w, r, err)
 		return
 	}
-	committed(after)
 	// The worker has ended the attempt's logs before its end.
 	s.budgets.drop(a.ID)
 	w.WriteHeader(http.StatusNoContent)

@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
@@ -66,9 +67,12 @@ func unreadable(err error) bool {
 	return errors.Is(err, plan.ErrVersion) || errors.Is(err, store.ErrMalformed)
 }
 
-// wakeAgainAfter wakes again the supervisors woken, once tx commits, as
-// wakeAgain does, if there are any.
+// wakeAgainAfter wakes again the supervisors and markers woken, once tx
+// commits, as wakeAgain does, if there are any: every transaction that
+// wakes one that hopper may be running has it woken again so, and only if
+// it commits.
 func (c *Coordinator) wakeAgainAfter(tx *store.Tx, woken []*waking) {
+	woken = slices.DeleteFunc(slices.Clone(woken), func(w *waking) bool { return w == nil })
 	if len(woken) == 0 {
 		return
 	}

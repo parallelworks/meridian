@@ -236,10 +236,7 @@ func (s *Server) workerFits(w http.ResponseWriter, r *http.Request, run *store.R
 // one whose placement isn't recorded, and as writeError says otherwise.
 func (s *Server) storeClaim(w http.ResponseWriter, r *http.Request, token string, req *workerapi.ClaimRequest, version int, run *store.Run, a *store.Attempt) (*store.Attempt, bool) {
 	ctx := r.Context()
-	var (
-		claimed *store.Attempt
-		after   func()
-	)
+	var claimed *store.Attempt
 	if s.beforeClaim != nil {
 		s.beforeClaim()
 	}
@@ -248,8 +245,7 @@ func (s *Server) storeClaim(w http.ResponseWriter, r *http.Request, token string
 		if claimed, err = tx.Claim(token, req.Credential, req.Worker, version); err != nil || !a.ClaimedAt.IsZero() {
 			return err
 		}
-		after, err = s.wakeJob(ctx, tx, run.ID, a.Job)
-		return err
+		return s.wakeJob(ctx, tx, run.ID, a.Job)
 	})
 	switch {
 	case errors.Is(err, store.ErrFenced) && a.ClaimedAt.IsZero():
@@ -264,7 +260,6 @@ func (s *Server) storeClaim(w http.ResponseWriter, r *http.Request, token string
 		s.writeError(w, r, err)
 		return nil, false
 	}
-	committed(after)
 	return claimed, true
 }
 
@@ -368,21 +363,14 @@ func credentialForm(credential string) bool {
 // that failed before its first step, with p, unless something ended it
 // meanwhile, and wakes its job's supervisor, which places the job again.
 func (s *Server) endRefused(ctx context.Context, a *store.Attempt, p *problem.Problem) {
-	var after func()
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: p}); err != nil {
 			return err
 		}
-		var err error
-		after, err = s.wakeJob(ctx, tx, a.Run, a.Job)
-		return err
+		return s.wakeJob(ctx, tx, a.Run, a.Job)
 	})
-	switch {
-	case errors.Is(err, store.ErrFenced):
-	case err != nil:
+	if err != nil && !errors.Is(err, store.ErrFenced) {
 		s.log.ErrorContext(ctx, "workerapisrv: end an attempt that failed before its first step", "attempt", a.ID, "error", err)
-	default:
-		committed(after)
 	}
 }
 

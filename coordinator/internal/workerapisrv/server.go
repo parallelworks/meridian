@@ -158,10 +158,10 @@ type Options struct {
 	// Wake, if it isn't nil, is called in the transaction that stores a
 	// change to an attempt that its job's supervisor acts on: its claim,
 	// its first step's start, and its end, before its first step or after.
-	// It wakes the supervisor in that transaction, and returns what the
-	// server calls once the transaction has committed, or nil. An error
-	// fails the transaction.
-	Wake func(ctx context.Context, tx *store.Tx, run, job string) (after func(), err error)
+	// It wakes the supervisor in that transaction, and has what it does
+	// once the transaction commits done then (store.Tx.AfterCommit). An
+	// error fails the transaction.
+	Wake func(ctx context.Context, tx *store.Tx, run, job string) error
 	// Log hears of what the server does that no answer says, such as a
 	// connection it refused, or an error of its own. Nil means none.
 	Log *slog.Logger
@@ -177,7 +177,7 @@ type Server struct {
 	children Children
 	peers    Peers
 	maxConns int
-	wake     func(ctx context.Context, tx *store.Tx, run, job string) (func(), error)
+	wake     func(ctx context.Context, tx *store.Tx, run, job string) error
 	log      *slog.Logger
 	polls    *polls
 	// ends are the polls for the ends of child runs the server holds.
@@ -898,21 +898,12 @@ func writeBody(w http.ResponseWriter, version int, v any) {
 	}
 }
 
-// wakeJob calls Options.Wake, if there is one, in tx, and returns what to
-// call once tx has committed (committed), or nil.
-func (s *Server) wakeJob(ctx context.Context, tx *store.Tx, run, job string) (func(), error) {
+// wakeJob calls Options.Wake, if there is one, in tx.
+func (s *Server) wakeJob(ctx context.Context, tx *store.Tx, run, job string) error {
 	if s.wake == nil {
-		return nil, nil
+		return nil
 	}
 	return s.wake(ctx, tx, run, job)
-}
-
-// committed calls after, what Options.Wake returned, unless it is nil, once
-// its transaction has committed.
-func committed(after func()) {
-	if after != nil {
-		after()
-	}
 }
 
 // badRequest answers 400, and logs why, which the answer doesn't say. why

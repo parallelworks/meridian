@@ -52,9 +52,7 @@ func (c *Coordinator) matrixStep(ctx context.Context, run *store.Run, job *store
 	// As format 1, an instance whose steps failed, or were cancelled,
 	// stops the rest: each that hasn't ended, its supervisor ends.
 	if x.FailFast && stopped && job.FailFastAt.IsZero() && len(unfinished) > 0 {
-		var woken []*waking
 		if err := c.store.Tx(ctx, func(tx *store.Tx) error {
-			woken = woken[:0]
 			if _, err := tx.MarkFailFast(run.ID, job.Key); err != nil {
 				return err
 			}
@@ -63,13 +61,12 @@ func (c *Coordinator) matrixStep(ctx context.Context, run *store.Run, job *store
 				if err != nil {
 					return err
 				}
-				woken = append(woken, w)
+				c.wakeAgainAfter(tx, []*waking{w})
 			}
 			return nil
 		}); err != nil {
 			return 0, err
 		}
-		c.wakeAgain(ctx, woken...)
 		return 0, errAgain
 	}
 	if len(unfinished) == 0 {
@@ -199,9 +196,7 @@ func (c *Coordinator) openRecord(ctx context.Context, runID string) (*plan.Recor
 // grantTurns gives the run's instances keys their turns to be placed, and
 // wakes those it gave one now, in the same transaction.
 func (c *Coordinator) grantTurns(ctx context.Context, runID string, keys []string) error {
-	var woken []*waking
-	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
-		woken = woken[:0]
+	return c.store.Tx(ctx, func(tx *store.Tx) error {
 		granted, err := tx.GrantTurns(runID, keys)
 		if err != nil {
 			return err
@@ -211,14 +206,10 @@ func (c *Coordinator) grantTurns(ctx context.Context, runID string, keys []strin
 			if err != nil {
 				return err
 			}
-			woken = append(woken, w)
+			c.wakeAgainAfter(tx, []*waking{w})
 		}
 		return nil
-	}); err != nil {
-		return err
-	}
-	c.wakeAgain(ctx, woken...)
-	return nil
+	})
 }
 
 // keysOf returns the keys of jobs.
