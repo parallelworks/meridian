@@ -89,40 +89,7 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 	if err := c.writable(); err != nil {
 		return "", nil, err
 	}
-	var (
-		attempt      *store.Attempt
-		parent, root *store.Run
-		text         []byte
-		existing     string
-		textFound    bool
-		control      workerapi.Control
-	)
-	err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		if attempt, err = tx.Attempt(a.ID); err != nil {
-			return err
-		}
-		if existing, err = tx.Child(a.ID, req.Step, req.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		if !attempt.Holds {
-			return errStepGone
-		}
-		if parent, err = tx.Run(attempt.Run); err != nil {
-			return err
-		}
-		if parent.State != store.RunRunning {
-			return errStepGone
-		}
-		if control, err = tx.Control(attempt.ID); err != nil {
-			return err
-		}
-		root = parent
-		if parent.Parent != nil {
-			root, err = tx.Run(parent.Parent.Root)
-		}
-		return err
-	})
+	cl, existing, err := c.readCaller(ctx, a.ID, req.Step, req.Try)
 	switch {
 	case err != nil:
 		return "", nil, err
@@ -131,62 +98,147 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 	}
 	// Whether the step outlives its run's stop, or its job's, is the plan's
 	// to say, from its if:, as Step decides it, never the worker's.
-	if err := stepLives(attempt, parent, step, control); err != nil {
+	if err := stepLives(cl.attempt, cl.run, step, cl.control); err != nil {
 		return "", nil, err
 	}
-	source := step.Source
 	rootPlan := p
-	if root != parent {
-		if rootPlan, err = c.plans.get(root); err != nil {
+	if cl.root != cl.run {
+		if rootPlan, err = c.plans.get(cl.root); err != nil {
 			return "", nil, err
 		}
 	}
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		text, err = tx.Text(root.ID, source.Digest)
-		textFound = err == nil
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		return err
-	}); err != nil {
-		return "", nil, err
-	}
-	if !textFound {
-		// A root a release created that kept no texts: the workflow is read
-		// by its pin, which checks its digest.
-		if c.opts.Sources == nil {
-			return "", nil, problems.ChildNotPinned.Problem(problems.Params{"uses": source.Ref.Uses})
-		}
-		w, err := c.opts.Sources.Read(ctx, *source)
-		if err != nil {
-			return "", nil, err
-		}
-		text = w.Text
-	}
-	wd, group, err := c.childPlace(ctx, parent, root, attempt, req.WorkingDirectory)
+	text, err := c.childText(ctx, cl.root.ID, step.Source)
 	if err != nil {
 		return "", nil, err
 	}
-	dir := plan.ChildDir(parent.RunDir, wd, attempt.Job, req.Step)
-	if !within(root.RunDir, dir) {
+	wd, group, err := c.childPlace(ctx, cl.run, cl.root, cl.attempt, req.WorkingDirectory)
+	if err != nil {
+		return "", nil, err
+	}
+	dir := plan.ChildDir(cl.run.RunDir, wd, cl.attempt.Job, req.Step)
+	if !within(cl.root.RunDir, dir) {
 		return "", nil, problems.ChildDirOutside.Problem(problems.Params{"dir": dir})
-	}
-	vars, err := c.rootVariables(ctx, root.ID)
-	if err != nil {
-		return "", nil, err
 	}
 	depth := 1
 	if p.Run.Parent != nil {
 		depth = p.Run.Parent.Depth + 1
 	}
-	link := store.Link{Run: parent.ID, Job: attempt.Job, Attempt: attempt.ID, Step: req.Step, Try: req.Try, Root: root.ID, Depth: depth}
+	link := store.Link{Run: cl.run.ID, Job: cl.attempt.Job, Attempt: cl.attempt.ID, Step: req.Step, Try: req.Try, Root: cl.root.ID, Depth: depth}
+	created, diags, err := c.compileChild(ctx, p, rootPlan, step.Source, text, req, &link)
+	if err != nil || created == nil {
+		return "", diags, err
+	}
+	id, err := c.storeChild(ctx, step, created, group, dir, &link)
+	if err != nil {
+		return "", nil, err
+	}
+	return id, diags, nil
+}
+
+// A caller is what the store holds of the step's try that asks for a
+// child, as createChild reads it: the step's attempt, the attempt's
+// control, its run, and the root of the run's tree, which is the run
+// itself for a run no step called.
+type caller struct {
+	attempt   *store.Attempt
+	control   workerapi.Control
+	run, root *store.Run
+}
+
+// readCaller reads, in one transaction, the caller of the step step's try
+// try, of the attempt attempt, and returns it; or the ID of the child that
+// the try has already, with no caller. It returns errStepGone for an
+// attempt that no longer holds its job, or of a run that isn't running.
+func (c *Coordinator) readCaller(ctx context.Context, attempt string, step, try int) (*caller, string, error) {
+	var (
+		cl       caller
+		existing string
+	)
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		if cl.attempt, err = tx.Attempt(attempt); err != nil {
+			return err
+		}
+		if existing, err = tx.Child(attempt, step, try); err == nil || !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		if !cl.attempt.Holds {
+			return errStepGone
+		}
+		if cl.run, err = tx.Run(cl.attempt.Run); err != nil {
+			return err
+		}
+		if cl.run.State != store.RunRunning {
+			return errStepGone
+		}
+		if cl.control, err = tx.Control(cl.attempt.ID); err != nil {
+			return err
+		}
+		cl.root = cl.run
+		if cl.run.Parent != nil {
+			cl.root, err = tx.Run(cl.run.Parent.Root)
+		}
+		return err
+	})
+	if err != nil || existing != "" {
+		return nil, existing, err
+	}
+	return &cl, "", nil
+}
+
+// childText returns the text of the workflow source names, which the run
+// root pinned for the step that calls it: as the store keeps it with the
+// root (store.Tx.Text), or else, for a root that a release created that
+// kept no texts, as Options.Sources reads it by its pin, which checks its
+// digest. A workflow that is neither is child_not_pinned.
+func (c *Coordinator) childText(ctx context.Context, root string, source *plan.Source) ([]byte, error) {
+	var (
+		text  []byte
+		found bool
+	)
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		text, err = tx.Text(root, source.Digest)
+		found = err == nil
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if found {
+		return text, nil
+	}
+	if c.opts.Sources == nil {
+		return nil, problems.ChildNotPinned.Problem(problems.Params{"uses": source.Ref.Uses})
+	}
+	w, err := c.opts.Sources.Read(ctx, *source)
+	if err != nil {
+		return nil, err
+	}
+	return w.Text, nil
+}
+
+// compileChild compiles text, the workflow source names, as the child run
+// that link links to the step's try that req asks for: as the run the
+// step's with: is submitted to, with what is private of the step
+// (compile.Parent), the remote context source's pin has, the limits of p,
+// the plan of the step's run, and the variables of the tree's root, from
+// its secret record (rootVariables). The child's own steps' workflows, and
+// checkouts, are those that rootPlan, the root's plan, pinned. Its
+// diagnostics are the child's, and a nil Created stores no run.
+func (c *Coordinator) compileChild(ctx context.Context, p, rootPlan *plan.Plan, source *plan.Source, text []byte, req *workerapi.ChildRequest, link *store.Link) (*compile.Created, problems.Diagnostics, error) {
+	vars, err := c.rootVariables(ctx, link.Root)
+	if err != nil {
+		return nil, nil, err
+	}
 	remote := make(map[string]any, len(source.Remote))
 	for k, v := range source.Remote {
 		remote[k] = v
 	}
 	with, _ := req.With.Get().(map[string]any)
-	created, diags, err := compile.Create(ctx, source.Location, text, with, compile.Options{
+	return compile.Create(ctx, source.Location, text, with, compile.Options{
 		Source: *source, Contexts: map[string]any{"remote": remote}, Variables: vars,
 		Inputs: c.opts.Inputs, Groups: c.opts.Groups, Sessions: c.opts.Sessions, Limits: p.Run.Limits,
 		Parent: &compile.Parent{
@@ -195,31 +247,38 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 			Masked: req.Masked, Pin: rootPlan.FindCall, Checkout: rootPlan.FindCheckout,
 		},
 	})
-	if err != nil || created == nil {
-		return "", diags, err
-	}
+}
+
+// storeChild stores created, in one transaction, as the child run that
+// link links to a try of step, in the group group and the directory dir,
+// with its Start in the queue every coordinator works, and returns its ID:
+// or the ID of the child another ask stored meanwhile. It reads the
+// attempt, its run and its control again, as they may have changed since
+// createChild read them, and returns stepLives' error for a step that no
+// longer lives.
+func (c *Coordinator) storeChild(ctx context.Context, step *plan.Step, created *compile.Created, group, dir string, link *store.Link) (string, error) {
 	if c.beforeChildStore != nil {
 		c.beforeChildStore()
 	}
 	var id string
-	err = c.store.Tx(ctx, func(tx *store.Tx) error {
+	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		// What another ask stored meanwhile is the try's child.
 		var err error
-		if id, err = tx.Child(a.ID, req.Step, req.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
+		if id, err = tx.Child(link.Attempt, link.Step, link.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
 		// What changed meanwhile, as the attempt's being superseded or
 		// the run's being stopped, is read again here, where the child is
 		// stored.
-		now, err := tx.Attempt(a.ID)
+		now, err := tx.Attempt(link.Attempt)
 		if err != nil {
 			return err
 		}
-		r, err := tx.Run(parent.ID)
+		r, err := tx.Run(link.Run)
 		if err != nil {
 			return err
 		}
-		ctl, err := tx.Control(a.ID)
+		ctl, err := tx.Control(link.Attempt)
 		if err != nil {
 			return err
 		}
@@ -229,12 +288,9 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 		if id, err = tx.NewRunID(); err != nil {
 			return err
 		}
-		return c.insertRun(ctx, tx, id, created, sharedQueue, group, dir, &link)
+		return c.insertRun(ctx, tx, id, created, sharedQueue, group, dir, link)
 	})
-	if err != nil {
-		return "", nil, err
-	}
-	return id, diags, nil
+	return id, err
 }
 
 // stepLives returns errStepGone for an attempt a, of run, that no longer

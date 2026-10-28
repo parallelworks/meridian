@@ -73,8 +73,66 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, from peer) {
 		writeStatus(w, http.StatusUnauthorized)
 		return
 	}
-	// The token is looked up before the body is read: one that is no
-	// attempt's has the server read nothing more.
+	a, run, ok := s.tokenAttempt(w, r, from, token)
+	if !ok {
+		return
+	}
+	req, ok := s.readClaim(w, r)
+	if !ok {
+		return
+	}
+	// The attempt is served at the lower of the worker's version of the
+	// API and the server's, which a claim repeated keeps.
+	version := min(req.Speaks(), s.speaks)
+	// A first claim, of an attempt that holds its job: until its placement
+	// is recorded, as when the worker the call that places it started
+	// claims before the call returns, it is answered 503, which the
+	// worker tries again; then it is refused, before anything of the run
+	// is sent, for a worker that can't run it (workerFits).
+	if a.Holds && a.ClaimedAt.IsZero() && !a.Placed() {
+		if a, ok = s.awaitPlaced(ctx, token, a); !ok {
+			notPlaced(w)
+			return
+		}
+	}
+	// Whom the claim came from is held to the member the attempt was
+	// placed on, once that is recorded, before the claim can end it.
+	if !s.allows(ctx, from, run, a) {
+		writeStatus(w, http.StatusUnauthorized)
+		return
+	}
+	if a.Holds && a.ClaimedAt.IsZero() && !s.workerFits(w, r, run, a, req, version) {
+		return
+	}
+	claimed, ok := s.storeClaim(w, r, token, req, version, run, a)
+	if !ok {
+		return
+	}
+	if claimed.APIVersion > s.speaks {
+		// Claimed meanwhile, through a replica that speaks a later version
+		// of the API than this one.
+		writeStatus(w, http.StatusServiceUnavailable)
+		return
+	}
+	c, err := s.claim(ctx, run, claimed)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeBody(w, claimed.APIVersion, c)
+}
+
+// tokenAttempt returns the attempt the bootstrap token is for, and its run,
+// once it has answered a claim it refuses, before the claim's body is read,
+// so that a token that is no attempt's has the server read nothing more:
+// 401 for a token that is no attempt's, of a run the peer may not claim,
+// or of an attempt placed on another member than the peer's (allows); and,
+// for a run whose plan is of a version the server doesn't read, or an
+// attempt claimed at a version of the worker API it doesn't speak, 503,
+// but 401 for an attempt withdrawn or superseded before its claim, and
+// fenced for one claimed that no longer holds its job, which need neither.
+func (s *Server) tokenAttempt(w http.ResponseWriter, r *http.Request, from peer, token string) (*store.Attempt, *store.Run, bool) {
+	ctx := r.Context()
 	var (
 		a   *store.Attempt
 		run *store.Run
@@ -90,16 +148,16 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, from peer) {
 	switch {
 	case err != nil:
 		s.writeError(w, r, err)
-		return
+		return nil, nil, false
 	case from.member == "" && !s.peers.Allows(ctx, from.uid, run):
 		writeStatus(w, http.StatusUnauthorized)
-		return
+		return nil, nil, false
 	case a.Placed() && !s.allows(ctx, from, run, a):
 		// Whom the claim came from is held to the member the attempt was
 		// placed on, once that is recorded, before anything else is
-		// answered of it, as below for one placed meanwhile.
+		// answered of it, as serveClaim does for one placed meanwhile.
 		writeStatus(w, http.StatusUnauthorized)
-		return
+		return nil, nil, false
 	case run.PlanVersion > s.reads, a.APIVersion > s.speaks:
 		// A run of a plan this replica doesn't read, or an attempt claimed
 		// at a version of the API it doesn't speak, is another replica's,
@@ -114,66 +172,70 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, from peer) {
 		default:
 			writeStatus(w, http.StatusServiceUnavailable)
 		}
-		return
+		return nil, nil, false
 	}
+	return a, run, true
+}
+
+// readClaim reads the claim's body, once it has answered one that isn't a
+// claim, or whose credential isn't as a worker makes one, 400.
+func (s *Server) readClaim(w http.ResponseWriter, r *http.Request) (*workerapi.ClaimRequest, bool) {
 	body, ok := s.readBody(w, r, MaxClaimBody)
 	if !ok {
-		return
+		return nil, false
 	}
 	var req workerapi.ClaimRequest
 	if err := workerapi.Unmarshal(body, &req); err != nil {
 		s.badRequest(w, r, "a claim that isn't one")
-		return
+		return nil, false
 	}
 	if !credentialForm(req.Credential) {
 		s.badRequest(w, r, "a credential that isn't 32 bytes as hex")
-		return
+		return nil, false
 	}
-	// The attempt is served at the lower of the worker's version of the
-	// API and the server's, which a claim repeated keeps.
-	version := min(req.Speaks(), s.speaks)
-	// A first claim, of an attempt that holds its job: until its placement
-	// is recorded, as when the worker the call that places it started
-	// claims before the call returns, it is answered 503, which the
-	// worker tries again; then it is refused, before anything of the run
-	// is sent, for a worker that doesn't read the run's plan, that doesn't
-	// speak a version of the API that has everything the attempt needs, or
-	// that isn't the binary its placement started, which ends the attempt,
-	// failed before its first step.
-	if a.Holds && a.ClaimedAt.IsZero() && !a.Placed() {
-		if a, ok = s.awaitPlaced(ctx, token, a); !ok {
-			notPlaced(w)
-			return
-		}
+	return &req, true
+}
+
+// workerFits reports whether the worker of req, the first claim of the
+// attempt a, of run, which holds its job, can run it, at version of the
+// worker API, once it has refused one that can't: one that doesn't read
+// the run's plan, that doesn't speak a version of the API that has
+// everything the attempt needs (Readier.Needs), or that isn't the binary
+// its placement started. A refusal ends the attempt, failed before its
+// first step (endRefused), and answers with the problem.
+func (s *Server) workerFits(w http.ResponseWriter, r *http.Request, run *store.Run, a *store.Attempt, req *workerapi.ClaimRequest, version int) bool {
+	ctx := r.Context()
+	needs, err := s.readier.Needs(ctx, run, a)
+	if err != nil {
+		s.writeError(w, r, err)
+		return false
 	}
-	// Whom the claim came from is held to the member the attempt was
-	// placed on, once that is recorded, before the claim can end it.
-	if !s.allows(ctx, from, run, a) {
-		writeStatus(w, http.StatusUnauthorized)
-		return
+	needs = max(needs, s.needs)
+	var refusal *problem.Problem
+	switch placed := a.Placement.WorkerDigest; {
+	case req.PlanVersion < run.PlanVersion:
+		refusal = problems.PlanTooNew.Problem(nil)
+	case version < needs:
+		refusal = problems.WorkerAPITooOld.Problem(problems.Params{workerapi.ParamVersion: req.Speaks(), workerapi.ParamNeeded: needs})
+	case placed != req.Worker.Digest:
+		refusal = problems.WorkerDigestMismatch.Problem(problems.Params{workerapi.ParamPlaced: placed, workerapi.ParamClaimed: req.Worker.Digest})
 	}
-	if a.Holds && a.ClaimedAt.IsZero() {
-		needs, err := s.readier.Needs(ctx, run, a)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		needs = max(needs, s.needs)
-		var refusal *problem.Problem
-		switch placed := a.Placement.WorkerDigest; {
-		case req.PlanVersion < run.PlanVersion:
-			refusal = problems.PlanTooNew.Problem(nil)
-		case version < needs:
-			refusal = problems.WorkerAPITooOld.Problem(problems.Params{workerapi.ParamVersion: req.Speaks(), workerapi.ParamNeeded: needs})
-		case placed != req.Worker.Digest:
-			refusal = problems.WorkerDigestMismatch.Problem(problems.Params{workerapi.ParamPlaced: placed, workerapi.ParamClaimed: req.Worker.Digest})
-		}
-		if refusal != nil {
-			s.endRefused(ctx, a, refusal)
-			problem.Write(w, refusal)
-			return
-		}
+	if refusal != nil {
+		s.endRefused(ctx, a, refusal)
+		problem.Write(w, refusal)
+		return false
 	}
+	return true
+}
+
+// storeClaim stores the claim req of the attempt a, of run, that the
+// bootstrap token is for, at version of the worker API, in one transaction
+// that, for a first claim, wakes the job's supervisor too; and returns the
+// attempt as claimed, once it has answered a claim it couldn't store: 401
+// for an attempt withdrawn or superseded before its first claim, 503 for
+// one whose placement isn't recorded, and as writeError says otherwise.
+func (s *Server) storeClaim(w http.ResponseWriter, r *http.Request, token string, req *workerapi.ClaimRequest, version int, run *store.Run, a *store.Attempt) (*store.Attempt, bool) {
+	ctx := r.Context()
 	var (
 		claimed *store.Attempt
 		after   func()
@@ -181,7 +243,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, from peer) {
 	if s.beforeClaim != nil {
 		s.beforeClaim()
 	}
-	err = s.store.Tx(ctx, func(tx *store.Tx) error {
+	err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
 		if claimed, err = tx.Claim(token, req.Credential, req.Worker, version); err != nil || !a.ClaimedAt.IsZero() {
 			return err
@@ -194,27 +256,16 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, from peer) {
 		// Withdrawn, or superseded, before it was claimed: the token
 		// claims nothing.
 		writeStatus(w, http.StatusUnauthorized)
-		return
+		return nil, false
 	case errors.Is(err, store.ErrNotPlaced):
 		notPlaced(w)
-		return
+		return nil, false
 	case err != nil:
 		s.writeError(w, r, err)
-		return
+		return nil, false
 	}
 	committed(after)
-	if claimed.APIVersion > s.speaks {
-		// Claimed meanwhile, through a replica that speaks a later version
-		// of the API than this one.
-		writeStatus(w, http.StatusServiceUnavailable)
-		return
-	}
-	c, err := s.claim(ctx, run, claimed)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	writeBody(w, claimed.APIVersion, c)
+	return claimed, true
 }
 
 // placedWait is how long a first claim waits for its placement to be
