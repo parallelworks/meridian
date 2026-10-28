@@ -66,6 +66,33 @@ type Record struct {
 	// Inherited is what a child run has of the step that calls it that its
 	// plan doesn't hold (Run.Parent), or nil. Version 2.
 	Inherited *Inherited `json:"inherited,omitzero"`
+	// StepRun is what a step run holds of the step's try it runs, or nil
+	// for any other run. Version 2.
+	StepRun *StepRun `json:"stepRun,omitzero"`
+}
+
+// A StepRun is what a step run's secret record holds of the try of the
+// step it runs on another host than its job's (docs/design.md, Steps on
+// another host): where the step's ssh: put the try, and the state of its
+// caller's job then, which the step run's worker runs the step with. A
+// step run has no plan of its own, but its caller's, so the record holds
+// what the try evaluated, which can read a variable or a secret.
+type StepRun struct {
+	// SSH is the step's ssh:, as the try evaluated it, which names the
+	// host the step runs on; or nil for one that is null, or gives no
+	// remoteHost, in a job on a host, which runs where its job would
+	// without its ssh:.
+	SSH *Inline `json:"ssh,omitzero"`
+	// Private is set when evaluating the step's ssh: read a variable or a
+	// password, so that where the step runs is private, as a job's target
+	// that read one is.
+	Private bool `json:"private,omitzero"`
+	// State is the state of the caller's job at the try, a mapping, as
+	// its worker gave it, which the coordinator keeps but doesn't read.
+	State Data `json:"state,omitzero"`
+	// Masked are the strings the caller's worker masks at the try, as a
+	// Masker takes them, which the step run's jobs mask too.
+	Masked []string `json:"masked,omitempty"`
 }
 
 // Inherited is what a child run's secret record holds of the step that
@@ -268,7 +295,12 @@ func DecodeRecord(data []byte) (*Record, error) {
 	if _, ok := r.Submitted.Get().(map[string]any); !ok && !r.Submitted.IsZero() {
 		return nil, fmt.Errorf("%w: the secret record: what was submitted isn't a mapping", ErrMalformed)
 	}
-	if r.Inherited != nil && r.Version < 2 {
+	if sr := r.StepRun; sr != nil {
+		if _, ok := sr.State.Get().(map[string]any); !ok && !sr.State.IsZero() {
+			return nil, fmt.Errorf("%w: the secret record: a step run's state isn't a mapping", ErrMalformed)
+		}
+	}
+	if (r.Inherited != nil || r.StepRun != nil) && r.Version < 2 {
 		// What a later version added isn't its earlier versions', which
 		// their schemas refuse.
 		return nil, fmt.Errorf("%w: the secret record of version %d has what version 2 adds", ErrMalformed, r.Version)

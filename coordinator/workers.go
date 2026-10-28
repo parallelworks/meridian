@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
@@ -60,33 +61,23 @@ var _ workerapisrv.Readier = claimReadier{}
 
 // ReadyAttempt returns the job of the attempt a, as Ready gives it again,
 // with the part of the run's values and of its needs' results it reads.
+// A step run's job is its caller's, which its caller's run readies, but for
+// where it runs (stepRunJob).
 func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store.Attempt) (*workerapisrv.Ready, error) {
 	c := r.c
-	p, err := c.plans.get(run)
-	if err != nil {
-		return nil, err
-	}
-	var (
-		from *readyFrom
-		pj   *plan.Job
-	)
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		job, err := tx.Job(run.ID, a.Job)
+	readyRun, key := run, a.Job
+	if run.StepRun {
+		caller, err := c.callerOf(ctx, run)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if pj = p.Job(job.Name); pj == nil {
-			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, job.Name)
-		}
-		from, err = readReadyFrom(tx, run, pj, job, false)
-		return err
-	}); err != nil {
-		return nil, err
+		readyRun, key = caller, run.Parent.Job
 	}
-	in, err := c.readyInput(ctx, run, from)
+	p, from, in, err := c.readyInputOf(ctx, readyRun, key)
 	if err != nil {
 		return nil, err
 	}
+	pj := p.Job(from.job.Name)
 	res, diags, err := p.Ready(ctx, from.job.Name, in)
 	switch {
 	case err != nil:
@@ -94,9 +85,14 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	case diags.HasErrors():
 		// Ready gave the job once with the same inputs: this is a bug, and
 		// the diagnostics, which show no private value, are logged with it.
-		return nil, fmt.Errorf("coordinator: run %s's job %q doesn't ready again as it did: %w", run.ID, a.Job, diags)
+		return nil, fmt.Errorf("coordinator: run %s's job %q doesn't ready again as it did: %w", readyRun.ID, key, diags)
 	case res.Job == nil:
-		return nil, fmt.Errorf("coordinator: run %s's job %q readies again as no job to run", run.ID, a.Job)
+		return nil, fmt.Errorf("coordinator: run %s's job %q readies again as no job to run", readyRun.ID, key)
+	}
+	if run.StepRun {
+		if res.Job, err = c.stepRunJob(ctx, run, res.Job); err != nil {
+			return nil, err
+		}
 	}
 	root, err := c.rootOf(ctx, run)
 	if err != nil {
@@ -114,6 +110,35 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 		Job: res.Job, Run: pj.Reads(in.Run), Needs: pj.ReadsNeeds(in.Needs), Tree: tree,
 		RunDir: dirs.run, RunDirOnMember: dirs.own,
 	}, nil
+}
+
+// readyInputOf returns the plan of run, and what Ready readies its job key
+// with, as its supervisor pinned it and a claim reads it: so that what is
+// evaluated again with it, as a claim's Ready, or the coordinator's
+// evaluation of a step's ssh: (stepTarget), reads what the job was
+// readied with.
+func (c *Coordinator) readyInputOf(ctx context.Context, run *store.Run, key string) (*plan.Plan, *readyFrom, plan.ReadyInput, error) {
+	p, err := c.plans.get(run)
+	if err != nil {
+		return nil, nil, plan.ReadyInput{}, err
+	}
+	var from *readyFrom
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		job, err := tx.Job(run.ID, key)
+		if err != nil {
+			return err
+		}
+		pj := p.Job(job.Name)
+		if pj == nil {
+			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, job.Name)
+		}
+		from, err = readReadyFrom(tx, run, pj, job, false)
+		return err
+	}); err != nil {
+		return nil, nil, plan.ReadyInput{}, err
+	}
+	in, err := c.readyInput(ctx, run, from)
+	return p, from, in, err
 }
 
 // tree returns what an attempt of the child run run, of the plan p, has of
@@ -134,16 +159,22 @@ func (r claimReadier) tree(ctx context.Context, run, root *store.Run, rootDir st
 	if rec.Inherited != nil {
 		tree.Masked = rec.Inherited.Masked
 	}
+	if rec.StepRun != nil {
+		// A step run's worker masks what its caller's did at the try.
+		tree.Masked = append(slices.Clone(tree.Masked), rec.StepRun.Masked...)
+	}
 	return tree, nil
 }
 
 // Needs returns the oldest version of the worker API that has all the
 // attempt's job uses: workerapi.Version3, of child runs and of the actions
 // the coordinator performs, for a job of a child run, whose claim says
-// what it has of its tree, for one with a step whose uses: names a
-// workflow, which asks for its child, and for one with a step that uses
-// an action the coordinator performs (plan.CoordinatorAction), which asks
-// for it; and 1 for any other.
+// what it has of its tree, a step run among them, for one with a step
+// whose uses: names a workflow, which asks for its child, for one with a
+// step whose own ssh: can make a try of it a step run, as the plan says it
+// without evaluating it (plan.Job.StepElsewhere), which asks for it, and
+// for one with a step that uses an action the coordinator performs
+// (plan.CoordinatorAction), which asks for it; and 1 for any other.
 func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attempt) (int, error) {
 	if run.Parent != nil {
 		return workerapi.Version3, nil
@@ -153,8 +184,9 @@ func (r claimReadier) Needs(ctx context.Context, run *store.Run, a *store.Attemp
 		return 0, err
 	}
 	if j != nil {
-		for _, s := range j.Steps {
-			if s.Source != nil || plan.CoordinatorAction(s.Uses) {
+		for i := range j.Steps {
+			s := &j.Steps[i]
+			if s.Source != nil || plan.CoordinatorAction(s.Uses) || j.StepElsewhere(s) {
 				return workerapi.Version3, nil
 			}
 		}
@@ -176,7 +208,9 @@ func (c *Coordinator) planJob(run *store.Run, a *store.Attempt) (*plan.Plan, *pl
 
 // planStep returns run's plan, and the step at index of the job of it
 // that the attempt a, of run, runs (planJob): nil if the job has no such
-// step, and an error if the plan has no such job.
+// step, or, for a step run, if it isn't the step its link names, the one
+// step of the job its attempt runs; and an error if the plan has no such
+// job.
 func (c *Coordinator) planStep(run *store.Run, a *store.Attempt, index int) (*plan.Plan, *plan.Step, error) {
 	p, job, err := c.planJob(run, a)
 	switch {
@@ -184,7 +218,7 @@ func (c *Coordinator) planStep(run *store.Run, a *store.Attempt, index int) (*pl
 		return nil, nil, err
 	case job == nil:
 		return nil, nil, fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, a.Job)
-	case index < 0 || index >= len(job.Steps):
+	case index < 0 || index >= len(job.Steps), run.StepRun && index != run.Parent.Step:
 		return p, nil, nil
 	}
 	return p, &job.Steps[index], nil

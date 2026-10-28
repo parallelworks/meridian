@@ -106,6 +106,9 @@ func (c *Coordinator) startRun(ctx context.Context, id string, done func(context
 	if run.State != store.RunCreated {
 		return 0, errSettled
 	}
+	if run.StepRun {
+		return c.startStepRun(ctx, run, done)
+	}
 	p, err := c.plans.get(run)
 	if err != nil {
 		return c.startFailed(ctx, run, causeStore, err, done)

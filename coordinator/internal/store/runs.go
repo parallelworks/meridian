@@ -82,6 +82,11 @@ type Run struct {
 	// Parent is a child run's link to the try of the step that called it,
 	// or nil for a run no step called.
 	Parent *Link
+	// StepRun is set for a step run, a child run that runs the step its
+	// link names on another host (docs/design.md, Steps on another host),
+	// whose plan, Plan, is its caller's, the plan of the run its link
+	// names, which it has no plan of its own but names by its digest.
+	StepRun bool
 	// FinisherID is the run's finisher, a hopper job, or zero for a run
 	// stored before the store kept it; and WaitedAt is when it began to
 	// wait for the runs of the run's tree to end (WaitForDescendants), or
@@ -106,6 +111,10 @@ type NewRun struct {
 	// Parent is a child run's link to the try of the step that called it,
 	// whose attempt and runs are the store's, or nil.
 	Parent *Link
+	// StepRun is set for a step run, which needs a Parent, and whose Plan
+	// is the plan of the run Parent names: the store keeps its digest, and
+	// reads the plan from that run (Run.StepRun).
+	StepRun bool
 }
 
 // NewRunID gives the next run's ID: one more than the last the store gave,
@@ -141,6 +150,8 @@ func (tx *Tx) InsertRun(r NewRun) error {
 		return errors.New("store: a run without a directory")
 	case r.WorkflowID.IsZero():
 		return errors.New("store: a run without a hopper workflow")
+	case r.StepRun && r.Parent == nil:
+		return errors.New("store: a step run without a link to its step")
 	}
 	// A run stored without its finisher, as a test's, has none to wake.
 	var finisher any
@@ -175,18 +186,29 @@ func (tx *Tx) InsertRun(r NewRun) error {
 	if err != nil {
 		return err
 	}
+	if r.StepRun {
+		// Its plan is its caller's, which the store doesn't keep twice.
+		var callers string
+		if err := tx.queryRow("SELECT plan_digest FROM meridian_runs WHERE id = ?", link.run.Int64).Scan(&callers); err != nil {
+			return err
+		}
+		if callers != digest {
+			return fmt.Errorf("store: a step run whose plan isn't its caller's, run %s's", r.Parent.Run)
+		}
+		encoded = []byte{}
+	}
 	now, err := tx.now()
 	if err != nil {
 		return err
 	}
 	res, err := tx.exec(`INSERT INTO meridian_runs (id, created_at, plan_version, plan_digest, plan,
   name, location, release, default_group, run_dir, workflow_id, state, finisher_id,
-  parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth)
-SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth, step_run)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_run')`,
 		n, now, r.Plan.Version, digest, encoded,
 		r.Plan.Run.Name, r.Plan.Run.Source.Location, r.Plan.Run.Release, r.DefaultGroup, r.RunDir, r.WorkflowID, RunCreated, finisher,
-		link.run, link.job, link.attmpt, link.step, link.try, link.root, link.depth, n)
+		link.run, link.job, link.attmpt, link.step, link.try, link.root, link.depth, r.StepRun, n)
 	if err != nil {
 		return err
 	}
@@ -203,7 +225,8 @@ WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_
 const runColumns = `id, created_at, plan, plan_version, plan_digest, name, location, release,
   default_group, run_dir, workflow_id, record_gen, state, outcome, reason, started_at, ended_at,
   start_state, start_tries, diagnostics, any_job_failed_at, stopped_at, stop_reason,
-  finisher_id, waited_at, parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth`
+  finisher_id, waited_at, parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth,
+  step_run`
 
 // Run returns the run with the ID id.
 func (tx *Tx) Run(id string) (*Run, error) {
@@ -233,7 +256,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		&number, &created, &r.Plan, &r.PlanVersion, &r.PlanDigest, &r.Name, &r.Location, &r.Release,
 		&r.DefaultGroup, &r.RunDir, &r.WorkflowID, &r.RecordGeneration, &state, &outcome, &reason, &started, &ended,
 		&startState, &r.StartTries, &diags, &jobFailed, &stopped, &stopReason,
-		&r.FinisherID, &waited, &parentRun, &job, &attempt, &step, &try, &root, &depth)
+		&r.FinisherID, &waited, &parentRun, &job, &attempt, &step, &try, &root, &depth, &r.StepRun)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -249,6 +272,19 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		r.Parent = &Link{
 			Run: runID(parentRun.Int64), Job: job.String, Attempt: attempt.String,
 			Step: int(step.Int64), Try: int(try.Int64), Root: runID(root.Int64), Depth: depth,
+		}
+	}
+	if r.StepRun {
+		// A step run's plan is its caller's, named by its digest.
+		var digest string
+		err := tx.queryRow("SELECT plan, plan_digest FROM meridian_runs WHERE id = ?", parentRun.Int64).Scan(&r.Plan, &digest)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, fmt.Errorf("%w: step run %s's caller, run %s", ErrNotFound, id, runID(parentRun.Int64))
+		case err != nil:
+			return nil, fmt.Errorf("store: step run %s's caller: %w", id, err)
+		case digest != r.PlanDigest:
+			return nil, fmt.Errorf("%w: step run %s names a plan its caller doesn't have", ErrMalformed, id)
 		}
 	}
 	if startState != nil {

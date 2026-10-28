@@ -184,11 +184,15 @@ func (c *Coordinator) newer(ctx context.Context, id string) time.Duration {
 // an instance waits for its turn, or is stopped with the rest, before it
 // steps as any job does (instanceStep).
 func (c *Coordinator) step(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, done func(context.Context, *store.Tx) error) (time.Duration, error) {
-	if job.Instance >= 0 {
+	switch {
+	case run.StepRun:
+		// Its one job is one try of a step of its caller's, whatever the
+		// caller's job's strategy:.
+	case job.Instance >= 0:
 		if wait, handled, err := c.instanceStep(ctx, run, job, a, done); handled || err != nil {
 			return wait, err
 		}
-	} else {
+	default:
 		p, err := c.plans.get(run)
 		if err != nil {
 			return 0, err

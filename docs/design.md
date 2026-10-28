@@ -2579,12 +2579,31 @@ built yet: such a step fails (`step_ssh_not_supported`), as one whose
   caller's was, with the caller's inputs, needs and matrix values, and
   whose target is where the step's `ssh:` puts the try. A step whose
   `ssh:` is null, or gives no `remoteHost`, in a job on a host, is a step
-  run where its job would run without its `ssh:`: its `runs-on:`, or else
-  the run's default group. So the coordinator makes a step run only for a
-  step of the plan with an `ssh:` of its own, null among them, in a job
-  without `ssh:` or whose `ssh:` names a host, and never for one that
-  calls a workflow. A cleanup whose `ssh:` puts it elsewhere is a step
-  run of its own, as its job's cleanups run.
+  run where its job would run without its `ssh:`, the run's default
+  group. So the coordinator makes a step run only for a step of the plan
+  with an `ssh:` of its own, null among them, in a job without `ssh:` or
+  whose `ssh:` names a host, and never for one that calls a workflow, nor
+  for one of a step run's, nor for one that uses an action the
+  coordinator performs but checkout: the coordinator does its work
+  wherever its `ssh:` names, so it runs in its job, as it does today. A
+  cleanup whose `ssh:` puts it elsewhere is a step run of its own, as its
+  job's cleanups run.
+- **The coordinator evaluates where it runs**, from the plan, with what
+  Ready readies the job with, the run's inputs and variables, the outputs
+  of the jobs it needs and its matrix values, and the try's retry
+  counter, as format 1 resolves a step's host before it connects; the
+  caller's worker's evaluation must agree, or the step run isn't made. So
+  a host never chooses where the coordinator connects with the user's
+  keys, and a host that a variable or a password names is placed
+  privately. Its tries come in order, each once the one before has
+  failed, so the retry counter is the try's. A step whose `ssh:` reads
+  what only the job's worker knows, as its earlier steps' outputs, its
+  own job's outputs through `needs`, a job of `needs` that only
+  evaluating it names, the job's status, or `env` but the retry counter,
+  which it has only with a `retry:`, fails
+  (`step_ssh_reads_worker`); of the known workflows, only the 8 steps
+  that reach a compute node do, which read their own job's steps'
+  outputs, after actions only a platform provides.
 - **It runs where its caller's run's jobs on that host run**, in the
   host's copy of the caller's run directory ([Workflows a step
   calls](#workflows-a-step-calls)), so a checkout there is where they find
@@ -2601,7 +2620,9 @@ built yet: such a step fails (`step_ssh_not_supported`), as one whose
   again, with its own paths, as format 1 gives the step the job's
   environment with its paths made the host's. It doesn't evaluate the
   step's `if:` or `ssh:` again, which the caller's worker did, as format
-  1 does before it connects. Its `OUTPUTS` starts empty, and what the step
+  1 does before it connects. It masks what the caller's worker masked at
+  the try, as a workflow a step calls masks its caller's secrets. Its
+  `OUTPUTS` starts empty, and what the step
   writes there comes back to the caller's worker, which appends it to
   the file the step would have written, the job's for a step without an
   `id`, and reads it as it does a step's of its own, under the job's
@@ -2632,6 +2653,18 @@ Where format 1 does otherwise, none of it in the known workflows:
   calls](#workflows-a-step-calls)).
 - **Its log** is the step run's, which its calling step's shows, as a
   child's, where format 1 writes it in the step's own.
+- **An action the coordinator performs, with an `ssh:` of its own**, as
+  cancel-jobs or update-session, runs in its job, which connects to no
+  host, where format 1 connects to the host first, and fails the try if
+  it can't.
+- **A step whose `ssh:` reads what only its job's worker knows** fails
+  (`step_ssh_reads_worker`), where format 1 runs it there. The 8 known
+  steps that do never get that far: they come after actions only a
+  platform provides.
+- **A step whose `ssh:` is null, or gives no `remoteHost`, in a job on a
+  host** runs in the run's default group, where format 1 runs it where
+  the job would run without its `ssh:`, its `runs-on:` among them, which
+  a job on a host doesn't keep once its `ssh:` names one.
 
 ### Built-in actions
 

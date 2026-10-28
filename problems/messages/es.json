@@ -179,6 +179,7 @@
   "child_request_failed": "El paso llama a “{uses}”, y la solicitud del worker al coordinador para su ejecución falló: {reason}.",
   "child_dir_unusable": "El worker no pudo crear el directorio “{dir}” de la ejecución a la que llama este paso: {reason}.",
   "step_ssh_not_supported": "El ssh: del paso indica otro host donde ejecutarlo, y este worker aún no puede ejecutar un paso en otro host.",
+  "step_ssh_reads_worker": "El ssh: del paso indica su host a partir de {ref}, que solo conoce el worker de su trabajo, así que no puede ejecutarse en otro host que el de su trabajo.",
   "step_off_job_host": "El ssh: del paso es nulo o no da ningún remoteHost, así que el formato 1 lo ejecuta donde se ejecutaría su trabajo sin su ssh:, y este worker, en el host que indica el ssh: del trabajo, aún no puede ejecutarlo ahí.",
   "ssh_host_empty": "El ssh: del paso no da ningún remoteHost, así que el paso se ejecuta donde se ejecuta su trabajo, como lo ejecuta el formato 1.",
   "step_not_started": "No se pudo iniciar el comando del paso: {reason}.",

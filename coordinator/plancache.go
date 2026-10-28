@@ -51,13 +51,18 @@ func (c *planCache) get(run *store.Run) (*plan.Plan, error) {
 	if run.PlanVersion > plan.Version {
 		return nil, fmt.Errorf("%w %d of run %s's plan; this release reads versions up to %d", plan.ErrVersion, run.PlanVersion, run.ID, plan.Version)
 	}
+	// A step run's plan is its caller's, which it shares.
+	key := run.ID
+	if run.StepRun {
+		key = run.Parent.Run
+	}
 	c.mu.Lock()
-	if entry, ok := c.runs.Get(run.ID); ok {
+	if entry, ok := c.runs.Get(key); ok {
 		if entry.digest == run.PlanDigest {
 			c.mu.Unlock()
 			return entry.plan, nil
 		}
-		c.remove(run.ID)
+		c.remove(key)
 	}
 	c.mu.Unlock()
 
@@ -72,8 +77,8 @@ func (c *planCache) get(run *store.Run) (*plan.Plan, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Another call may have decoded it meanwhile.
-	c.remove(run.ID)
-	c.runs.Put(run.ID, planEntry{digest: run.PlanDigest, plan: p, size: size})
+	c.remove(key)
+	c.runs.Put(key, planEntry{digest: run.PlanDigest, plan: p, size: size})
 	c.bytes += size
 	for c.runs.Len() > c.maxCount || c.bytes > c.maxBytes {
 		_, entry, _ := c.runs.RemoveOldest()

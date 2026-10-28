@@ -406,6 +406,7 @@ var (
 	CheckoutUnsafe      = define(Error, "checkout_unsafe", "Checkout's tree member the worker doesn't write", "path", "reason")
 	CheckoutWriteFailed = define(Error, "checkout_write_failed", "Checkout's tree member the worker couldn't write", "path", "reason")
 	StepSSHNotSupported = define(Error, "step_ssh_not_supported", "Step on another host")
+	StepSSHReadsWorker  = define(Error, "step_ssh_reads_worker", "Step's ssh: that reads what only its job's worker knows", "ref")
 	StepOffJobHost      = define(Error, "step_off_job_host", "Step to run off its job's host")
 	SSHHostEmpty        = define(Warning, "ssh_host_empty", "Step's ssh: names no host")
 	StepNotStarted      = define(Error, "step_not_started", "Step's command not started", "reason")

@@ -1082,6 +1082,12 @@
       "Move the step to a job that runs on that host, through the job's ssh: or an execution group."
     ]
   },
+  "step_ssh_reads_worker": {
+    "why": "A step whose ssh: names another host than its job's runs there as a run of its own, which the coordinator places, and the coordinator evaluates the step's ssh: itself, so that a host never chooses where the coordinator connects with your keys. It can read the run's inputs, variables and secrets, the outputs of the jobs the step's job needs, the job's matrix values and the step's retry counter, but not what only the job's worker knows, such as the job's earlier steps' outputs or its environment.",
+    "fix": [
+      "Name the host from the run's inputs, or from an output of a job that the step's job needs."
+    ]
+  },
   "step_off_job_host": {
     "why": "A format 1 job's ssh: runs its steps on the host it names, and a step's ssh: that is null, or gives no remoteHost, runs the step where the job would run without its ssh:. This version of Meridian's worker runs on the job's host, and runs steps only there, so the step fails rather than run on the wrong host.",
     "fix": [

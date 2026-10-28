@@ -27,8 +27,9 @@ import (
 // A plan is written at the lowest version that holds what it uses
 // (MinVersion), so that a release that reads only an earlier one can run
 // it. Version 2 adds what child runs need: Plan.Calls, Run.Parent,
-// Run.TreeVariables, Source.Remote and Record.Inherited; and checkouts'
-// pins: Plan.Checkouts and Step.Checkout.
+// Run.TreeVariables, Source.Remote and Record.Inherited; checkouts' pins:
+// Plan.Checkouts and Step.Checkout; and what step runs need:
+// Record.StepRun.
 const Version = 2
 
 // modulePath is Meridian's module.
@@ -494,6 +495,18 @@ type JobRetry struct {
 	Reasons    []string `json:"reasons"`
 	MaxRetries Value    `json:"maxRetries,omitzero"`
 	Interval   Value    `json:"interval,omitzero"`
+}
+
+// StepElsewhere reports whether the job's step s can run as a step run, a
+// run of its own on another host than the job's (docs/design.md, Steps on
+// another host), as the plan says it without evaluating it: s doesn't call
+// a workflow, nor use an action the coordinator performs, whose ssh:
+// places nothing, but checkout, which writes on the host, and has an ssh:
+// of its own, null among them, in a job with none, or with one, which
+// names a host, as a job's ssh: can't be null. Whether a try of s runs so
+// is what its ssh: gives the try.
+func (j *Job) StepElsewhere(s *Step) bool {
+	return s.Source == nil && !s.SSH.IsZero() && (s.Uses == CheckoutUses || !CoordinatorAction(s.Uses))
 }
 
 // RetriesFor reports whether the job's retry: lists reason: whether an
