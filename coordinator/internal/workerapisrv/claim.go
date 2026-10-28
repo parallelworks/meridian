@@ -30,6 +30,12 @@ type Readier interface {
 	// Steps returns how many steps the attempt's job has, as the plan says
 	// them, for the logs of its steps.
 	Steps(ctx context.Context, run *store.Run, a *store.Attempt) (int, error)
+	// Needs returns the oldest version of the worker API that has all
+	// that the attempt's job uses, which the server refuses a worker of an
+	// older one for (workerapi.WorkerAPITooOld): workerapi.Version3 for a
+	// job with a step whose uses: names a workflow, or of a child run, and
+	// 1 otherwise.
+	Needs(ctx context.Context, run *store.Run, a *store.Attempt) (int, error)
 }
 
 // Ready is what a claim holds of an attempt's job (workerapi.Claim).
@@ -44,6 +50,9 @@ type Ready struct {
 	// Container the container they run in, or nil for the host.
 	Env       map[string]workerapi.EnvVar
 	Container *workerapi.Container
+	// Tree is what an attempt of a child run has of its tree, or nil for a
+	// run no step called (workerapi.Claim.Tree).
+	Tree *workerapi.Tree
 }
 
 // serveClaim claims the attempt the bootstrap token is for, and answers
@@ -124,12 +133,18 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 				return
 			}
 		}
+		needs, err := s.readier.Needs(ctx, run, a)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		needs = max(needs, s.needs)
 		var refusal *problem.Problem
 		switch placed := a.Placement.WorkerDigest; {
 		case req.PlanVersion < run.PlanVersion:
 			refusal = problems.PlanTooNew.Problem(nil)
-		case version < s.needs:
-			refusal = problems.WorkerAPITooOld.Problem(problems.Params{workerapi.ParamVersion: req.Speaks(), workerapi.ParamNeeded: s.needs})
+		case version < needs:
+			refusal = problems.WorkerAPITooOld.Problem(problems.Params{workerapi.ParamVersion: req.Speaks(), workerapi.ParamNeeded: needs})
 		case placed != req.Worker.Digest:
 			refusal = problems.WorkerDigestMismatch.Problem(problems.Params{workerapi.ParamPlaced: placed, workerapi.ParamClaimed: req.Worker.Digest})
 		}
@@ -327,11 +342,17 @@ func (s *Server) claim(ctx context.Context, run *store.Run, a *store.Attempt) (*
 	}); err != nil {
 		return nil, err
 	}
+	// What a child run's attempt has of its tree is given only in an
+	// attempt of version 3 or later, which such an attempt needs.
+	var tree *workerapi.Tree
+	if a.APIVersion >= workerapi.Version3 {
+		tree = ready.Tree
+	}
 	return &workerapi.Claim{
 		RunID: run.ID, AttemptID: a.ID, APIVersion: a.APIVersion, PlanVersion: run.PlanVersion, Job: job,
 		Attempt: a.Number, Group: a.Placement.Group, Member: a.Placement.Member,
 		LeaseSeconds: a.LeaseSeconds, HeartbeatSeconds: a.HeartbeatSeconds, SelfFencing: a.SelfFencing,
 		Run: ready.Run, Needs: ready.Needs, RunDir: run.RunDir, Env: ready.Env, Retry: retry, Container: ready.Container,
-		Control: control,
+		Control: control, Tree: tree,
 	}, nil
 }

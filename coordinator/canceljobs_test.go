@@ -328,7 +328,7 @@ func newActionRig(t *testing.T) *actionRig {
 	t.Helper()
 	c := open(t, Options{})
 	srv, err := workerapisrv.New(workerapisrv.Options{
-		Store: c.store, Logs: &runlogtest.Logs{}, Sealer: c.sealer, Readier: claimReadier{c}, Actions: actions{c},
+		Store: c.store, Logs: &runlogtest.Logs{}, Sealer: c.sealer, Readier: claimReadier{c}, Actions: actions{c}, Children: childAPI{c},
 		Wake: c.wakeWorkerJob,
 	})
 	if err != nil {

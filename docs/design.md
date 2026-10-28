@@ -443,6 +443,22 @@ the SHA-256 hash of its content: 218 files.
   update-session steps name one of their run's own sessions, as
   `${{ sessions.<name> }}`. It is decided, and built with update-session
   ([Built-in actions](#built-in-actions)).
+- **`vars.*` and `org.*` read every variable of their context**, as
+  `inputs.*` reads every input's value: a list of the variables' values, in
+  the order of their names, with the rest of the path read from each, as in
+  `org.*.region`. ACTIVATE read a variable named `*`, which no variable's
+  name can be, and so gave `""` whatever the variables were. A secret
+  variable read so is one of the run's secrets, as one read by its name
+  is, and what an expression makes of it is masked
+  ([Variables and secrets](#variables-and-secrets)). ACTIVATE takes the
+  same fix by reading each variable for a `*`. It masks the text of every
+  secret variable the run has, however it was read, so one read so is
+  masked as one read by its name, and its form leaves `vars.*` to its
+  backend, which has the secret variables' values, when the user has one.
+  None of the 10,080 expressions of the 218 known workflows reads `vars.*`
+  or `org.*`, nor has a `*` in a reference to any context: 19, in 6
+  workflows, read an organization variable by its name, and none reads
+  `vars`.
 
 ## Phases
 
@@ -2148,10 +2164,11 @@ of a calling step's `with:` and environment that is private
 (`ReadyStep.WithPrivate` and the rest); and the coordinator's creation of
 a step's try's child, linked to it (`CreateChild`), in its directory, in
 its caller's job's group, but not yet on its member, with its root's
-variables, and the root's finisher, which waits for every run of its tree.
-The rest isn't built yet: nothing asks for a child, as the worker API has
-no path for it, and the worker fails a step that uses a workflow
-(`uses_not_supported`).
+variables, and the root's finisher, which waits for every run of its tree;
+and the worker API's paths for a child, served, and what a child's
+attempt's claim has of its tree, which its worker reads. The rest isn't
+built yet: the worker doesn't ask for a child, and fails a step that uses
+a workflow (`uses_not_supported`).
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2221,22 +2238,24 @@ no path for it, and the worker fails a step that uses a workflow
   Create fails, as for an input that a `with:` made of expressions leaves
   out, fails its step (`child_not_created`), with the child's problems,
   masked as the step's are.
-- **Its environment** is its calling step's, as in format 1: the
-  caller's workflow, job and step `env:` and the variables format 1
-  defines, under the child's own `env:`, whose expressions read it, and
-  its own other values, in the order they read each other, and its jobs'
-  and steps' over that, the variables the child's worker defines over all;
-  so a variable the child's worker doesn't define, as `PW_MATRIX_INDEX`
-  for a job that isn't a matrix's, is its caller's. Step names the
-  variables of the step's environment made from a variable or a password,
-  and from a secret (`ReadyStep.EnvPrivate`, `ReadyStep.EnvSecrets`),
-  which the child's plan doesn't hold: its secret record does, and its
-  values name them private, or secrets, as for its inputs. A value of the
-  child's own `env:` that reads its own name, which reads the caller's in
-  format 1, isn't built yet: the child fails as it starts, as one whose
-  values read each other does (`values_read_each_other`); no known
-  workflow has one. The caller's `matrix` values and `app` aren't passed
-  to it.
+- **Its environment** is its calling step's, as in format 1: the caller's
+  workflow, job and step `env:` and the variables format 1 defines, under
+  the child's own `env:`, whose expressions read it, and its own other
+  values, in the order they read each other, and its jobs' and steps' over
+  that, the variables the child's worker defines over all; so a variable
+  the child's worker doesn't define, as `PW_MATRIX_INDEX` for a job that
+  isn't a matrix's, is its caller's, and so are the step's own, as
+  `OUTPUTS`, which the child's worker sets over for each step of its own,
+  and the retry counters, which a step of the child's without a `retry:`
+  reads as its caller's, as in format 1. Step names the variables of the
+  step's environment made from a variable or a password, and from a secret
+  (`ReadyStep.EnvPrivate`, `ReadyStep.EnvSecrets`), which the child's plan
+  doesn't hold: its secret record does, and its values name them private,
+  or secrets, as for its inputs. A value of the child's own `env:` that
+  reads its own name, which reads the caller's in format 1, isn't built
+  yet: the child fails as it starts, as one whose values read each other
+  does (`values_read_each_other`); no known workflow has one. The caller's
+  `matrix` values and `app` aren't passed to it.
 - **Its identity** is its root's, as format 1 gives a child:
   `PW_JOB_ID`, `PW_JOB_NUMBER`, `PW_RUN_SLUG` and `PW_PARENT_NAME` are the
   root run's, and `PW_PARENT_JOB_DIR` is the root's run directory, which
@@ -3399,14 +3418,22 @@ and a platform that embeds Meridian serve the same API.
   the limit: up to 1 MiB less for each replica that still holds some of
   it when the attempt's uploads stop, and for each time a replica lets go
   what it holds, after ten minutes without an upload.
-- **Child runs:** ask for the child run of a workflow a step's try calls,
-  with the step's `with:` and environment as Step evaluated them, and
-  which parts of them are private or hold a secret, which a repeat answers
-  with the same child; wait for its end, held as a control is, with the
-  outcome its step takes; and stop it, with why
-  ([Workflows a step calls](#workflows-a-step-calls)). These raise the
-  API's own version. They aren't built yet: the worker fails a step that
-  uses a workflow (`uses_not_supported`).
+- **Child runs:** ask for the child run of a workflow a step's try calls
+  (`/v1/child`), with the step's `with:` and environment as Step evaluated
+  them, which parts of them are private or hold a secret, and the strings
+  the worker masks for the step, which a repeat answers with the same
+  child, and a child that wasn't made with why, as `child_not_created`
+  with its own problems; wait for its end (`/v1/child/end`), held as a
+  control is, with how the child run ended; and stop it, with why
+  (`/v1/child/stop`) ([Workflows a step calls](#workflows-a-step-calls)).
+  The coordinator reads which workflow the step calls, and whether it
+  outlives its job's cancellation, from the run's plan, never from the
+  request. A child's attempt's claim says what it has of its tree: its
+  root's ID and directory, the call's name, and the strings its caller's
+  worker masked, which each of its job's phases counts as secrets' own
+  texts. Version 3 adds them. The coordinator serves them, and the worker
+  has the requests, but doesn't make them yet: it fails a step that uses a
+  workflow (`uses_not_supported`).
 - **Actions:** ask the coordinator to do a step's cancel-jobs or
   update-session, from version 3, or for its checkout's tree
   ([Built-in actions](#built-in-actions)). The request has the step's
@@ -3502,7 +3529,9 @@ coordinator say to each other.
   version is older before it sends anything of the run
   (`worker_api_too_old`), rather than run the job without that part. The
   attempt fails before its first step, and is placed again, as for
-  `plan_too_new`. Every job so far needs version 1.
+  `plan_too_new`. A job with a step whose `uses:` names a workflow, and
+  every job of a child run, whose claim holds what masks what it inherits,
+  needs version 3; any other, version 1.
 - **What a body carries of a run is the plan's.** The run's values, the
   job Ready evaluated and the results of the jobs it needs are encoded at
   the run's plan version, and a change to one of their types raises the

@@ -51,6 +51,9 @@ type Target interface {
 	ControlHold() time.Duration
 	// Stored returns what the target stored of the attempt.
 	Stored(t *testing.T, attemptID string) Stored
+	// EndChild ends the child run of the step's try of the attempt, which
+	// the suite asked for, with outcome, as the run itself ends.
+	EndChild(t *testing.T, attemptID string, step, try int, outcome plan.Outcome)
 }
 
 // An Attempt is an attempt for a Target to make: of Job, as Ready gave it,
@@ -122,6 +125,7 @@ func Conformance(t *testing.T, target Target) {
 	t.Run("superseded", func(t *testing.T) { checkSuperseded(t, target) })
 	t.Run("paths and methods", func(t *testing.T) { checkPaths(t, target) })
 	t.Run("actions", func(t *testing.T) { checkActions(t, target) })
+	t.Run("child runs", func(t *testing.T) { checkChildren(t, target) })
 }
 
 // A worker is the suite's worker, for one attempt.
@@ -934,6 +938,9 @@ func checkPaths(t *testing.T, target Target) {
 		{http.MethodPut, workerapi.PathLogs},
 		{http.MethodDelete, workerapi.PathComplete},
 		{http.MethodGet, workerapi.PathAction},
+		{http.MethodGet, workerapi.PathChild},
+		{http.MethodPost, workerapi.PathChildEnd},
+		{http.MethodGet, workerapi.PathChildStop},
 	} {
 		wantStatus(t, fmt.Sprintf("%s %s", r.method, r.path), w.send(r.method, r.path, nil, nil, w.credential), http.StatusMethodNotAllowed)
 	}
@@ -1069,6 +1076,88 @@ func checkActions(t *testing.T, target Target) {
 	wantProblem(t, "an action once superseded", w.post(workerapi.PathAction, next), workerapi.Fenced)
 }
 
+// childOf asks for the child run of the step's try, and returns what the
+// coordinator answered with.
+func (w *worker) childOf(step, try int) workerapi.Child {
+	w.t.Helper()
+	a := w.post(workerapi.PathChild, workerapi.ChildRequest{Step: step, Try: try, With: plan.DataOf(map[string]any{"$yaml": "w.yaml"})})
+	if a.status != http.StatusOK {
+		w.t.Fatalf("the ask for step %d's try %d's child was answered %d: %s", step, try, a.status, a.body)
+	}
+	var c workerapi.Child
+	if err := workerapi.Unmarshal(a.body, &c); err != nil {
+		w.t.Fatalf("the ask for a child was answered with a child that isn't one: %v: %s", err, a.body)
+	}
+	return c
+}
+
+// childEnd polls for the end of the child of the step's try, and returns
+// how it was answered, and after how long.
+func (w *worker) childEnd(step, try int) (answer, workerapi.Child, time.Duration) {
+	w.t.Helper()
+	start := time.Now()
+	q := url.Values{workerapi.QueryStep: {strconv.Itoa(step)}, workerapi.QueryTry: {strconv.Itoa(try)}}
+	a := w.send(http.MethodGet, workerapi.PathChildEnd, q, nil, w.credential)
+	var c workerapi.Child
+	if a.status == http.StatusOK {
+		if err := workerapi.Unmarshal(a.body, &c); err != nil {
+			w.t.Fatalf("a poll for a child's end was answered with a child that isn't one: %v: %s", err, a.body)
+		}
+	}
+	return a, c, time.Since(start)
+}
+
+// A step's try's child run is made once: an ask again is answered with
+// the same child, and another try's ask with another. A poll for its end
+// is held until it ends, and answered with how, or after the hold, with
+// it running; one of a try without a child is 404. An ask of a step the
+// job doesn't have is 400. A stop of it is stored, and answered 204; one
+// for no reason a step is stopped for is 400. An
+// attempt of version 2 doesn't have the paths, 404, and one that another
+// superseded is refused, Fenced, nothing made.
+func checkChildren(t *testing.T, target Target) {
+	w := newWorker(t, target, newAttempt()).claimed()
+	first := w.childOf(0, 0)
+	if first.Run == "" || first.Ended {
+		t.Fatalf("a step's try's child is %+v", first)
+	}
+	if again := w.childOf(0, 0); again.Run != first.Run {
+		t.Errorf("the ask again for the try's child was answered with %+v, not %s", again, first.Run)
+	}
+	if other := w.childOf(0, 1); other.Run == "" || other.Run == first.Run {
+		t.Errorf("the next try's child is %+v, where the first try's is %s", other, first.Run)
+	}
+	a, c, took := w.childEnd(0, 0)
+	if a.status != http.StatusOK || c.Run != first.Run || c.Ended || took < target.ControlHold()/2 {
+		t.Errorf("a poll for a running child's end was answered %d, %+v, after %v", a.status, c, took)
+	}
+	target.EndChild(t, w.attemptID, 0, 0, plan.OutcomeFailure)
+	if a, c, _ := w.childEnd(0, 0); a.status != http.StatusOK || c.Run != first.Run || !c.Ended || c.Outcome != plan.OutcomeFailure {
+		t.Errorf("a poll for an ended child's end was answered %d, %+v", a.status, c)
+	}
+	if a, _, _ := w.childEnd(0, 5); a.status != http.StatusNotFound {
+		t.Errorf("a poll for the end of a try without a child was answered %d: %s", a.status, a.body)
+	}
+	stop := workerapi.ChildStop{Step: 0, Try: 1, Reason: plan.ReasonCancelled}
+	wantStatus(t, "a child's stop", w.post(workerapi.PathChildStop, stop), http.StatusNoContent)
+	if s := w.stored(); len(s.ChildStops) != 1 || s.ChildStops[0] != stop {
+		t.Errorf("the child's stops are stored as %+v", s.ChildStops)
+	}
+	wantStatus(t, "a child's stop for another reason", w.post(workerapi.PathChildStop, workerapi.ChildStop{Try: 1, Reason: plan.ReasonFailFast}), http.StatusBadRequest)
+	wantStatus(t, "the stop of a try without a child", w.post(workerapi.PathChildStop, workerapi.ChildStop{Try: 5, Reason: plan.ReasonCancelled}), http.StatusNotFound)
+	wantStatus(t, "an ask with a member no child's request has", w.send(http.MethodPost, workerapi.PathChild, nil, []byte(`{"step":0,"run":"x"}`), w.credential), http.StatusBadRequest)
+	wantStatus(t, "an ask for the child of a step the job doesn't have", w.post(workerapi.PathChild, workerapi.ChildRequest{Step: len(w.attempt.Job.Steps)}), http.StatusBadRequest)
+
+	older := newWorker(t, target, newAttempt())
+	older.apiVersion = workerapi.Version2
+	older.claimed()
+	wantStatus(t, "an ask for a child in an attempt of version 2", older.post(workerapi.PathChild, workerapi.ChildRequest{}), http.StatusNotFound)
+
+	superseded := newWorker(t, target, newAttempt()).claimed()
+	target.Supersede(t, superseded.attemptID)
+	wantProblem(t, "an ask for a child once superseded", superseded.post(workerapi.PathChild, workerapi.ChildRequest{}), workerapi.Fenced)
+}
+
 // A FakeTarget is a Target whose attempts are each a Fake, Lenient, served
 // on a socket of its own: Conformance checks the Fake through it. Its zero
 // value is ready to use.
@@ -1130,4 +1219,9 @@ func (*FakeTarget) ControlHold() time.Duration { return ControlHold }
 // Stored returns what the attempt's Fake stored.
 func (ft *FakeTarget) Stored(t *testing.T, attemptID string) Stored {
 	return ft.fake(t, attemptID).Stored()
+}
+
+// EndChild ends the child of the step's try of the attempt's Fake.
+func (ft *FakeTarget) EndChild(t *testing.T, attemptID string, step, try int, outcome plan.Outcome) {
+	ft.fake(t, attemptID).EndChild(step, try, outcome)
 }
