@@ -21,11 +21,11 @@ import (
 // command whose ssh: is null, which runs in its job, an action the
 // coordinator performs, whose ssh: places nothing, a command whose host
 // only the job's worker knows, commands whose host their retry counter
-// names, and a command on farm that outlives its job's cancel; whose job
-// hosted runs on farm, with a step whose ssh: is null; whose job
-// failover, on farm, runs again once its worker is lost, and has a step
-// whose host its retry counter names; and whose matrix job fan has a
-// step on farm.
+// names, a command on farm that outlives its job's cancel, and one on
+// farm with a retry: and a cleanup:; whose job hosted runs on farm, with
+// a step whose ssh: is null; whose job failover, on farm, runs again once
+// its worker is lost, and has a step whose host its retry counter names;
+// and whose matrix job fan has a step on farm.
 const stepRunRoot = `jobs:
   build:
     steps:
@@ -56,6 +56,10 @@ const stepRunRoot = `jobs:
       - if: ${{ always() }}
         run: echo always
         ssh: {remoteHost: farm}
+      - run: echo again
+        retry: {max-retries: 1}
+        ssh: {remoteHost: farm}
+        cleanup: echo tidy again
   blank:
     ssh: {remoteHost: ""}
     steps:

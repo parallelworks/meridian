@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
@@ -58,10 +59,9 @@ func TestStepRunEnd(t *testing.T) {
 // TestStepRunStops checks that a stop that reaches a step run reaches its
 // worker, in the transaction that stores it, whatever its step's if:
 // says: its step's own, its timeout among them; a person's cancel of it;
-// a stop of its caller's
-// job, which the step runs of a step's cleanup and of a step that
-// outlives its job's cancel outlive, and after which only those are made;
-// and a stop of its caller's run, which they outlive too.
+// a stop of its caller's job, which the step runs of a step's cleanup and
+// of a step that outlives its job's cancel outlive, and after which only
+// those are made; and a stop of its caller's run, which they outlive too.
 func TestStepRunStops(t *testing.T) {
 	parallel(t)
 	r := newStepRunRig(t)
@@ -108,13 +108,8 @@ func TestStepRunStops(t *testing.T) {
 	if again, err := r.ask(t, r.build, stepRunRequest{Step: 2, Cleanup: true, SSH: farm}); err != nil || again != cleanup {
 		t.Errorf("asked again, the cleanup's step run is %q, %v", again, err)
 	}
-	for name, req := range map[string]stepRunRequest{
-		"a cleanup of a try":        {Step: 2, Try: 1, Cleanup: true, SSH: farm},
-		"a step without a cleanup:": {Step: 1, Cleanup: true, SSH: farm},
-	} {
-		if _, err := r.ask(t, r.build, req); !errors.Is(err, errNotStepRun) {
-			t.Errorf("%s: %v", name, err)
-		}
+	if _, err := r.ask(t, r.build, stepRunRequest{Step: 1, Cleanup: true, SSH: farm}); !errors.Is(err, errNotStepRun) {
+		t.Errorf("a step without a cleanup: has a cleanup's step run: %v", err)
 	}
 
 	// A stop of its caller's run.
@@ -168,12 +163,12 @@ func TestStepRunStoppedUnplaced(t *testing.T) {
 	asked := make(chan string, 1)
 	var once sync.Once
 	r.d.set(func(d *testDriver) {
-		d.probe = func(*backend.Member) (backend.Fit, error) {
-			once.Do(func() {
-				if err := (childAPI{r.c}).StopChild(context.WithoutCancel(t.Context()), <-asked, plan.ReasonCancelled); err != nil {
-					t.Error(err)
-				}
-			})
+		d.probe = func(m *backend.Member) (backend.Fit, error) {
+			// The step run is placed on farm, through ssh; the root's jobs
+			// still being placed elsewhere are let be.
+			if m.Name == "ssh" {
+				once.Do(func() { stopRunning(t, r.c, <-asked) })
+			}
 			return backend.Fit{Availability: backend.StartsNow}, nil
 		}
 	})
@@ -187,6 +182,57 @@ func TestStepRunStoppedUnplaced(t *testing.T) {
 	}
 	if j := storedJob(t, r.c, id, "build"); j.Outcome != plan.OutcomeCancelled || j.Attempts != 0 {
 		t.Errorf("the step run's job is %+v", j)
+	}
+}
+
+// TestStepRunCleanupOfTry checks that a step's cleanup has one step run,
+// of try 0, however many tries the step had: one of a later try is
+// refused, though the step has that try, and the try before it has ended.
+func TestStepRunCleanupOfTry(t *testing.T) {
+	parallel(t)
+	r := newStepRunRig(t)
+	first, err := r.ask(t, r.build, stepRunRequest{Step: 11, SSH: farm})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.placed(t, first, "build")
+	r.endStepRun(t, first, plan.OutcomeFailure)
+	if _, err := r.ask(t, r.build, stepRunRequest{Step: 11, Try: 1, Cleanup: true, SSH: farm}); !errors.Is(err, errNotStepRun) {
+		t.Errorf("a cleanup of the step's second try: %v", err)
+	}
+	if _, err := r.ask(t, r.build, stepRunRequest{Step: 11, Try: 1, SSH: farm}); err != nil {
+		t.Errorf("the step's second try: %v", err)
+	}
+}
+
+// stopRunning stops the step run id, as its step's stop does, once it is
+// running, as it is once its supervisor looks: one stopped before is
+// ended as a run that never started is. It runs where the driver probes,
+// which isn't the test's goroutine, so it fails the test, but doesn't
+// end it.
+func stopRunning(t *testing.T, c *Coordinator, id string) {
+	ctx := context.WithoutCancel(t.Context())
+	for {
+		var run *store.Run
+		if err := c.store.View(ctx, func(tx *store.Tx) error {
+			var err error
+			run, err = tx.Run(id)
+			return err
+		}); err != nil {
+			t.Error(err)
+			return
+		}
+		if run.State != store.RunCreated {
+			break
+		}
+		select {
+		case <-t.Context().Done():
+			return
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if err := (childAPI{c}).StopChild(ctx, id, plan.ReasonCancelled); err != nil {
+		t.Error(err)
 	}
 }
 
