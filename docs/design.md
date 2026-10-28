@@ -2569,48 +2569,53 @@ built yet: such a step fails (`step_ssh_not_supported`), as one whose
 (`step_off_job_host`).
 
 - **A step run.** A step's try whose `ssh:` names a host other than its
-  job's, by the same `remoteHost`, `remoteUser`, `jumpNodeHost` and
-  `jumpNodeUser` as text ([Running steps](#running-steps)), is a child of
-  the try, as a workflow a step calls is, of a kind of its own: it has no
-  plan of its own, but names its caller's plan, by its digest, and the
-  job and the step in it, from which whatever reads a run's steps, as the
-  worker API's actions and the checkout's pin, reads the step; it has
-  one job, the caller's, which Ready readies as the caller's was, with
-  the caller's inputs, needs and matrix values, and whose target is the
-  host the step's `ssh:` gave the try, which must be a step's of the plan
-  whose `ssh:` isn't null. A cleanup whose `ssh:` names another host is a
-  step run of its own, as its job's cleanups run. A step whose `ssh:` is
-  null, or gives no `remoteHost`, in a job on a host, is a step run where
-  its job would run without its `ssh:`: its `runs-on:`, or else the
-  run's default group.
+  job's, compared as text by its `remoteHost`, `remoteUser`,
+  `jumpNodeHost` and `jumpNodeUser` ([Running steps](#running-steps)), is
+  a child of the try, as a workflow a step calls is, of a kind of its
+  own: it has no plan of its own, but names its caller's plan, by its
+  digest, and the job and the step in it, from which whatever reads a
+  run's steps, as the worker API's actions and the checkout's pin, reads
+  the step; it has one job, the caller's, which Ready readies as the
+  caller's was, with the caller's inputs, needs and matrix values, and
+  whose target is where the step's `ssh:` puts the try. A step whose
+  `ssh:` is null, or gives no `remoteHost`, in a job on a host, is a step
+  run where its job would run without its `ssh:`: its `runs-on:`, or else
+  the run's default group. So the coordinator makes a step run only for a
+  step of the plan with an `ssh:` of its own, null among them, in a job
+  without `ssh:` or whose `ssh:` names a host, and never for one that
+  calls a workflow. A cleanup whose `ssh:` puts it elsewhere is a step
+  run of its own, as its job's cleanups run.
 - **It runs where its caller's run's jobs on that host run**, in the
   host's copy of the caller's run directory ([Workflows a step
   calls](#workflows-a-step-calls)), so a checkout there is where they find
-  it. The coordinator places it as any job, through the backend that
-  places the job's own, so no key leaves the machine the run started on,
-  and no host needs one for another; a jump host is a hop of the
-  coordinator's connection, as a job's is.
+  it. The coordinator places it through the `ssh` backend, as it places
+  a job whose `ssh:` names that host, so no key leaves the machine the
+  run started on, and no host needs one for another; a jump host is a
+  hop of the coordinator's connection, as a job's is.
 - **Its worker evaluates the step** from the plan, as format 1 does once
   it has connected: with its own `PW_*`, over the state of the caller's
   job at the try, which the caller's worker gives, the earlier steps'
   outcomes and outputs, the job's status and the retry counters, and
   which the coordinator keeps sealed in the step run's secret record, as
-  a calling step's private values are. It doesn't evaluate the step's
-  `if:` or `ssh:` again, which the caller's worker did, as format 1 does
-  before it connects. Its `OUTPUTS` starts empty, and what the step
+  a calling step's private values are. It evaluates the job's `env:`
+  again, with its own paths, as format 1 gives the step the job's
+  environment with its paths made the host's. It doesn't evaluate the
+  step's `if:` or `ssh:` again, which the caller's worker did, as format
+  1 does before it connects. Its `OUTPUTS` starts empty, and what the step
   writes there comes back to the caller's worker, which appends it to
   the file the step would have written, the job's for a step without an
   `id`, and reads it as it does a step's of its own, under the job's
   cap. A try that fails gives none, as in format 1.
-- **The caller waits for it**, parked, as for a workflow a step calls,
-  its member's capacity lent to the step run, on the `ssh` backend as on
-  `local`, so that two jobs each with a step on the other's host don't
-  wait on each other; stops it when the step's try is stopped; and ends
-  the try as it ended, its `retry:` and `ignore-errors:` applying as to
-  any try. The coordinator stops it in the transaction that ends the
-  caller's attempt, however that ends, but for a cleanup's, which
-  outlives its job's cancel. Its paths are version 3's of the worker API;
-  an attempt of an older version fails such a step, as now.
+- **The caller waits for it**, parked, as for a workflow a step calls;
+  stops it when the step's try is stopped; and ends the try as it ended,
+  its `retry:` and `ignore-errors:` applying as to any try. Two jobs,
+  each with a step on the other's host, don't wait on each other, since
+  neither backend queues a job. The coordinator stops it in the
+  transaction that ends the caller's attempt, however that ends, and in
+  the one that stops its run, or its job, as for a workflow a step
+  calls, but for a cleanup's, which its job's cancel doesn't stop. Its
+  paths are version 3's of the worker API; an attempt of an older
+  version fails such a step, as now.
 
 Where format 1 does otherwise, none of it in the known workflows:
 
@@ -3891,8 +3896,11 @@ coordinator say to each other.
   attempt fails before its first step, and is placed again, as for
   `plan_too_new`. A job with a step whose `uses:` names a workflow, or an
   action the coordinator performs (checkout, cancel-jobs or
-  update-session), and every job of a child run, whose claim holds what
-  masks what it inherits, needs version 3; any other, version 1. A later
+  update-session), or whose own `ssh:` would make it a step run, as the
+  plan says without evaluating it ([Steps on another
+  host](#steps-on-another-host)), and every job of a child run, whose
+  claim holds what masks what it inherits, needs version 3; any other,
+  version 1. A later
   worker, in an attempt an earlier coordinator serves at an earlier
   version, fails such a step (`uses_not_supported`), rather than run it
   otherwise. The same problem fails, as it runs, a step that has no pin:
@@ -4123,8 +4131,9 @@ own runs.
   worker fails one whose `ssh:` names a host of its own
   (`step_ssh_not_supported`), but for one whose `ssh:` names the same host
   and login as its job's, as a step that repeats its job's `remoteHost`
-  does, which runs where its job runs: the same `remoteHost`, `remoteUser`, `jumpNodeHost` and
-  `jumpNodeUser`, by which format 1 keys the connections it reuses, with
+  does, which runs where its job runs: the same `remoteHost`,
+  `remoteUser`, `jumpNodeHost` and `jumpNodeUser`, by which format 1 keys
+  the connections it reuses, with
   null and none as `""`, whatever else it says, such as its
   `disconnect-timeout`. `host:22` isn't `host`, as format 1 connects to
   `host:port` as it is and reads `host` through the user's `ssh_config`.
@@ -4232,8 +4241,8 @@ rather than run them on the host, and a step that `uses:` a built-in
 action the worker doesn't run, or runs on another host with `ssh:`, fails,
 as does one whose `ssh:` is null, or gives no `remoteHost`, on a worker
 that a job's `ssh:` placed on a host, until steps on another host are
-built ([Steps on another host](#steps-on-another-host)); one that uses an action only a
-platform provides fails saying so (`action_needs_platform`, [Built-in
+built ([Steps on another host](#steps-on-another-host)); one that uses an
+action only a platform provides fails saying so (`action_needs_platform`, [Built-in
 actions](#built-in-actions)). A step that `uses:` a workflow runs it as a
 run of its own ([Workflows a step calls](#workflows-a-step-calls)), whose
 directory its `clean-on-retry:` cleans on the machine the run started
