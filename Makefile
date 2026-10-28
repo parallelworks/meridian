@@ -16,7 +16,8 @@ FIPS := GOFIPS140=certified
 export CGO_ENABLED := 0
 # The tests are built with the paramcheck tag, which no binary is: a
 # problem built without a param its kind declares, which foundation would
-# send as invalid, then panics where it is built (problems/paramcheck.go).
+# send as invalid, then ends the test binary where it is built
+# (problems/paramcheck.go).
 TESTTAGS := -tags paramcheck
 
 .PHONY: help
