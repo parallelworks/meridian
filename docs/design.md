@@ -4359,12 +4359,31 @@ local backend there through `meridian host`
   the job is readied, which its status and its end show, however it ends.
   The common case is a `remoteHost` that reads a `compute-clusters`
   input's `ip`, which is `""` for the workspace, this machine.
-- **A step whose `ssh:` names another host** fails
-  (`step_ssh_not_supported`) until the worker can run a step on another
-  host itself.
 
 Where format 1, as ACTIVATE runs it, does otherwise:
 
+- **What a host needs.** Meridian runs a worker of its own on the host,
+  so the host must be Linux, macOS or FreeBSD (`ssh_host_unsupported`),
+  of an architecture whose binary of the same release the coordinator's
+  machine holds (`ssh_worker_binary_missing`), and its sshd must forward
+  Unix sockets to the coordinator (`ssh_forwarding_refused`). ACTIVATE
+  runs each step's script through the host's shell, over its connection,
+  and needs none of them.
+- **What a host keeps.** Meridian's binary, in the host's cache by its
+  digest, and Meridian's state, under `~/.local/state/meridian`: its
+  workers' placements, and the runs' directories. ACTIVATE keeps the
+  job's directory alone.
+- **A step on another host than its job's**, as a step's `ssh:` that
+  names one, fails (`step_ssh_not_supported`) until the worker can run a
+  step on another host itself. ACTIVATE runs it there, but for a step
+  that calls a workflow, whose child it runs where its caller runs.
+- **A step off its job's host.** In a job on a host, a step whose `ssh:`
+  is null, or gives no `remoteHost`, would run where its job runs without
+  its `ssh:`, the machine the run started on, which a worker on the host
+  can't reach, so it fails (`step_off_job_host`). ACTIVATE runs it on
+  that machine. None of the known workflows has one.
+- **An unreachable host** is tried again after about 1, 2 and 4 seconds,
+  where ACTIVATE waits 2, 4 and 8.
 - **Host keys.** Meridian checks every host's key against known_hosts,
   `localhost`'s too, and an unknown key fails: it never trusts one on
   first use. So `remoteHost: localhost` needs this machine's key in
@@ -4376,7 +4395,8 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   passphrase.
 - **Algorithms.** Only those FIPS 140-3 approves
   ([FIPS 140-3](#fips-140-3)), so a host that offers none of them can't
-  be used.
+  be used (`ssh_algorithms_unapproved`), as an sshd that offers only
+  chacha20-poly1305 and curve25519 can't.
 - **The user's config** is read whole, through `ssh -G`, so `Match`,
   `Include` and `ProxyJump` apply, as with `ssh`. ACTIVATE reads part of
   it, and for a jump host only its name and port.
@@ -4391,6 +4411,9 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   or `300ms`, fails the step in ACTIVATE. Meridian ignores the key,
   whatever its value, and runs the step, with a warning
   (`ssh_disconnect_timeout_invalid`).
+- **A job whose `ssh:` gives no `remoteHost`** has a warning, kept with
+  the job, which its status and its end show (`job_ssh_host_empty`).
+  ACTIVATE notes it in the log of each step that runs so.
 - **Cancelling during an outage** reaches the worker once the connection
   is back. ACTIVATE tries for 10 seconds, and leaves the process running.
 - **One worker runs a job's steps**, so they share its session, and a
