@@ -486,11 +486,13 @@ type JobRetry struct {
 // StepElsewhere reports whether the job's step s can run as a step run, a
 // run of its own on another host than the job's (docs/design.md, Steps on
 // another host), as the plan says it without evaluating it: s doesn't call
-// a workflow, and has an ssh: of its own, null among them, in a job with
-// none, or with one, which names a host, as a job's ssh: can't be null.
-// Whether a try of s runs so is what its ssh: gives the try.
+// a workflow, nor use an action the coordinator performs, whose ssh:
+// places nothing, but checkout, which writes on the host, and has an ssh:
+// of its own, null among them, in a job with none, or with one, which
+// names a host, as a job's ssh: can't be null. Whether a try of s runs so
+// is what its ssh: gives the try.
 func (j *Job) StepElsewhere(s *Step) bool {
-	return s.Source == nil && !s.SSH.IsZero()
+	return s.Source == nil && !s.SSH.IsZero() && (s.Uses == CheckoutUses || !CoordinatorAction(s.Uses))
 }
 
 // RetriesFor reports whether the job's retry: lists reason: whether an

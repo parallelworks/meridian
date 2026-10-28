@@ -90,6 +90,9 @@ type StepRun struct {
 	// State is the state of the caller's job at the try, a mapping, as
 	// its worker gave it, which the coordinator keeps but doesn't read.
 	State Data `json:"state,omitzero"`
+	// Masked are the strings the caller's worker masks at the try, as a
+	// Masker takes them, which the step run's jobs mask too.
+	Masked []string `json:"masked,omitempty"`
 }
 
 // Inherited is what a child run's secret record holds of the step that

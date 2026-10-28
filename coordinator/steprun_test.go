@@ -3,6 +3,7 @@ package coordinator
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/parallelworks/meridian/backend"
@@ -10,12 +11,16 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
 // stepRunRoot is a run whose job build runs where the run started, with
-// steps on the host farm: a checkout, a command, and a step that calls a
-// workflow, which can't run so; whose job hosted runs on farm, with a
+// steps on the host farm: a checkout, a command, a step that calls a
+// workflow, which can't run so, a command whose host a variable names, a
+// command whose ssh: is null, which runs in its job, an action the
+// coordinator performs, whose ssh: places nothing, and a command whose
+// host only the job's worker knows; whose job hosted runs on farm, with a
 // step whose ssh: is null; and whose matrix job fan has a step on farm.
 const stepRunRoot = `jobs:
   build:
@@ -29,6 +34,15 @@ const stepRunRoot = `jobs:
       - uses: github/t/grand@main
         ssh: {remoteHost: farm}
         with: {$yaml: w.yaml}
+      - run: echo private
+        ssh: {remoteHost: "${{ vars.FARM }}"}
+      - run: echo null
+        ssh: null
+      - uses: parallelworks/cancel-jobs
+        ssh: {remoteHost: farm}
+        with: {jobs: [hosted]}
+      - run: echo unknowable
+        ssh: {remoteHost: "${{ env.HOST }}"}
   hosted:
     ssh: {remoteHost: farm}
     steps:
@@ -57,7 +71,7 @@ type stepRunRig struct {
 
 func newStepRunRig(t *testing.T) *stepRunRig {
 	t.Helper()
-	vars := conformancetest.Variables{}
+	vars := conformancetest.Variables{"vars.FARM": {Value: "farm"}}
 	d := newTestDriver()
 	d.runDir = "/home/alice/.local/state/meridian/runs/1-store"
 	hold := make(chan struct{})
@@ -97,16 +111,27 @@ func (r *stepRunRig) placed(t *testing.T, run, key string) *store.Attempt {
 }
 
 // ask asks for the step run of the try req names, of the attempt a, as the
-// worker API does: the step as the run's plan has it, then createStepRun.
+// worker API does: the step as the run's plan has it, then createStepRun,
+// whose problems it fails the test for.
 func (r *stepRunRig) ask(t *testing.T, a *store.Attempt, req stepRunRequest) (string, error) {
+	t.Helper()
+	id, diags, err := r.askDiags(t, a, req)
+	if diags.HasErrors() {
+		t.Fatalf("asking for a step run: %v", diags)
+	}
+	return id, err
+}
+
+// askDiags is ask, which gives createStepRun's problems.
+func (r *stepRunRig) askDiags(t *testing.T, a *store.Attempt, req stepRunRequest) (string, problems.Diagnostics, error) {
 	t.Helper()
 	run := storedRun(t, r.c, a.Run)
 	p, step, err := r.c.planStep(run, a, req.Step)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if step == nil {
-		return "", errNotStepRun
+		return "", nil, errNotStepRun
 	}
 	return r.c.createStepRun(t.Context(), a, p, step, &req)
 }
@@ -161,6 +186,10 @@ func TestStepRun(t *testing.T) {
 	if !found {
 		t.Error("the step run's job wasn't placed")
 	}
+	// A step run's own step has none of its own.
+	if _, err := r.ask(t, a, stepRunRequest{Step: 2, SSH: farm}); !errors.Is(err, errNotStepRun) {
+		t.Errorf("a step run's step asked for a step run: %v", err)
+	}
 	ready, err := claimReadier{c}.ReadyAttempt(t.Context(), run, a)
 	switch {
 	case err != nil:
@@ -175,7 +204,7 @@ func TestStepRun(t *testing.T) {
 	}
 
 	// It reads its own step of the plan, and no other.
-	for i, ok := range []bool{false, false, true, false} {
+	for i, ok := range []bool{false, false, true, false, false, false, false, false} {
 		if _, step, err := c.planStep(run, a, i); err != nil || (step != nil) != ok {
 			t.Errorf("the step run's step %d is %+v, %v", i, step, err)
 		}
@@ -225,18 +254,32 @@ func TestStepRunOfInstance(t *testing.T) {
 func TestStepRunRefuses(t *testing.T) {
 	parallel(t)
 	r := newStepRunRig(t)
+	host := func(ssh map[string]any) *plan.Inline {
+		return &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(ssh)}
+	}
 	local := &plan.Inline{Name: "ssh", Backend: "local", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "farm"})}
-	empty := &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": ""})}
 	for name, req := range map[string]stepRunRequest{
-		"a step without ssh:":          {Step: 0, SSH: farm},
-		"a step that calls a workflow": {Step: 3, SSH: farm},
-		"another backend":              {Step: 2, Try: 1, SSH: local},
-		"no host":                      {Step: 2, Try: 2, SSH: empty},
-		"a state that isn't a mapping": {Step: 2, Try: 3, SSH: farm, State: plan.DataOf([]any{"steps"})},
+		"a step without ssh:":                {Step: 0, SSH: farm},
+		"a step that calls a workflow":       {Step: 3, SSH: farm},
+		"another backend":                    {Step: 2, SSH: local},
+		"another host":                       {Step: 2, SSH: host(map[string]any{"remoteHost": "elsewhere.example", "remoteUser": "root", "jumpNodeHost": "jump.example"})},
+		"another login":                      {Step: 2, SSH: host(map[string]any{"remoteHost": "farm", "remoteUser": "root"})},
+		"no host where the plan names one":   {Step: 2},
+		"no host":                            {Step: 2, SSH: host(map[string]any{"remoteHost": ""})},
+		"a try past its retry:":              {Step: 2, Try: 1, SSH: farm},
+		"a negative try":                     {Step: 2, Try: -1, SSH: farm},
+		"a state that isn't a mapping":       {Step: 2, SSH: farm, State: plan.DataOf([]any{"steps"})},
+		"a null ssh: in a job without ssh:":  {Step: 5},
+		"an action the coordinator performs": {Step: 6, SSH: farm},
 	} {
 		if id, err := r.ask(t, r.build, req); !errors.Is(err, errNotStepRun) {
 			t.Errorf("%s: %q, %v", name, id, err)
 		}
+	}
+	// One whose host only the job's worker knows is a problem of the
+	// step's, which says what it reads.
+	if id, diags, err := r.askDiags(t, r.build, stepRunRequest{Step: 7}); err != nil || id != "" || len(diags) != 1 || diags[0].Code != problems.StepSSHReadsWorker.Code() || diags[0].Params["ref"] != "env.HOST" {
+		t.Errorf("a step whose ssh: reads the job's env gives %q, %v, %v", id, diags, err)
 	}
 
 	id, err := r.ask(t, r.hosted, stepRunRequest{Step: 0})
@@ -254,14 +297,15 @@ func TestStepRunRefuses(t *testing.T) {
 }
 
 // TestStepRunPrivate checks that a step run whose host the step's ssh:
-// read from a variable or a password is placed privately, and that what
-// the try gave, the host and the job's state, is in its secret record,
-// sealed, never in the clear.
+// reads from a variable is placed privately, as the coordinator's own
+// evaluation of it says, that its claim masks what its caller's worker
+// masked at the try, and that what the try gave, the host and the job's
+// state, is in its secret record, sealed, never in the clear.
 func TestStepRunPrivate(t *testing.T) {
 	parallel(t)
 	r := newStepRunRig(t)
 	state := plan.DataOf(map[string]any{"token": "t0k3n-of-the-job"})
-	id, err := r.ask(t, r.build, stepRunRequest{Step: 2, SSH: farm, Private: true, State: state})
+	id, err := r.ask(t, r.build, stepRunRequest{Step: 4, SSH: farm, State: state, Masked: []string{"t0k3n-of-the-job"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,6 +317,10 @@ func TestStepRunPrivate(t *testing.T) {
 	a := r.placed(t, id, "build")
 	if !a.Private || a.Placement.Group != "" || a.Placement.Member != "" {
 		t.Errorf("the private step run's placement is %+v in the clear", a.Placement)
+	}
+	// Its worker masks what the caller's did.
+	if ready, err := (claimReadier{r.c}).ReadyAttempt(t.Context(), run, a); err != nil || ready.Tree == nil || !slices.Contains(ready.Tree.Masked, "t0k3n-of-the-job") {
+		t.Errorf("the step run's claim masks %+v, %v", ready, err)
 	}
 	var sealed *store.Record
 	if err := r.c.store.View(t.Context(), func(tx *store.Tx) error {

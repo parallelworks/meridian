@@ -279,6 +279,8 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		var digest string
 		err := tx.queryRow("SELECT plan, plan_digest FROM meridian_runs WHERE id = ?", parentRun.Int64).Scan(&r.Plan, &digest)
 		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, fmt.Errorf("%w: step run %s's caller, run %s", ErrNotFound, id, runID(parentRun.Int64))
 		case err != nil:
 			return nil, fmt.Errorf("store: step run %s's caller: %w", id, err)
 		case digest != r.PlanDigest:

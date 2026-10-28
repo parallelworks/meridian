@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
@@ -71,31 +72,11 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 		}
 		readyRun, key = caller, run.Parent.Job
 	}
-	p, err := c.plans.get(readyRun)
+	p, from, in, err := c.readyInputOf(ctx, readyRun, key)
 	if err != nil {
 		return nil, err
 	}
-	var (
-		from *readyFrom
-		pj   *plan.Job
-	)
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		job, err := tx.Job(readyRun.ID, key)
-		if err != nil {
-			return err
-		}
-		if pj = p.Job(job.Name); pj == nil {
-			return fmt.Errorf("coordinator: run %s's plan has no job %q", readyRun.ID, job.Name)
-		}
-		from, err = readReadyFrom(tx, readyRun, pj, job, false)
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	in, err := c.readyInput(ctx, readyRun, from)
-	if err != nil {
-		return nil, err
-	}
+	pj := p.Job(from.job.Name)
 	res, diags, err := p.Ready(ctx, from.job.Name, in)
 	switch {
 	case err != nil:
@@ -130,6 +111,35 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	}, nil
 }
 
+// readyInputOf returns the plan of run, and what Ready readies its job key
+// with, as its supervisor pinned it and a claim reads it: so that what is
+// evaluated again with it, as a claim's Ready, or the coordinator's
+// evaluation of a step's ssh: (stepTarget), reads what the job was
+// readied with.
+func (c *Coordinator) readyInputOf(ctx context.Context, run *store.Run, key string) (*plan.Plan, *readyFrom, plan.ReadyInput, error) {
+	p, err := c.plans.get(run)
+	if err != nil {
+		return nil, nil, plan.ReadyInput{}, err
+	}
+	var from *readyFrom
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		job, err := tx.Job(run.ID, key)
+		if err != nil {
+			return err
+		}
+		pj := p.Job(job.Name)
+		if pj == nil {
+			return fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, job.Name)
+		}
+		from, err = readReadyFrom(tx, run, pj, job, false)
+		return err
+	}); err != nil {
+		return nil, nil, plan.ReadyInput{}, err
+	}
+	in, err := c.readyInput(ctx, run, from)
+	return p, from, in, err
+}
+
 // tree returns what an attempt of the child run run, of the plan p, has of
 // its tree (workerapi.Tree): its root's identity, and its root's
 // directory, rootDir, where the attempt runs (memberDirs), format 1's name
@@ -147,6 +157,10 @@ func (r claimReadier) tree(ctx context.Context, run, root *store.Run, rootDir st
 	tree := &workerapi.Tree{JobID: root.ID, RootDir: rootDir, WorkflowName: p.Run.Source.Ref.CallName()}
 	if rec.Inherited != nil {
 		tree.Masked = rec.Inherited.Masked
+	}
+	if rec.StepRun != nil {
+		// A step run's worker masks what its caller's did at the try.
+		tree.Masked = append(slices.Clone(tree.Masked), rec.StepRun.Masked...)
 	}
 	return tree, nil
 }

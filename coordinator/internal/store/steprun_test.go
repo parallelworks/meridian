@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/parallelworks/meridian/compile"
@@ -68,6 +69,21 @@ func TestStepRun(t *testing.T) {
 		}
 		return nil
 	})
+
+	// A caller whose plan isn't the one the step run names, which the
+	// store's trigger keeps from happening, is a store that is malformed.
+	if _, err := s.db.ExecContext(t.Context(), "DROP TRIGGER meridian_runs_plan_fixed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(t.Context(), "UPDATE meridian_runs SET plan_digest = 'sha256:00' WHERE id = ?", mustNumber(t, root)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.View(t.Context(), func(tx *Tx) error {
+		_, err := tx.Run(id)
+		return err
+	}); !errors.Is(err, ErrMalformed) {
+		t.Errorf("a step run whose caller's plan isn't the one it names reads as %v", err)
+	}
 
 	// Without a link, there is no caller to name the plan of.
 	unlinked := run

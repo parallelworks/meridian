@@ -1087,6 +1087,13 @@
         "state": {
           "description": "The state of the caller's job at the try, a mapping, as its worker gave it.",
           "type": "object"
+        },
+        "masked": {
+          "description": "The strings the caller's worker masks at the try, which the step run's jobs mask too.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false

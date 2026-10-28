@@ -18,6 +18,12 @@ func TestStepElsewhere(t *testing.T) {
         ssh: null
       - run: echo read
         ssh: {remoteHost: "${{ inputs.host }}"}
+      - uses: parallelworks/cancel-jobs
+        ssh: {remoteHost: farm}
+        with: {jobs: [hosted]}
+      - uses: parallelworks/checkout
+        ssh: {remoteHost: farm}
+        with: {repo: https://example.com/app.git, branch: main}
   hosted:
     ssh: {remoteHost: farm}
     steps:
@@ -28,7 +34,7 @@ func TestStepElsewhere(t *testing.T) {
         ssh: {remoteHost: other}
 `, nil)
 	for job, want := range map[string][]bool{
-		"here":   {false, true, true, true},
+		"here":   {false, true, true, true, false, true},
 		"hosted": {false, true, true},
 	} {
 		j := p.Job(job)

@@ -59,7 +59,7 @@ var since = map[string]int{
 	"Record.means": 1, "Record.run": 1, "Record.timeoutSeconds": 1, "Record.expansions": 1, "Record.jobs": 1,
 	"JobRecord.outputs": 1, "JobRecord.steps": 1, "Record.inherited": 2,
 	"Inherited.env": 2, "Inherited.masked": 2,
-	"Record.stepRun": 2, "StepRun.ssh": 2, "StepRun.private": 2, "StepRun.state": 2,
+	"Record.stepRun": 2, "StepRun.ssh": 2, "StepRun.private": 2, "StepRun.state": 2, "StepRun.masked": 2,
 	"Expansion.instances": 1, "Expansion.failFast": 1, "Expansion.maxParallel": 1,
 	"Instance.key": 1, "Instance.index": 1, "Instance.matrix": 1, "Instance.private": 1, "Instance.secret": 1,
 

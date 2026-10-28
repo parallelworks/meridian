@@ -1259,6 +1259,13 @@
       "Mueve el paso a un trabajo que se ejecute en ese host, mediante el ssh: del trabajo o un grupo de ejecución."
     ]
   },
+  "step_ssh_reads_worker": {
+    "title": "ssh: de un paso que lee lo que solo sabe el worker de su trabajo",
+    "why": "Un paso cuyo ssh: indica otro host que el de su trabajo se ejecuta allí como una ejecución propia, que el coordinador coloca, y el coordinador evalúa él mismo el ssh: del paso, para que un host nunca decida dónde se conecta el coordinador con tus claves. Puede leer las entradas, variables y secretos de la ejecución, las salidas de los trabajos que necesita el trabajo del paso, los valores de matriz del trabajo y el contador de reintentos del paso, pero no lo que solo sabe el worker del trabajo, como las salidas de pasos anteriores del trabajo o su entorno.",
+    "fix": [
+      "Indica el host a partir de las entradas de la ejecución, o de una salida de un trabajo que necesita el trabajo del paso."
+    ]
+  },
   "step_off_job_host": {
     "title": "Paso que se ejecuta fuera del host de su trabajo",
     "why": "El ssh: de un trabajo del formato 1 ejecuta sus pasos en el host que indica, y el ssh: de un paso que es nulo, o que no da ningún remoteHost, ejecuta el paso donde se ejecutaría el trabajo sin su ssh:. Esta versión del worker de Meridian se ejecuta en el host del trabajo y solo ejecuta pasos ahí, así que el paso falla en lugar de ejecutarse en el host equivocado.",

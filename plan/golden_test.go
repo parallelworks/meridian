@@ -228,6 +228,7 @@ var goldens = []golden{
 			SSH:     &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "farm"})},
 			Private: true,
 			State:   plan.DataOf(map[string]any{"steps": []any{}}),
+			Masked:  []string{"t0k3n"},
 		}
 		return [][]byte{encoded(t, plan.EncodeRecord, r)}
 	}},

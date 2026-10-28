@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A stepRunRequest is a step's try's ask for a step run, a run of its own
@@ -20,15 +22,16 @@ import (
 // on another host), as the step's worker evaluated the try: the step's
 // index in its job, and the try, from 0; where the step's ssh: put the
 // try, the host it names, or nil for one that is null, or gives no
-// remoteHost; whether evaluating it read a variable or a password; and
-// the state of the job at the try, a mapping, which the step run's worker
-// runs the step with, and which the coordinator keeps, sealed, but doesn't
-// read.
+// remoteHost, which the coordinator checks against its own evaluation of
+// it; the state of the job at the try, a mapping, which the step run's
+// worker runs the step with, and which the coordinator keeps, sealed, but
+// doesn't read; and the strings the step's worker masks at the try, which
+// the step run's worker masks too.
 type stepRunRequest struct {
 	Step, Try int
 	SSH       *plan.Inline
-	Private   bool
 	State     plan.Data
+	Masked    []string
 }
 
 // errNotStepRun is what createStepRun returns for a step that can't run as
@@ -39,15 +42,20 @@ var errNotStepRun = errors.New("coordinator: the step can't run as a run of its 
 // createStepRun creates the step run of the try of a step, of the attempt
 // a, that req asks for, and returns its ID: the next number in the store,
 // or the ID of the run that the try has already, which a repeated ask
-// finds again. step is the step at req.Step of a's job, and p the plan of
-// a's run. As docs/design.md says under Steps on another host:
+// finds again; or, for a step whose ssh: the coordinator can't evaluate,
+// the problems that say so. step is the step at req.Step of a's job, and p
+// the plan of a's run. As docs/design.md says under Steps on another host:
 //
 //   - Only a step that the plan says can run so gets one
-//     (plan.Job.StepElsewhere): one that doesn't call a workflow, with an
-//     ssh: of its own, null among them, in a job with or without one. Its
-//     host is what req says the step's ssh: gave the try, which names a
-//     host, or nothing, for a step that runs where its job would without
-//     its ssh:.
+//     (plan.Job.StepElsewhere), for a try of its retry:, and never a step
+//     run's own step, nor one whose ssh: names no host in a job without
+//     ssh:, which runs in its job.
+//   - Where it runs is where the step's ssh: puts the try as the
+//     coordinator evaluates it, from the plan, with what Ready readies the
+//     caller's job with (plan.Plan.StepTarget), never what the caller's
+//     worker says: a request whose host isn't that one is refused, so that
+//     a host never chooses where the coordinator connects with the user's
+//     keys. Whether it is private is the coordinator's evaluation's too.
 //   - It has no plan of its own: its plan is its caller's, which the store
 //     reads from the caller's run, and its one job is the caller's, the
 //     step's, which Ready readies as the caller's, but for where it runs
@@ -56,39 +64,62 @@ var errNotStepRun = errors.New("coordinator: the step can't run as a run of its 
 //     run's directory itself, as a host does, places it in the caller's
 //     place in its root's there, where the caller's run's jobs on that
 //     member run.
-//   - Its secret record holds what the try evaluated, which the plan
-//     doesn't, and what the caller's run inherited, which its jobs mask too.
+//   - Its secret record holds where it runs, the job's state at the try
+//     and what the caller's worker masks, which the plan doesn't, and what
+//     the caller's run inherited, which its jobs mask too.
 //   - One transaction stores it, linked to the step's try, with its Start
 //     in the queue every coordinator works, as a workflow a step calls is.
 //
 // It returns the errors createChild returns for an attempt that no longer
 // holds its job, a run that has ended or was stopped, and a step its
-// attempt's control stops, and errNotStepRun for a step, or a host, that
-// can't have one.
-func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *plan.Plan, step *plan.Step, req *stepRunRequest) (string, error) {
+// attempt's control stops; and errNotStepRun for a step, a try or a host
+// that can't have one.
+func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *plan.Plan, step *plan.Step, req *stepRunRequest) (string, problems.Diagnostics, error) {
 	if err := c.writable(); err != nil {
-		return "", err
+		return "", nil, err
+	}
+	if req.Try < 0 {
+		return "", nil, fmt.Errorf("%w: try %d", errNotStepRun, req.Try)
+	}
+	if req.Try > 0 {
+		if last, known := step.LastTry(req.Try - 1); known && last {
+			return "", nil, fmt.Errorf("%w: the step has no try %d", errNotStepRun, req.Try)
+		}
+	}
+	if _, ok := req.State.Get().(map[string]any); !ok && !req.State.IsZero() {
+		return "", nil, fmt.Errorf("%w: the job's state isn't a mapping", errNotStepRun)
 	}
 	cl, existing, err := c.readCaller(ctx, a.ID, req.Step, req.Try)
 	switch {
 	case err != nil:
-		return "", err
+		return "", nil, err
 	case existing != "":
-		return existing, nil
+		return existing, nil, nil
+	case cl.run.StepRun:
+		return "", nil, fmt.Errorf("%w: step run %s's own step", errNotStepRun, cl.run.ID)
 	}
 	if err := stepLives(cl.attempt, cl.run, step, cl.control); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	name, _, _ := strings.Cut(cl.attempt.Job, "#")
-	if j := p.Job(name); j == nil || !j.StepElsewhere(step) {
-		return "", fmt.Errorf("%w: run %s's job %q's step %d", errNotStepRun, cl.run.ID, name, req.Step)
+	j := p.Job(name)
+	if j == nil || !j.StepElsewhere(step) {
+		return "", nil, fmt.Errorf("%w: run %s's job %q's step %d", errNotStepRun, cl.run.ID, name, req.Step)
 	}
-	if err := checkStepRunHost(req); err != nil {
-		return "", err
+	target, private, diags, err := c.stepTarget(ctx, cl.run, cl.attempt.Job, req.Step, req.Try)
+	switch {
+	case err != nil:
+		return "", nil, err
+	case diags.HasErrors():
+		return "", diags, nil
+	case target == nil && j.SSH.IsZero():
+		return "", nil, fmt.Errorf("%w: a step whose ssh: names no host runs in its job, which has none", errNotStepRun)
+	case !sameTarget(req.SSH, target):
+		return "", nil, fmt.Errorf("%w: the host its worker gave isn't the one its ssh: names", errNotStepRun)
 	}
 	callers, err := c.openRecord(ctx, cl.run.ID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	depth := 1
 	if cl.run.Parent != nil {
@@ -97,30 +128,32 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	link := store.Link{Run: cl.run.ID, Job: cl.attempt.Job, Attempt: cl.attempt.ID, Step: req.Step, Try: req.Try, Root: cl.root.ID, Depth: depth}
 	record := plan.Record{
 		Version: plan.Version, PlanDigest: callers.PlanDigest, Inherited: callers.Inherited,
-		StepRun: &plan.StepRun{SSH: req.SSH, Private: req.Private, State: req.State},
+		StepRun: &plan.StepRun{SSH: target, Private: private, State: req.State, Masked: req.Masked},
 	}
-	return c.storeChild(ctx, step, &link, func(tx *store.Tx, id string) error {
+	id, err := c.storeChild(ctx, step, &link, func(tx *store.Tx, id string) error {
 		return c.insertStepRun(ctx, tx, id, p, &record, cl.run, &link, name)
 	})
+	return id, nil, err
 }
 
-// checkStepRunHost checks the host req says the step's ssh: put its try
-// on: one that a format 1 ssh: makes, which names a host, or none; and
-// that its state, if it has one, is a mapping.
-func checkStepRunHost(req *stepRunRequest) error {
-	if _, ok := req.State.Get().(map[string]any); !ok && !req.State.IsZero() {
-		return fmt.Errorf("%w: the job's state isn't a mapping", errNotStepRun)
+// stepTarget evaluates, as the coordinator, where the ssh: of the step at
+// index of the job key, of run, puts its try try: with what Ready readies
+// the job with, as a claim of it reads it (readyInputOf).
+func (c *Coordinator) stepTarget(ctx context.Context, run *store.Run, key string, index, try int) (*plan.Inline, bool, problems.Diagnostics, error) {
+	p, from, in, err := c.readyInputOf(ctx, run, key)
+	if err != nil {
+		return nil, false, nil, err
 	}
-	in := req.SSH
-	if in == nil {
-		return nil
+	return p.StepTarget(ctx, from.job.Name, index, try, in)
+}
+
+// sameTarget reports whether a, the host a step's worker says its ssh:
+// gave the try, is b, the coordinator's: both none, or the same ssh:.
+func sameTarget(a, b *plan.Inline) bool {
+	if a == nil || b == nil {
+		return a == b
 	}
-	ssh, ok := in.SSH.Get().(map[string]any)
-	host, _ := ssh["remoteHost"].(string)
-	if in.Name != "ssh" || in.Backend != "ssh" || in.Isolation != "host" || !ok || host == "" {
-		return fmt.Errorf("%w: the host its ssh: gave isn't one an ssh: names", errNotStepRun)
-	}
-	return nil
+	return a.Name == b.Name && a.Backend == b.Backend && a.Isolation == b.Isolation && reflect.DeepEqual(a.SSH.Get(), b.SSH.Get())
 }
 
 // insertStepRun stores, in tx, the step run id, of the job named name,
