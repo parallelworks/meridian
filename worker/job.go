@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -26,6 +27,45 @@ import (
 // its steps, then their cleanup: commands, and evaluates its outputs. It
 // returns the attempt's end, or nil if the job was halted.
 func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
+	a.maskSecrets()
+	problem := a.setUp()
+	if a.halted.fired() {
+		return nil
+	}
+	if problem != nil {
+		return &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: problem}
+	}
+	if a.job.TimeoutSeconds > 0 {
+		t := time.AfterFunc(seconds(a.job.TimeoutSeconds)-time.Since(a.claimed), func() {
+			a.timeOut(time.Now().Add(a.tm.grace), "the job ran past its timeout")
+		})
+		defer t.Stop()
+	}
+	jobDiags, end, done := a.evaluateJobEnv(ctx)
+	if done {
+		return end
+	}
+	// What the coordinator asked before the claim applies from the first
+	// step: a cancel, the run's timeout, or a job of the run failing.
+	a.awaitFirstControl()
+
+	// A job halted before a step's turn, or a cleanup's, hasn't ended, and
+	// neither has one halted as a step, or a cleanup, ran, which it cut
+	// short. One halted once the last has ended, and been reported, has:
+	// stopped from outside, as by its scheduler's time limit, it still
+	// evaluates its outputs and sends its end, in the flush period; ended
+	// without the worker (lost), it doesn't.
+	r := a.runSteps(ctx)
+	if r == nil || !a.runCleanups(ctx, r) {
+		return nil
+	}
+	return a.endJob(ctx, r, jobDiags)
+}
+
+// maskSecrets masks the run's secrets from now on (addMasked), and the
+// job's own, which the phases count as a secret's own text, as they count
+// the run's (attempt.secrets).
+func (a *attempt) maskSecrets() {
 	a.mask = plan.NewMasker()
 	a.addMasked(a.claim.Run.Masked()...)
 	// The platform's secret variables are secrets of the job's, which the
@@ -47,83 +87,74 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		}
 	}
 	a.mask.Add(a.secrets...)
-	problem := a.setUp()
-	if a.halted.fired() {
-		return nil
-	}
-	if problem != nil {
-		return &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: problem}
-	}
-	if a.job.TimeoutSeconds > 0 {
-		t := time.AfterFunc(seconds(a.job.TimeoutSeconds)-time.Since(a.claimed), func() {
-			a.timeOut(time.Now().Add(a.tm.grace), "the job ran past its timeout")
-		})
-		defer t.Stop()
-	}
+}
 
-	// The job's env: is evaluated once for the attempt, as the job starts,
-	// and its steps, their cleanups and its outputs read what it gave. One
-	// that fails fails the job, before any step.
+// evaluateJobEnv evaluates the job's env: once for the attempt, as the job
+// starts, and its steps, their cleanups and its outputs read what it gave.
+// It returns the problems it had; and done, with the attempt's end, when
+// the job ends here: nil if it was halted, and a failure for an env: that
+// failed, which fails the job before any step.
+func (a *attempt) evaluateJobEnv(ctx context.Context) (diags problems.Diagnostics, end *workerapi.Complete, done bool) {
 	jobEnv, jobDiags, err := a.job.JobEnv(ctx, a.state(nil, false, a.variables("", nil)))
 	if a.halted.fired() {
-		return nil
+		return nil, nil, true
 	}
 	if err != nil {
 		a.log.Error("evaluating the job's env: failed", "error", a.mask.Mask(err.Error()))
 		jobDiags = append(jobDiags, a.at(problems.EvaluationFailed, a.job.Path, nil))
 	}
 	if jobDiags.HasErrors() {
-		return &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: a.maskDiagnostics(jobDiags)}
+		return nil, &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Diagnostics: a.maskDiagnostics(jobDiags)}, true
 	}
 	a.jobEnv = jobEnv
 	a.addMasked(jobEnv.Masked...)
-	// What the coordinator asked before the claim applies from the first
-	// step: a cancel, the run's timeout, or a job of the run failing.
-	a.awaitFirstControl()
+	return jobDiags, nil, false
+}
 
-	var (
-		results []plan.StepResult
-		// ifFailed is set for each step whose if: failed to evaluate.
-		ifFailed = make([]bool, len(a.job.Steps))
-		// cancelled is set once a step has ended cancelled because the
-		// coordinator cancelled the job: cancelled() is true for the steps
-		// after, as the Cancelled of their state. As in format 1, a cancel
-		// cancels the job through the step it stops, or the next that
-		// comes to run, which ends cancelled without starting; until then
-		// cancelled() is false.
-		cancelled bool
-		// stopped is set once the job is stopping, for why says: its
-		// steps after that don't run, but those that outlive it.
-		stopped bool
-		why     stopCause
-		// deadlineFailed is set once the job's timeout:, or the run's,
-		// has failed a step: one it stopped, or one that came to run
-		// after it, but for a step that ignores its errors on its last
-		// try, which succeeds.
-		deadlineFailed bool
-		// cancelReason is why the step that cancelled the job did, when it
-		// says: a step that calls a workflow that the job's timeout, or the
-		// run's, stopped cancels the job, for the reason timeout, as format
-		// 1 ends it, rather than fail it. Otherwise the job is cancelled for
-		// the coordinator's reason.
-		cancelReason plan.Reason
-	)
-	// A job halted before a step's turn, or a cleanup's, hasn't ended, and
-	// neither has one halted as a step, or a cleanup, ran, which it cut
-	// short. One halted once the last has ended, and been reported, has:
-	// stopped from outside, as by its scheduler's time limit, it still
-	// evaluates its outputs and sends its end, in the flush period; ended
-	// without the worker (lost), it doesn't.
+// A stepsRun is what the job's steps came to, as runSteps ran them, which
+// their cleanups and the job's end read.
+type stepsRun struct {
+	results []plan.StepResult
+	// ifFailed is set for each step whose if: failed to evaluate.
+	ifFailed []bool
+	// cancelled is set once a step has ended cancelled because the
+	// coordinator cancelled the job: cancelled() is true for the steps
+	// after, as the Cancelled of their state. As in format 1, a cancel
+	// cancels the job through the step it stops, or the next that comes
+	// to run, which ends cancelled without starting; until then
+	// cancelled() is false.
+	cancelled bool
+	// stopped is set once the job is stopping, for why says: its steps
+	// after that don't run, but those that outlive it.
+	stopped bool
+	why     stopCause
+	// deadlineFailed is set once the job's timeout:, or the run's, has
+	// failed a step: one it stopped, or one that came to run after it, but
+	// for a step that ignores its errors on its last try, which succeeds.
+	deadlineFailed bool
+	// cancelReason is why the step that cancelled the job did, when it
+	// says: a step that calls a workflow that the job's timeout, or the
+	// run's, stopped cancels the job, for the reason timeout, as format 1
+	// ends it, rather than fail it. Otherwise the job is cancelled for the
+	// coordinator's reason.
+	cancelReason plan.Reason
+}
+
+// runSteps runs the job's steps in turn (runStep), and returns what they
+// came to, or nil if the job was halted before a step's turn, or as one
+// ran.
+func (a *attempt) runSteps(ctx context.Context) *stepsRun {
+	r := &stepsRun{ifFailed: make([]bool, len(a.job.Steps))}
 	for i := range a.job.Steps {
 		if a.halted.fired() {
 			return nil
 		}
-		if !stopped {
+		if !r.stopped {
 			// The first of the job's stops to fire says why it stops, as
 			// format 1's context keeps the reason it ended with first.
 			switch cause := a.stopCauseOf(stops{cancellable: true}); cause {
 			case stopCancelled, stopJobTimeout:
-				stopped, why = true, cause
+				r.stopped, r.why = true, cause
 			}
 		}
 		// As in format 1, a job past its timeout isn't cancelled, nor is
@@ -133,96 +164,109 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		// after. A step that ended cancelled, as a cancel or early-cancel:
 		// stops one, makes cancelled() true for those after it, as the
 		// Step phase reads from their results.
-		end := a.runStep(ctx, i, a.state(results, cancelled, nil), stopped, why)
+		end := a.runStep(ctx, i, a.state(r.results, r.cancelled, nil), r.stopped, r.why)
 		if a.stepEnded != nil {
 			a.stepEnded(a, i, false)
 		}
 		if end.cut {
 			return nil
 		}
-		results = append(results, end.result)
-		ifFailed[i] = end.ifFailed
+		r.results = append(r.results, end.result)
+		r.ifFailed[i] = end.ifFailed
 		if end.cause == stopJobTimeout && end.result.Outcome == plan.OutcomeFailure {
-			deadlineFailed = true
+			r.deadlineFailed = true
 		}
-		if end.cause == stopCancelled && !cancelled {
-			cancelled, cancelReason = true, end.reason
+		if end.cause == stopCancelled && !r.cancelled {
+			r.cancelled, r.cancelReason = true, end.reason
 		}
-		if !stopped && (end.cause == stopCancelled || end.cause == stopEarlyCancel || end.cause == stopJobTimeout) {
-			stopped, why = true, end.cause
+		if !r.stopped && (end.cause == stopCancelled || end.cause == stopEarlyCancel || end.cause == stopJobTimeout) {
+			r.stopped, r.why = true, end.cause
 		}
 		if end.result.Outcome == plan.OutcomeFailure {
 			a.fire(a.anyJobFailed, nil)
 		}
 	}
+	return r
+}
 
-	// As in format 1, the steps' cleanup: commands run once the job's steps
-	// have, in reverse order, each as a step of its own, whatever happened
-	// to the job: the Cleanup phase skips one whose step was skipped, and
-	// the worker one whose step's if: failed to evaluate, which format 1
-	// counts as not having run either.
+// runCleanups runs the steps' cleanup: commands, as format 1 does once
+// the job's steps have, in reverse order, each as a step of its own,
+// whatever happened to the job: the Cleanup phase skips one whose step was
+// skipped, and the worker one whose step's if: failed to evaluate, which
+// format 1 counts as not having run either. It records how each ended in
+// r, and reports whether the job goes on to its end: not if it was halted
+// before a cleanup's turn, or as one ran.
+func (a *attempt) runCleanups(ctx context.Context, r *stepsRun) bool {
 	for i, s := range slices.Backward(a.job.Steps) {
 		if s.Cleanup.IsZero() {
 			continue
 		}
 		if a.halted.fired() {
-			return nil
+			return false
 		}
-		if ifFailed[i] {
+		if r.ifFailed[i] {
 			a.finished(workerapi.Event{Step: i, Cleanup: true, Outcome: plan.OutcomeSkipped, ExitCode: -1})
-			results[i].CleanupOutcome = plan.OutcomeSkipped
+			r.results[i].CleanupOutcome = plan.OutcomeSkipped
 			continue
 		}
-		outcome, outputs := a.runCleanup(ctx, i, a.state(results, cancelled, nil))
+		outcome, outputs := a.runCleanup(ctx, i, a.state(r.results, r.cancelled, nil))
 		if a.stepEnded != nil {
 			a.stepEnded(a, i, true)
 		}
 		if outcome == "" {
-			return nil
+			return false
 		}
-		results[i].CleanupOutcome, results[i].CleanupOutputs = outcome, outputs
+		r.results[i].CleanupOutcome, r.results[i].CleanupOutputs = outcome, outputs
 	}
+	return true
+}
 
-	failed := slices.ContainsFunc(results, func(r plan.StepResult) bool {
+// jobOutcome returns how the job ended, as its steps and their cleanups
+// did, r, and, for one that failed past its deadline, or was cancelled,
+// why.
+func (a *attempt) jobOutcome(r *stepsRun) (plan.Outcome, plan.Reason) {
+	failed := slices.ContainsFunc(r.results, func(s plan.StepResult) bool {
 		// As in format 1, a cleanup that fails fails its job.
-		return r.Outcome == plan.OutcomeFailure || r.CleanupOutcome == plan.OutcomeFailure
+		return s.Outcome == plan.OutcomeFailure || s.CleanupOutcome == plan.OutcomeFailure
 	})
-	skipped := len(results) > 0 && !slices.ContainsFunc(results, func(r plan.StepResult) bool {
-		return r.Outcome != plan.OutcomeSkipped
+	skipped := len(r.results) > 0 && !slices.ContainsFunc(r.results, func(s plan.StepResult) bool {
+		return s.Outcome != plan.OutcomeSkipped
 	})
 	// As in format 1, a job is cancelled only by a step that ended
 	// cancelled: one whose steps after a cancel all outlive it, or are
 	// skipped, ends as they did.
-	stepCancelled := slices.ContainsFunc(results, func(r plan.StepResult) bool {
-		return r.Outcome == plan.OutcomeCancelled
+	stepCancelled := slices.ContainsFunc(r.results, func(s plan.StepResult) bool {
+		return s.Outcome == plan.OutcomeCancelled
 	})
-	end := &workerapi.Complete{}
-	outcome := plan.OutcomeSuccess
 	switch {
-	case why == stopJobTimeout && deadlineFailed:
+	case r.why == stopJobTimeout && r.deadlineFailed:
 		// A job past its timeout, or whose run is, fails, for the reason
 		// timeout, when the deadline failed a step. One whose deadline
 		// failed none, as when it stopped only steps that ignore their
 		// errors, which succeed, ends as its steps did, as in format 1.
-		outcome, end.Reason = plan.OutcomeFailure, plan.ReasonTimeout
+		return plan.OutcomeFailure, plan.ReasonTimeout
 	case failed:
-		outcome = plan.OutcomeFailure
+		return plan.OutcomeFailure, ""
 	case stepCancelled:
-		outcome = plan.OutcomeCancelled
-		if cancelled {
-			end.Reason = cancelReason
-			if end.Reason == "" {
-				end.Reason = a.cancelReason
-			}
+		if !r.cancelled {
+			return plan.OutcomeCancelled, ""
 		}
+		return plan.OutcomeCancelled, cmp.Or(r.cancelReason, a.cancelReason)
 	case skipped:
 		// As in format 1, a job whose steps were all skipped is.
-		outcome = plan.OutcomeSkipped
+		return plan.OutcomeSkipped, ""
 	}
-	// Once the job's steps have ended, its outputs are evaluated, and its
-	// end sent, even if the worker is being stopped from outside, as at
-	// its scheduler's time limit, unless the attempt has ended without it.
-	res, diags, err := a.job.End(context.WithoutCancel(ctx), a.state(results, cancelled, a.variables("", nil)))
+	return plan.OutcomeSuccess, ""
+}
+
+// endJob evaluates the job's outputs once its steps have ended, as r says
+// they did, and returns the attempt's end, with jobDiags, the problems of
+// its env:, even if the worker is being stopped from outside, as at its
+// scheduler's time limit; or nil if the attempt has ended without it.
+func (a *attempt) endJob(ctx context.Context, r *stepsRun, jobDiags problems.Diagnostics) *workerapi.Complete {
+	outcome, reason := a.jobOutcome(r)
+	end := &workerapi.Complete{Reason: reason}
+	res, diags, err := a.job.End(context.WithoutCancel(ctx), a.state(r.results, r.cancelled, a.variables("", nil)))
 	if a.lost() {
 		return nil
 	}
@@ -385,7 +429,6 @@ type stepEnd struct {
 // stopped is set, for why. It returns how the step ended, or, if the job
 // was halted before it did, that it was cut short.
 func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopped bool, why stopCause) stepEnd {
-	path := a.job.Steps[i].Path
 	out := a.outputsFor(i, a.job.Steps[i].ID)
 	var (
 		end stepEnd
@@ -406,177 +449,252 @@ func (a *attempt) runStep(ctx context.Context, i int, state plan.JobState, stopp
 				return a.notRun(i, try, end, cause, nil, false)
 			}
 		}
-		rs, vars, diags, err := a.readyTry(ctx, i, state, try, first, out.path)
-		if a.halted.fired() {
-			end.cut = true
-			return end
+		t, ended := a.prepareTry(ctx, i, try, state, first, stopped, why, out, end)
+		if t == nil {
+			return ended
 		}
-		// A try that can't start fails its step, which isn't tried again:
-		// what stopped it would stop the next.
-		fail := func(more ...problems.Diagnostic) stepEnd {
-			a.finished(workerapi.Event{Step: i, Try: try, LastTry: true, Outcome: plan.OutcomeFailure, ExitCode: -1, Diagnostics: append(diags, more...)})
-			end.result.Outcome = plan.OutcomeFailure
-			return end
+		first = t.first
+		if ended, started := a.beginTry(t, end); !started {
+			return ended
 		}
-		switch {
-		case err != nil:
-			// Not the workflow's fault, but the step can't run.
-			a.log.Error("readying a step failed", "step", i, "try", try, "error", a.mask.Mask(err.Error()))
-			return fail(a.at(problems.EvaluationFailed, path, nil))
-		case diags.HasErrors() || rs == nil:
-			end.ifFailed = rs != nil && rs.IfFailed
-			return fail()
-		case rs.Skipped:
-			a.finished(workerapi.Event{Step: i, Outcome: plan.OutcomeSkipped, ExitCode: -1, Diagnostics: diags})
-			end.result.Outcome = plan.OutcomeSkipped
-			return end
+		retry := false
+		if t.calls {
+			end, retry = a.runCallTry(ctx, t, end)
+		} else {
+			end, retry = a.runOwnTry(ctx, t, end)
 		}
-		a.addMasked(rs.Masked...)
-		if try == 0 {
-			first = rs
-			if stopped && !rs.OutlivesCancel {
-				// The job stopped as the step was readied: as in format
-				// 1, it ends cancelled, or failed past the job's timeout,
-				// unless it outlives that.
-				return a.notRun(i, try, end, why, diags, rs.IgnoreErrors && (rs.Retry == nil || rs.Retry.MaxRetries == 0))
-			}
-		}
-		note, refused := a.runnable(rs, path)
-		if refused != nil {
-			return fail(*refused)
-		}
-		if out.err != nil {
-			return fail(a.notStarted(out.err, path))
-		}
-		// A step that calls a workflow runs none of its own: its child's
-		// directory is made in the root's, a directory at a time
-		// (runChild).
-		calls := a.callsWorkflow(i)
-		dir := a.workingDirectory(rs)
-		if !calls {
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				return fail(a.notStarted(err, path))
-			}
-		}
-		if note != nil {
-			diags = append(diags, *note)
-		}
-
-		// As format 1 runs a step: one that outlives its job's
-		// cancellation and timeout outlives its own timeout: too, but not
-		// its retry:'s timeout or its early-cancel:.
-		s := stops{cancellable: !first.OutlivesCancel, earlyCancel: rs.EarlyCancel == plan.EarlyCancelAnyJobFailed}
-		if !first.OutlivesCancel {
-			s.step = seconds(rs.TimeoutSeconds)
-		}
-		last := true
-		if first.Retry != nil {
-			s.try = seconds(first.Retry.TimeoutSeconds)
-			last = try >= first.Retry.MaxRetries
-		}
-		if cause := a.stopCauseOf(s); cause != noStop {
-			return a.notRun(i, try, end, cause, diags, rs.IgnoreErrors && last)
-		}
-		seq := a.events.add(workerapi.Event{Time: now(), Step: i, Try: try})
-		if !a.firstStarted {
-			// Whether the workflow's code may have run must always be
-			// known: the coordinator stores that the first step is
-			// starting before it starts.
-			if cause := a.await(s, func() (bool, <-chan struct{}) { return a.events.isStored(seq) }); cause != noStop {
-				return a.notRun(i, try, end, cause, diags, rs.IgnoreErrors && last)
-			}
-			a.firstStarted = true
-		}
-
-		var (
-			exit     int
-			cause    stopCause
-			tryDiags problems.Diagnostics
-			// acted are the problems an action reported: why its try
-			// failed, which, unlike a command's problems, leaves its
-			// retry: and its ignore-errors: to say what follows, as they
-			// do for a command that exits other than 0, and its warnings.
-			acted problems.Diagnostics
-			// succeeded is set for a try that succeeded: a command that
-			// exited 0, or an action that did, by itself.
-			succeeded bool
-		)
-		key := logKey{workerapi.LogStep, i, try}
-		if calls {
-			// The step's child is a run of its own, whose end is the try's,
-			// as format 1 maps it (called.end). Format 1 cleans its directory
-			// before each try after the first, as its clean-on-retry: says.
-			c := a.runChild(ctx, key, rs, s, note, vars, try > 0 && first.Retry != nil && first.Retry.CleanOnRetry)
-			if a.halted.fired() || c.cause == stopHalted {
-				end.cut = true
-				return end
-			}
-			timedOut := func(limit int64) problems.Diagnostic {
-				return a.at(problems.StepTimedOut, path, problems.Params{"limit": limit})
-			}
-			event, result, cause, reason, retry, tryDiags := c.end(rs, first, last, timedOut)
-			a.finished(workerapi.Event{Step: i, Try: try, LastTry: event == plan.OutcomeFailure && !retry, Outcome: event, ExitCode: -1, Diagnostics: slices.Concat(diags, tryDiags)})
-			end.result = plan.StepResult{Outcome: result}
-			end.cause, end.reason = cause, reason
-			if !retry {
-				return end
-			}
-			continue
-		}
-		switch {
-		case slices.Contains(platformActions, rs.Uses):
-			// As in format 1, an action fails as it runs, and the try
-			// with it, as a command that fails does: no platform here
-			// provides this one. Its log says why, as a note is.
-			acted = problems.Diagnostics{a.at(problems.ActionNeedsPlatform, path, problems.Params{"uses": rs.Uses})}
-			exit, tryDiags = -1, a.writeLog(key, noted(note, acted))
-		case rs.Uses != "":
-			// runnable lets through only an action the coordinator
-			// performs.
-			exit = -1
-			succeeded, cause, acted, tryDiags = a.runAction(ctx, key, rs, s, note)
-		default:
-			exit, cause, tryDiags = a.runCommand(key, rs, rs.Run, dir, a.stepEnv(rs, vars), s, note)
-			succeeded = cause == noStop && exit == 0
-		}
-		if a.halted.fired() {
-			end.cut = true
-			return end
-		}
-		// What a try wrote is its step's, however it ended, as in format 1.
-		outputs, outputsDiags := a.outputsWritten(out, path)
-		tryDiags = append(tryDiags, outputsDiags...)
-
-		outcome, retry := plan.OutcomeFailure, false
-		switch {
-		case cause == stopCancelled || cause == stopEarlyCancel:
-			outcome = plan.OutcomeCancelled
-		case tryDiags.HasErrors():
-		case succeeded:
-			outcome = plan.OutcomeSuccess
-		case rs.IgnoreErrors && last:
-			// As format 1: a step whose last try fails succeeds, even one
-			// a deadline stopped: its own timeout:, the job's or the
-			// run's.
-			outcome = plan.OutcomeSuccess
-		case cause == stopJobTimeout:
-			// Nor is a step a deadline stopped tried again.
-		case cause == stopStepTimeout:
-			// A step past its own timeout: isn't tried again.
-			tryDiags = append(tryDiags, a.at(problems.StepTimedOut, path, problems.Params{"limit": rs.TimeoutSeconds}))
-		case cause == stopTryTimeout:
-			tryDiags = append(tryDiags, a.at(problems.StepTimedOut, path, problems.Params{"limit": first.Retry.TimeoutSeconds}))
-			retry = !last
-		default:
-			retry = !last
-		}
-		a.finished(workerapi.Event{Step: i, Try: try, LastTry: outcome == plan.OutcomeFailure && !retry, Outcome: outcome, ExitCode: exit, Outputs: outputs, Diagnostics: slices.Concat(diags, acted, tryDiags)})
-		end.result = plan.StepResult{Outcome: outcome, Outputs: outputs}
-		end.cause = cause
-		if !retry {
+		if end.cut || !retry {
 			return end
 		}
 	}
+}
+
+// A startedTry is a try of a step that prepareTry readied and beginTry
+// started, which runCallTry or runOwnTry runs.
+type startedTry struct {
+	// i is the step's index, try the try's, from 0, and path the step's.
+	i, try int
+	path   string
+	// rs is the try as Step readied it, and first the step's first try,
+	// rs too for that one; vars are the variables the worker defines for
+	// it, and out the step's $OUTPUTS.
+	rs, first *plan.ReadyStep
+	vars      map[string]string
+	out       outputsFile
+	// diags are Step's problems with the try, and the note runnable made of
+	// it, if it made one, which note is too.
+	diags problems.Diagnostics
+	note  *problems.Diagnostic
+	// calls is set for a step whose uses: names a workflow, and dir is where
+	// one that doesn't runs.
+	calls bool
+	dir   string
+	// s says what stops the try, and last whether it is its step's last.
+	s    stops
+	last bool
+	key  logKey
+}
+
+// prepareTry readies the try try of the step at index i with the Step
+// phase, in state, as readyTry does, given first, the step's first try,
+// nil for that one, and checks that the worker can run it, and that the
+// job's stopping, if stopped is set, for why, doesn't stop it, as it
+// stops a first try that doesn't outlive it. It returns the try, which
+// beginTry starts; or, for one that can't start, nil and how the step
+// ended, from end, what its earlier tries made of it: failed, skipped or
+// not run (notRun), or cut short if the job was halted. out is the step's
+// $OUTPUTS.
+func (a *attempt) prepareTry(ctx context.Context, i, try int, state plan.JobState, first *plan.ReadyStep, stopped bool, why stopCause, out outputsFile, end stepEnd) (*startedTry, stepEnd) {
+	path := a.job.Steps[i].Path
+	rs, vars, diags, err := a.readyTry(ctx, i, state, try, first, out.path)
+	if a.halted.fired() {
+		end.cut = true
+		return nil, end
+	}
+	// A try that can't start fails its step, which isn't tried again:
+	// what stopped it would stop the next.
+	fail := func(more ...problems.Diagnostic) (*startedTry, stepEnd) {
+		a.finished(workerapi.Event{Step: i, Try: try, LastTry: true, Outcome: plan.OutcomeFailure, ExitCode: -1, Diagnostics: append(diags, more...)})
+		end.result.Outcome = plan.OutcomeFailure
+		return nil, end
+	}
+	switch {
+	case err != nil:
+		// Not the workflow's fault, but the step can't run.
+		a.log.Error("readying a step failed", "step", i, "try", try, "error", a.mask.Mask(err.Error()))
+		return fail(a.at(problems.EvaluationFailed, path, nil))
+	case diags.HasErrors() || rs == nil:
+		end.ifFailed = rs != nil && rs.IfFailed
+		return fail()
+	case rs.Skipped:
+		a.finished(workerapi.Event{Step: i, Outcome: plan.OutcomeSkipped, ExitCode: -1, Diagnostics: diags})
+		end.result.Outcome = plan.OutcomeSkipped
+		return nil, end
+	}
+	a.addMasked(rs.Masked...)
+	if try == 0 {
+		first = rs
+		if stopped && !rs.OutlivesCancel {
+			// The job stopped as the step was readied: as in format
+			// 1, it ends cancelled, or failed past the job's timeout,
+			// unless it outlives that.
+			return nil, a.notRun(i, try, end, why, diags, rs.IgnoreErrors && (rs.Retry == nil || rs.Retry.MaxRetries == 0))
+		}
+	}
+	note, refused := a.runnable(rs, path)
+	if refused != nil {
+		return fail(*refused)
+	}
+	if out.err != nil {
+		return fail(a.notStarted(out.err, path))
+	}
+	// A step that calls a workflow runs none of its own: its child's
+	// directory is made in the root's, a directory at a time
+	// (runChild).
+	calls := a.callsWorkflow(i)
+	dir := a.workingDirectory(rs)
+	if !calls {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fail(a.notStarted(err, path))
+		}
+	}
+	if note != nil {
+		diags = append(diags, *note)
+	}
+	return &startedTry{
+		i: i, try: try, path: path, rs: rs, first: first, vars: vars, out: out, diags: diags, note: note,
+		calls: calls, dir: dir, key: logKey{workerapi.LogStep, i, try},
+	}, end
+}
+
+// beginTry starts t, a try that prepareTry readied, unless what stops it
+// already has: it sets what stops it, and whether it is its step's last,
+// and reports that it starts, waiting, for the job's first step, until the
+// coordinator has stored that. It reports whether the try started, and,
+// if it didn't, how the step ended, from end (notRun).
+func (a *attempt) beginTry(t *startedTry, end stepEnd) (stepEnd, bool) {
+	rs, first := t.rs, t.first
+	// As format 1 runs a step: one that outlives its job's
+	// cancellation and timeout outlives its own timeout: too, but not
+	// its retry:'s timeout or its early-cancel:.
+	s := stops{cancellable: !first.OutlivesCancel, earlyCancel: rs.EarlyCancel == plan.EarlyCancelAnyJobFailed}
+	if !first.OutlivesCancel {
+		s.step = seconds(rs.TimeoutSeconds)
+	}
+	last := true
+	if first.Retry != nil {
+		s.try = seconds(first.Retry.TimeoutSeconds)
+		last = t.try >= first.Retry.MaxRetries
+	}
+	t.s, t.last = s, last
+	if cause := a.stopCauseOf(s); cause != noStop {
+		return a.notRun(t.i, t.try, end, cause, t.diags, rs.IgnoreErrors && last), false
+	}
+	seq := a.events.add(workerapi.Event{Time: now(), Step: t.i, Try: t.try})
+	if !a.firstStarted {
+		// Whether the workflow's code may have run must always be
+		// known: the coordinator stores that the first step is
+		// starting before it starts.
+		if cause := a.await(s, func() (bool, <-chan struct{}) { return a.events.isStored(seq) }); cause != noStop {
+			return a.notRun(t.i, t.try, end, cause, t.diags, rs.IgnoreErrors && last), false
+		}
+		a.firstStarted = true
+	}
+	return end, true
+}
+
+// runCallTry runs t, a try of a step that calls a workflow, whose child is
+// a run of its own, whose end is the try's, as format 1 maps it
+// (called.end), and reports its end. Format 1 cleans the child's directory
+// before each try after the first, as its clean-on-retry: says. It
+// returns how the step ended, from end, and whether to try it again; or
+// that it was cut short, if the job was halted.
+func (a *attempt) runCallTry(ctx context.Context, t *startedTry, end stepEnd) (stepEnd, bool) {
+	c := a.runChild(ctx, t.key, t.rs, t.s, t.note, t.vars, t.try > 0 && t.first.Retry != nil && t.first.Retry.CleanOnRetry)
+	if a.halted.fired() || c.cause == stopHalted {
+		end.cut = true
+		return end, false
+	}
+	timedOut := func(limit int64) problems.Diagnostic {
+		return a.at(problems.StepTimedOut, t.path, problems.Params{"limit": limit})
+	}
+	event, result, cause, reason, retry, tryDiags := c.end(t.rs, t.first, t.last, timedOut)
+	a.finished(workerapi.Event{Step: t.i, Try: t.try, LastTry: event == plan.OutcomeFailure && !retry, Outcome: event, ExitCode: -1, Diagnostics: slices.Concat(t.diags, tryDiags)})
+	end.result = plan.StepResult{Outcome: result}
+	end.cause, end.reason = cause, reason
+	return end, retry
+}
+
+// runOwnTry runs t, a try of a step that runs a command or uses an action,
+// reports its end, with what it wrote to $OUTPUTS, and returns how the
+// step ended, from end, and whether to try it again; or that it was cut
+// short, if the job was halted.
+func (a *attempt) runOwnTry(ctx context.Context, t *startedTry, end stepEnd) (stepEnd, bool) {
+	var (
+		exit     int
+		cause    stopCause
+		tryDiags problems.Diagnostics
+		// acted are the problems an action reported: why its try
+		// failed, which, unlike a command's problems, leaves its
+		// retry: and its ignore-errors: to say what follows, as they
+		// do for a command that exits other than 0, and its warnings.
+		acted problems.Diagnostics
+		// succeeded is set for a try that succeeded: a command that
+		// exited 0, or an action that did, by itself.
+		succeeded bool
+	)
+	rs := t.rs
+	switch {
+	case slices.Contains(platformActions, rs.Uses):
+		// As in format 1, an action fails as it runs, and the try
+		// with it, as a command that fails does: no platform here
+		// provides this one. Its log says why, as a note is.
+		acted = problems.Diagnostics{a.at(problems.ActionNeedsPlatform, t.path, problems.Params{"uses": rs.Uses})}
+		exit, tryDiags = -1, a.writeLog(t.key, noted(t.note, acted))
+	case rs.Uses != "":
+		// runnable lets through only an action the coordinator
+		// performs.
+		exit = -1
+		succeeded, cause, acted, tryDiags = a.runAction(ctx, t.key, rs, t.s, t.note)
+	default:
+		exit, cause, tryDiags = a.runCommand(t.key, rs, rs.Run, t.dir, a.stepEnv(rs, t.vars), t.s, t.note)
+		succeeded = cause == noStop && exit == 0
+	}
+	if a.halted.fired() {
+		end.cut = true
+		return end, false
+	}
+	// What a try wrote is its step's, however it ended, as in format 1.
+	outputs, outputsDiags := a.outputsWritten(t.out, t.path)
+	tryDiags = append(tryDiags, outputsDiags...)
+
+	outcome, retry := plan.OutcomeFailure, false
+	switch {
+	case cause == stopCancelled || cause == stopEarlyCancel:
+		outcome = plan.OutcomeCancelled
+	case tryDiags.HasErrors():
+	case succeeded:
+		outcome = plan.OutcomeSuccess
+	case rs.IgnoreErrors && t.last:
+		// As format 1: a step whose last try fails succeeds, even one
+		// a deadline stopped: its own timeout:, the job's or the
+		// run's.
+		outcome = plan.OutcomeSuccess
+	case cause == stopJobTimeout:
+		// Nor is a step a deadline stopped tried again.
+	case cause == stopStepTimeout:
+		// A step past its own timeout: isn't tried again.
+		tryDiags = append(tryDiags, a.at(problems.StepTimedOut, t.path, problems.Params{"limit": rs.TimeoutSeconds}))
+	case cause == stopTryTimeout:
+		tryDiags = append(tryDiags, a.at(problems.StepTimedOut, t.path, problems.Params{"limit": t.first.Retry.TimeoutSeconds}))
+		retry = !t.last
+	default:
+		retry = !t.last
+	}
+	a.finished(workerapi.Event{Step: t.i, Try: t.try, LastTry: outcome == plan.OutcomeFailure && !retry, Outcome: outcome, ExitCode: exit, Outputs: outputs, Diagnostics: slices.Concat(t.diags, acted, tryDiags)})
+	end.result = plan.StepResult{Outcome: outcome, Outputs: outputs}
+	end.cause = cause
+	return end, retry
 }
 
 // A stepTry is a try of a step with a retry:, from 0, and how many more
