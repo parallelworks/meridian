@@ -2009,7 +2009,10 @@ transaction.
   woke it meanwhile, and looks again if so; hopper applies the snooze once
   it has returned, so a wake that commits in between finds it still
   running, and is tried again, briefly apart, until hopper no longer runs
-  it. Each instance of a matrix job
+  it: a few times as the waker waits, and then in the background, further
+  apart, for up to 30 seconds, since hopper records a snooze in batches,
+  and late on a loaded host. So is a wake of a marker of a need on any
+  instance ([Matrices](#matrices)). Each instance of a matrix job
   has a supervisor of its own, which the job's inserts
   ([Matrices](#matrices)).
 - **Meridian decides what a dependency's outcome means.** Its edges let a
