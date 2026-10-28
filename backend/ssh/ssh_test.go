@@ -33,6 +33,7 @@ import (
 	"github.com/parallelworks/meridian/backend/hostproto"
 	"github.com/parallelworks/meridian/backend/ssh/internal/hostbin"
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -339,15 +340,6 @@ const (
 	helperCommand = "unset GODEBUG; exec "
 )
 
-func problemOf(t *testing.T, err error, k *problems.Kind) problems.Params {
-	t.Helper()
-	p, ok := errors.AsType[*problem.Problem](err)
-	if !ok || p.Code != k.Code() {
-		t.Fatalf("got %v, want a problem of %s", err, k.Code())
-	}
-	return p.Params
-}
-
 // TestProbe checks that Probe puts the binary on the host once, asks
 // meridian host what the host is once for each connection, and says what
 // the host's local backend says: that it can run a job now, or the
@@ -585,7 +577,7 @@ func TestUnreachable(t *testing.T) {
 			time.Sleep(100 * time.Millisecond) //nolint:forbidigo // a supervisor's snooze
 		}
 	}
-	if p := problemOf(t, fit.Problem, problems.SSHUnreachable); p["host"] != h.ln.Addr().String() || p["reason"] == "" {
+	if p := kindtest.Want(t, fit.Problem, problems.SSHUnreachable).Params; p["host"] != h.ln.Addr().String() || p["reason"] == "" {
 		t.Errorf("the problem's params are %v", p)
 	}
 	if n := h.tries.Load(); n != Tries || a.tries != Tries-1 {
@@ -815,7 +807,7 @@ func TestCallOutsideProtocol(t *testing.T) {
 		{
 			"fips", `echo "meridian: error: Meridian runs only with its cryptography in FIPS 140-3 mode $(printf '\033')[2J (fips_not_enforced)" >&2; exit 2`,
 			func(t *testing.T, m *hostproto.Message, err error) {
-				p := problemOf(t, err, problems.SSHHostHelperFailed)
+				p := kindtest.Want(t, err, problems.SSHHostHelperFailed).Params
 				reason := fmt.Sprint(p["reason"])
 				if p["host"] != "farm" || p["op"] != hostproto.OpHello || !strings.HasSuffix(reason, "(fips_not_enforced)") || strings.ContainsFunc(reason, unicode.IsControl) {
 					t.Errorf("the problem's params are %v", p)
@@ -841,7 +833,7 @@ func TestCallOutsideProtocol(t *testing.T) {
 		{
 			"problem", ready + say(unsafe) + `exit 2`,
 			func(t *testing.T, m *hostproto.Message, err error) {
-				problemOf(t, err, problems.WorkerBinaryUnsafe)
+				kindtest.Want(t, err, problems.WorkerBinaryUnsafe)
 			},
 		},
 		// The real meridian, made to refuse before it runs a command: out
@@ -849,7 +841,7 @@ func TestCallOutsideProtocol(t *testing.T) {
 		{
 			"meridian-fips", `GODEBUG=fips140=off exec '` + built.path + `' "$@"`,
 			func(t *testing.T, m *hostproto.Message, err error) {
-				p := problemOf(t, err, problems.SSHHostHelperFailed)
+				p := kindtest.Want(t, err, problems.SSHHostHelperFailed).Params
 				if reason := fmt.Sprint(p["reason"]); !strings.HasPrefix(reason, "meridian: ") || !strings.Contains(reason, string(problems.FIPSNotEnforced.Code())) {
 					t.Errorf("meridian out of FIPS 140-only mode gives %v", p)
 				}
@@ -858,7 +850,7 @@ func TestCallOutsideProtocol(t *testing.T) {
 		{
 			"meridian-flag", `exec '` + built.path + `' host --no-such-flag "$2"`,
 			func(t *testing.T, m *hostproto.Message, err error) {
-				p := problemOf(t, err, problems.SSHHostHelperFailed)
+				p := kindtest.Want(t, err, problems.SSHHostHelperFailed).Params
 				if reason := fmt.Sprint(p["reason"]); !strings.Contains(reason, string(problems.FlagUnknown.Code())) {
 					t.Errorf("meridian host with a flag it doesn't have gives %v", p)
 				}

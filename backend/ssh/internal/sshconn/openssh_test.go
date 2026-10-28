@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/internal/sshdtest"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -115,7 +116,7 @@ func TestOpenSSHUnapproved(t *testing.T) {
 	})
 	h.knownHosts(s.KnownHosts(""))
 	_, err := h.dialer().Dial(t.Context(), target)
-	p := paramsOf(t, err, problems.SSHAlgorithmsUnapproved)
+	p := kindtest.Want(t, err, problems.SSHAlgorithmsUnapproved).Params
 	if p["category"] != "key-exchange" || p["offered"] != "curve25519-sha256, curve25519-sha256@libssh.org" || p["host"] != s.Addr() {
 		t.Errorf("the problem's params are %v", p)
 	}
