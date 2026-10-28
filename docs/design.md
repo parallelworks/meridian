@@ -2172,12 +2172,12 @@ attempt's claim has of its tree, which its worker reads; and the worker's
 run of a calling step: it makes the child's directory, and cleans it as
 `clean-on-retry:` says, never following a symbolic link, asks for the
 child, waits for it, stops it as the step is stopped, and ends the step as
-below; and the coordinator's stop of a step's children, in the transaction
+below; the coordinator's stop of a step's children, in the transaction
 that ends its attempt, however it ends, and in the one that stops its run,
-or its job, as the plan says of its `if:`. The rest isn't built yet: the
-attempt isn't parked while it waits; `meridian run`, `status` and `logs`
-show a root run's own jobs alone; and a step whose `ssh:` names a host is
-refused (`step_ssh_not_supported`), as any step's is, where format 1
+or its job, as the plan says of its `if:`; and the caller's attempt parked
+while it waits. The rest isn't built yet: `meridian run`, `status` and
+`logs` show a root run's own jobs alone; and a step whose `ssh:` names a
+host is refused (`step_ssh_not_supported`), as any step's is, where format 1
 connects to the host but runs the child where its caller runs, as some
 known calls do.
 
@@ -2224,13 +2224,44 @@ known calls do.
   on each try, as format 1 does; the worker asks the coordinator for the
   child of the step's try, which creates and starts it, linked to the
   step's try, and waits for it to end, heartbeating. While it waits, its
-  attempt is parked: it keeps its lease, but on a backend that counts
-  what its member runs, as `local` does, not its member's capacity, which
-  the child's jobs need. The worker API's paths for a child, to ask for
-  it, which a repeat answers with the same child, to wait for its end, and
-  to stop it, raise the API's own version, not the plan's: a coordinator
-  refuses a worker of an older one, at its claim, for a job that calls a
-  workflow (`worker_api_too_old`).
+  attempt is parked: it keeps its lease, but lends its member's capacity
+  to the child's jobs, which need it, so that callers that wait don't
+  starve their own children.
+  - An attempt is parked for its child's jobs, and theirs, as long as the
+    child runs: placing a job, the coordinator reads the job's run's
+    callers from the store's links, the attempt whose step called the run
+    and its own run's caller, up to the root, each by its ID, a few at
+    most. So the worker says nothing more of it, and every replica sees
+    the same, after a restart too.
+  - Placement tells each member's driver the job's callers
+    (`backend.Demand.Parked`). `local`, and `ssh` through the host's
+    `local`, leave what they asked for out of what their member runs, so
+    a member that runs only the job's callers starts it now. A caller's
+    room so goes to its own descendants alone, which end before it goes
+    on, never to another job, which would still hold it then.
+  - Neither backend queues a job: a member past its capacity starts one
+    too, ranked after one that has room. So on them a caller that waits
+    no longer makes its member look busy to its own descendants' jobs.
+    Which member a child's job runs on is still the group's order among
+    those as soon to start it: keeping it on its caller's member, where
+    the caller's files are, isn't built.
+  - A caller stays counted parked while its child runs, even once a poll
+    for the child's end, or a stop of it, has failed for good and failed
+    the step (`child_request_failed`), so that the job's later steps may
+    run meanwhile, as their `if:` lets them. Its room is lent to its own
+    descendants alone even then, which share it with those steps.
+  - A batch scheduler can't give back a waiting job's allocation, and its
+    driver ignores the callers: there a caller holds its member while it
+    waits, and a child whose jobs queue behind it waits for it until the
+    caller's walltime or timeout ends it, an open question before a
+    scheduler backend runs children
+    ([Open questions](#open-questions)).
+
+  The worker API's paths for a child, to ask for it, which a repeat
+  answers with the same child, to wait for its end, and to stop it, raise
+  the API's own version, not the plan's: a coordinator refuses a worker
+  of an older one, at its claim, for a job that calls a workflow
+  (`worker_api_too_old`).
 - **Its inputs** are the step's `with:`, but its `$yaml`, `$host` and
   `$thumbnail`, as what was submitted to it: defaults are filled in and
   required inputs checked, as for any run, and, as in format 1, a value of
@@ -4948,10 +4979,19 @@ Larger features that aren't designed yet are proposed in
 - **Steps that run a workflow.** A job made only of calls to workflows
   could run on the coordinator, with no worker; 28 known jobs are. The
   worker runs every calling step, and waits for the child run, parked
-  ([Workflows a step calls](#workflows-a-step-calls)): on `local` it
-  holds its lease but not its member's capacity, but on a batch scheduler
-  a waiting job can't give back its allocation, which the child's jobs may
-  need. Decide before a scheduler backend runs children.
+  ([Workflows a step calls](#workflows-a-step-calls)): on `local` and
+  `ssh` it holds its lease, and lends its member's capacity to its own
+  descendants, but on a batch scheduler a waiting job can't give back its
+  allocation, which the child's jobs may need, and a child whose jobs
+  queue behind their caller waits for it until the caller's walltime or
+  timeout ends it. Decide before a scheduler backend runs children.
+  Format 1's answer is to run the calling job off the scheduler, on the
+  cluster's controller, through its `ssh:` hop, so that it holds no
+  allocation while it waits. Others: run a child's jobs within the
+  caller's allocation; run call-only jobs on the coordinator, which only
+  28 of the 267 calling jobs are; or give the caller's job back and place
+  it again once the child ends, which can't go on mid-job for the 239
+  calling jobs that share files, env or outputs with their other steps.
 - **The Kubernetes client.** `client-go` is a large dependency for a few API
   calls; plain HTTP against the API may be enough.
 - **How long a job may wait in a queue** before Meridian withdraws it and
