@@ -44,8 +44,8 @@ func TestCreatePinsNoEmptyCheckout(t *testing.T) {
 			t.Errorf("step %d is pinned as %+v", i, step.Checkout)
 		}
 	}
-	if len(s.pinned) != 0 || c.Plan.Version != 1 {
-		t.Errorf("Sources pinned %v, and the plan is of version %d", s.pinned, c.Plan.Version)
+	if len(s.Pinned()) != 0 || c.Plan.Version != 1 {
+		t.Errorf("Sources pinned %v, and the plan is of version %d", s.Pinned(), c.Plan.Version)
 	}
 
 	_, diags, err = compile.Create(t.Context(), "workflow.yaml", []byte(checkoutWorkflow(`{uses: parallelworks/checkout, with: {repo: "", branch: main, sparse_checkout: ["*.go"]}}`)), nil, compile.Options{Sources: s})
@@ -64,7 +64,7 @@ func TestCreatePinsCheckouts(t *testing.T) {
 		`{uses: parallelworks/checkout, with: {repo: "git@github.com:acme/tools.git", branch: v2, path: "${{ inputs.dir }}"}}`,
 		`{run: echo}`,
 	)
-	s := &testSources{commits: map[string]string{
+	s := &testSources{Commits: map[string]string{
 		"https://github.com/acme/app.git@main": pinnedCommit,
 		"git@github.com:acme/tools.git@v2":     "0123456789abcdef0123456789abcdef01234567",
 	}}
@@ -72,8 +72,8 @@ func TestCreatePinsCheckouts(t *testing.T) {
 	if err != nil || c == nil || diags.HasErrors() {
 		t.Fatal(diags, err)
 	}
-	if want := []string{"https://github.com/acme/app.git@main", "git@github.com:acme/tools.git@v2"}; !slices.Equal(s.pinned, want) {
-		t.Errorf("pinned %v, want %v", s.pinned, want)
+	if want := []string{"https://github.com/acme/app.git@main", "git@github.com:acme/tools.git@v2"}; !slices.Equal(s.Pinned(), want) {
+		t.Errorf("pinned %v, want %v", s.Pinned(), want)
 	}
 	steps := c.Plan.Jobs[0].Steps
 	for i, want := range []*plan.Checkout{
@@ -110,17 +110,17 @@ func TestCreateRefusesCheckouts(t *testing.T) {
 		{"branch from an expression", `{uses: parallelworks/checkout, with: {repo: https://h/r.git, branch: "${{ inputs.b }}"}}`, &testSources{}, *problems.CheckoutNotKnown, "/with/branch"},
 		{"another transport", `{uses: parallelworks/checkout, with: {repo: "file:///srv/r.git", branch: main}}`, &testSources{}, *problems.CheckoutRepoInvalid, "/with/repo"},
 		{"a credential", `{uses: parallelworks/checkout, with: {repo: "https://u:t@h/r.git", branch: main}}`, nil, *problems.CheckoutRepoInvalid, "/with/repo"},
-		{"a pattern", `{uses: parallelworks/checkout, with: {repo: https://h/r.git, branch: main, sparse_checkout: [ok, "*.go"]}}`, &testSources{commits: map[string]string{"https://h/r.git@main": pinnedCommit}}, *problems.CheckoutPathInvalid, "/with/sparse_checkout/1"},
+		{"a pattern", `{uses: parallelworks/checkout, with: {repo: https://h/r.git, branch: main, sparse_checkout: [ok, "*.go"]}}`, &testSources{Commits: map[string]string{"https://h/r.git@main": pinnedCommit}}, *problems.CheckoutPathInvalid, "/with/sparse_checkout/1"},
 		{"no Sources", `{uses: parallelworks/checkout, with: {repo: https://h/r.git, branch: main}}`, nil, *problems.ResolverMissing, "/uses"},
 		{"no such revision", `{uses: parallelworks/checkout, with: {repo: https://h/r.git, branch: gone}}`, &testSources{}, *problems.CheckoutNotFound, "/with/branch"},
 		{
 			"a revision git doesn't find", `{uses: parallelworks/checkout, with: {repo: https://h/r.git, branch: gone}}`,
-			&testSources{err: problems.SourceRevisionNotFound.Problem(problems.Params{"repo": "https://h/r.git", "revision": "gone", "reason": "x"}).WithCause(compile.ErrNotFound)},
+			&testSources{Err: problems.SourceRevisionNotFound.Problem(problems.Params{"repo": "https://h/r.git", "revision": "gone", "reason": "x"}).WithCause(compile.ErrNotFound)},
 			*problems.SourceRevisionNotFound, "/with/branch",
 		},
 		{
 			"access denied", `{uses: parallelworks/checkout, with: {repo: https://h/r.git, branch: main}}`,
-			&testSources{err: problems.SourceAccessDenied.Problem(problems.Params{"location": "https://h/r.git", "reason": "x"})},
+			&testSources{Err: problems.SourceAccessDenied.Problem(problems.Params{"location": "https://h/r.git", "reason": "x"})},
 			*problems.SourceAccessDenied, "/with/repo",
 		},
 	} {
@@ -140,7 +140,7 @@ func TestCreateRefusesCheckouts(t *testing.T) {
 	}
 	down := errors.New("down")
 	src := checkoutWorkflow(`{uses: parallelworks/checkout, with: {repo: https://h/r.git, branch: main}}`)
-	if _, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Sources: &testSources{err: down}}); !errors.Is(err, down) {
+	if _, _, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Sources: &testSources{Err: down}}); !errors.Is(err, down) {
 		t.Errorf("a resolver that couldn't answer: %v", err)
 	}
 }
@@ -151,7 +151,7 @@ func TestCreateRefusesCheckouts(t *testing.T) {
 // reads them; and reports what is wrong with one in that workflow's file.
 func TestCreatePinsCalledCheckouts(t *testing.T) {
 	called := "jobs:\n  b:\n    steps:\n      - uses: parallelworks/checkout\n        with: {repo: https://h/tools.git, branch: main}\n      - uses: parallelworks/checkout\n        with: {repo: 'http://h/bad.git', branch: main}\n"
-	s := &treeSources{texts: map[string]string{"github/acme/flows@main": called}}
+	s := treeSources(map[string]string{"github/acme/flows@main": called})
 	src := "jobs:\n  a:\n    steps:\n      - uses: github/acme/flows@main\n"
 	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Sources: s})
 	if err != nil {
@@ -165,7 +165,7 @@ func TestCreatePinsCalledCheckouts(t *testing.T) {
 		t.Fatalf("a run was created despite %v", errs)
 	}
 	called = strings.Replace(called, "http://h/bad.git", "https://h/good.git", 1)
-	s = &treeSources{texts: map[string]string{"github/acme/flows@main": called}}
+	s = treeSources(map[string]string{"github/acme/flows@main": called})
 	c, diags, err = compile.Create(t.Context(), "workflow.yaml", []byte(src), nil, compile.Options{Sources: s})
 	if err != nil || c == nil {
 		t.Fatal(diags, err)

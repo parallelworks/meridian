@@ -17,6 +17,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
@@ -112,7 +113,20 @@ func New(t testing.TB, opts Options) *Server {
 // NewKey returns a new ECDSA P-256 key.
 func NewKey(t testing.TB) ssh.Signer {
 	t.Helper()
+	_, s := NewKeyFile(t)
+	return s
+}
+
+// NewKeyFile returns a new ECDSA P-256 key, as a key file holds it, in
+// OpenSSH's format, and its signer: a host key for sshd, or a client's
+// key for ssh.
+func NewKeyFile(t testing.TB) ([]byte, ssh.Signer) {
+	t.Helper()
 	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(k, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +134,13 @@ func NewKey(t testing.TB) ssh.Signer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return pem.EncodeToMemory(block), s
+}
+
+// KnownHostsLine returns a known_hosts line for a host's key, under name,
+// as host or host:port.
+func KnownHostsLine(name string, key ssh.PublicKey) string {
+	return knownhosts.Line([]string{knownhosts.Normalize(name)}, key) + "\n"
 }
 
 // Addr is the server's address, as host:port.
@@ -142,7 +162,7 @@ func (s *Server) KnownHosts(name string) string {
 	defer s.mu.Unlock()
 	var b bytes.Buffer
 	for _, k := range s.hostKeys {
-		b.WriteString(knownhosts.Line([]string{knownhosts.Normalize(name)}, k.PublicKey()) + "\n")
+		b.WriteString(KnownHostsLine(name, k.PublicKey()))
 	}
 	return b.String()
 }

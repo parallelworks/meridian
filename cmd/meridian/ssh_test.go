@@ -2,10 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,14 +16,14 @@ import (
 	localbackend "github.com/parallelworks/meridian/backend/local"
 	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
+	"github.com/parallelworks/meridian/internal/opensshtest"
 	"github.com/parallelworks/meridian/internal/racetest"
-	"github.com/parallelworks/meridian/internal/sshdtest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 )
 
 // An sshHost is a host meridian runs jobs on through the ssh backend: the
 // test's own machine, through an SSH server in the test's process, or
-// OpenSSH's sshd where sshdtest.EnvSSHD names one, as CI's ssh job runs
+// OpenSSH's sshd where opensshtest.EnvSSHD names one, as CI's ssh job runs
 // these tests, whose user's home is a directory of the test's. meridian
 // reaches it as the cluster hpc of its clusters.yaml, whose host is farm,
 // an alias that the SSH config the test gives the ssh backend resolves to
@@ -41,7 +37,7 @@ type sshHost struct {
 	setUp func(*cli)
 }
 
-// An sshServer is the SSH server of an sshHost: sshtest's, or sshdtest's.
+// An sshServer is the SSH server of an sshHost: sshtest's, or opensshtest's.
 type sshServer interface {
 	Host() string
 	Port() string
@@ -70,20 +66,9 @@ func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Optio
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
 	client := t.TempDir()
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block, err := ssh.MarshalPrivateKey(k, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	key, signer := sshtest.NewKeyFile(t)
 	keyFile := filepath.Join(client, "id_ecdsa")
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(block), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.NewSignerFromKey(k)
-	if err != nil {
+	if err := os.WriteFile(keyFile, key, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	opts := sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: []string{
@@ -95,10 +80,10 @@ func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Optio
 	for _, f := range with {
 		f(&opts)
 	}
-	if sshdtest.Path() != "" {
+	if opensshtest.Path() != "" {
 		// sshd sets HOME and the rest of a session's environment itself,
 		// and then what it is told to over them.
-		h.server = sshdtest.New(t, sshdtest.Options{
+		h.server = opensshtest.New(t, opensshtest.Options{
 			Authorized: opts.Authorized, Env: opts.Env, NoForwarding: opts.NoForwarding,
 			KeyExchanges: opts.KeyExchanges, Ciphers: opts.Ciphers,
 		})
@@ -465,8 +450,8 @@ func TestSSHForwardingRefused(t *testing.T) {
 // them.
 func TestSSHAlgorithmsUnapproved(t *testing.T) {
 	parallel(t)
-	if sshdtest.Path() == "" {
-		t.Skipf("%s names no sshd, which can offer what FIPS 140-only mode doesn't run", sshdtest.EnvSSHD)
+	if opensshtest.Path() == "" {
+		t.Skipf("%s names no sshd, which can offer what FIPS 140-only mode doesn't run", opensshtest.EnvSSHD)
 	}
 	env := runEnv(t)
 	h := newSSHHost(t, env, func(o *sshtest.Options) {

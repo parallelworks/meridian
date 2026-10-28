@@ -15,6 +15,13 @@ import (
 	"github.com/parallelworks/meridian/plan"
 )
 
+// digestOf returns the digest of a workflow's text, as a plan's Source has
+// it.
+func digestOf(text []byte) string {
+	sum := sha256.Sum256(text)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // Sources gives the workflows a case's steps call, as the conformance
 // suite says (conformance.Case.Repositories): each repository the case
 // names holds the files of its directory, on its default branch, main.
@@ -40,8 +47,7 @@ func (s caseSources) Resolve(_ context.Context, ref plan.SourceRef) (*compile.Wo
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", compile.ErrNotFound, err)
 	}
-	sum := sha256.Sum256(text)
-	digest := "sha256:" + hex.EncodeToString(sum[:])
+	digest := digestOf(text)
 	owner := strings.TrimPrefix(repo, "github/")
 	return &compile.Workflow{
 		Source: plan.Source{Location: "github.com/" + owner + "/" + file, Revision: digest, Digest: digest, Ref: ref},

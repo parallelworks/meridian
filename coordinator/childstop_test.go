@@ -344,7 +344,7 @@ jobs:
 
 // cancellerSources are the workflows cancellerRoot calls: a child whose
 // job main cancels jobs, and which has a job of its own, x.
-var cancellerSources = childSources{"github/t/canceller@main": `name: inner
+var cancellerSources = childSources(map[string]string{"github/t/canceller@main": `name: inner
 jobs:
   main:
     steps:
@@ -354,7 +354,7 @@ jobs:
   x:
     steps:
       - run: echo x
-`}
+`})
 
 // TestCancelJobsInChild checks what a cancel-jobs step of a child run
 // cancels, as format 1's of a subworkflow does: the child's run is named

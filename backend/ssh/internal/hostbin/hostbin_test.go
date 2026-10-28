@@ -1,14 +1,9 @@
 package hostbin
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	jsonv2 "encoding/json/v2"
-	"encoding/pem"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/parallelworks/foundation/problem"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -68,18 +63,9 @@ func newClient(t *testing.T) *client {
 	if err := os.Mkdir(filepath.Join(c.dir, ".ssh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block, err := ssh.MarshalPrivateKey(k, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(c.dir, ".ssh", "id_ecdsa"), pem.EncodeToMemory(block))
-	if c.key, err = ssh.NewSignerFromKey(k); err != nil {
-		t.Fatal(err)
-	}
+	var key []byte
+	key, c.key = sshtest.NewKeyFile(t)
+	write(t, filepath.Join(c.dir, ".ssh", "id_ecdsa"), key)
 	return c
 }
 
@@ -140,17 +126,6 @@ func machine(t *testing.T) (string, string) {
 func digestOf(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-// paramsOf returns the params of err's problem of kind k, or fails the
-// test.
-func paramsOf(t *testing.T, err error, k *problems.Kind) problems.Params {
-	t.Helper()
-	p, ok := errors.AsType[*problem.Problem](err)
-	if !ok || p.Code != k.Code() {
-		t.Fatalf("got %v, want a problem of %s", err, k.Code())
-	}
-	return p.Params
 }
 
 // uploads counts the scripts that copied a binary.
@@ -330,7 +305,7 @@ func TestInstallUnverified(t *testing.T) {
 	r := newRig(t)
 	b := binary(t, "a meridian binary\n", digestOf("another binary\n"))
 	_, _, err := Install(t.Context(), r.conn, "farm", b)
-	p := paramsOf(t, err, problems.SSHWorkerBinaryUnverified)
+	p := kindtest.Want(t, err, problems.SSHWorkerBinaryUnverified).Params
 	if p["found"] != digestOf("a meridian binary\n") || p["digest"] != digestOf("another binary\n") || p["host"] != "farm" {
 		t.Errorf("the problem's params are %v", p)
 	}
@@ -344,14 +319,14 @@ func TestInstallUnverified(t *testing.T) {
 	liar := tools(t, map[string]string{"sha256sum": "#!/bin/sh\ncat > /dev/null\necho " + strings.TrimPrefix(digestOf("another binary\n"), "sha256:") + "  -\n"})
 	lied := newRig(t, "PATH="+liar+":"+os.Getenv("PATH"))
 	_, _, err = Install(t.Context(), lied.conn, "farm", b)
-	if p := paramsOf(t, err, problems.SSHWorkerBinaryUnverified); p["found"] != digestOf("a meridian binary\n") {
+	if p := kindtest.Want(t, err, problems.SSHWorkerBinaryUnverified).Params; p["found"] != digestOf("a meridian binary\n") {
 		t.Errorf("with a sha256sum on the user's PATH, the problem's params are %v", p)
 	}
 
 	withHostPath(t, tools(t, nil, scriptTools...))
 	bare := newRig(t)
 	_, _, err = Install(t.Context(), bare.conn, "farm", binary(t, "a meridian binary\n", ""))
-	if p := paramsOf(t, err, problems.SSHWorkerBinaryUnverified); p["found"] != "none" {
+	if p := kindtest.Want(t, err, problems.SSHWorkerBinaryUnverified).Params; p["found"] != "none" {
 		t.Errorf("the problem's params are %v", p)
 	}
 }
@@ -384,7 +359,7 @@ func TestInstallUnsafeCache(t *testing.T) {
 	}
 	r := newRig(t, "MERIDIAN_CACHE_DIR="+open)
 	_, _, err := Install(t.Context(), r.conn, "farm", b)
-	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "path_unsafe" || p["at"] != physical(t, open) || p["host"] != "farm" {
+	if p := kindtest.Want(t, err, problems.SSHHostDirUnusable).Params; p["reason"] != "path_unsafe" || p["at"] != physical(t, open) || p["host"] != "farm" {
 		t.Errorf("a cache others can write gives %v", p)
 	}
 	if _, err := os.Stat(filepath.Join(open, "bin")); err == nil {
@@ -400,7 +375,7 @@ func TestInstallUnsafeCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = Install(t.Context(), r.conn, "farm", b)
-	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "directory_not_private" || p["at"] != physical(t, bin) {
+	if p := kindtest.Want(t, err, problems.SSHHostDirUnusable).Params; p["reason"] != "directory_not_private" || p["at"] != physical(t, bin) {
 		t.Errorf("a cache directory its group can write gives %v", p)
 	}
 
@@ -419,7 +394,7 @@ func TestInstallUnsafeCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = Install(t.Context(), r.conn, "farm", b)
-	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "file_not_regular" || p["at"] != filepath.Join(physical(t, dir), "meridian") {
+	if p := kindtest.Want(t, err, problems.SSHHostDirUnusable).Params; p["reason"] != "file_not_regular" || p["at"] != filepath.Join(physical(t, dir), "meridian") {
 		t.Errorf("a link at the binary's place gives %v", p)
 	}
 
@@ -431,7 +406,7 @@ func TestInstallUnsafeCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = Install(t.Context(), r.conn, "farm", b)
-	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "file_changeable" {
+	if p := kindtest.Want(t, err, problems.SSHHostDirUnusable).Params; p["reason"] != "file_changeable" {
 		t.Errorf("a binary others can write gives %v", p)
 	}
 }
@@ -448,7 +423,7 @@ func TestInstallOwners(t *testing.T) {
 	withHostPath(t, tools(t, map[string]string{"id": "#!/bin/sh\necho " + other + "\n"}, "uname", "od", "find", "mkdir", "cat", "chmod", "mv", "rm", "sha256sum"))
 	r := newRig(t)
 	_, _, err := Install(t.Context(), r.conn, "farm", b)
-	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "path_unsafe" {
+	if p := kindtest.Want(t, err, problems.SSHHostDirUnusable).Params; p["reason"] != "path_unsafe" {
 		t.Errorf("a way through the directories of another user gives %v", p)
 	}
 
@@ -460,7 +435,7 @@ func TestInstallOwners(t *testing.T) {
 	r = newRig(t)
 	_, _, err = Install(t.Context(), r.conn, "farm", b)
 	hexDigest := strings.TrimPrefix(digestOf("a meridian binary\n"), "sha256:")
-	if p := paramsOf(t, err, problems.SSHHostDirUnusable); p["reason"] != "directory_not_private" || p["at"] != filepath.Join(physical(t, r.home), ".cache", "meridian", "bin", hexDigest) {
+	if p := kindtest.Want(t, err, problems.SSHHostDirUnusable).Params; p["reason"] != "directory_not_private" || p["at"] != filepath.Join(physical(t, r.home), ".cache", "meridian", "bin", hexDigest) {
 		t.Errorf("a directory mkdir made that others can change gives %v", p)
 	}
 }
@@ -544,7 +519,7 @@ func TestHostSystems(t *testing.T) {
 	withHostPath(t, fakeUname(t, "OpenBSD", "amd64"))
 	r := newRig(t)
 	_, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
-	if p := paramsOf(t, err, problems.SSHHostUnsupported); p["os"] != "OpenBSD" || p["arch"] != "amd64" {
+	if p := kindtest.Want(t, err, problems.SSHHostUnsupported).Params; p["os"] != "OpenBSD" || p["arch"] != "amd64" {
 		t.Errorf("the problem's params are %v", p)
 	}
 
@@ -567,7 +542,7 @@ func TestHostSystems(t *testing.T) {
 	b.goos, b.goarch, b.Dir = "freebsd", "amd64", t.TempDir()
 	_, _, err = Install(t.Context(), arm.conn, "arm", b)
 	want := filepath.Join(b.Dir, "v1.2.3", "linux-arm64", "meridian")
-	if p := paramsOf(t, err, problems.SSHWorkerBinaryMissing); p["path"] != want || p["os"] != "linux" || p["arch"] != "arm64" || p["version"] != "v1.2.3" {
+	if p := kindtest.Want(t, err, problems.SSHWorkerBinaryMissing).Params; p["path"] != want || p["os"] != "linux" || p["arch"] != "arm64" || p["version"] != "v1.2.3" {
 		t.Errorf("the problem's params are %v", p)
 	}
 	if err := os.MkdirAll(filepath.Dir(want), 0o700); err != nil {
@@ -600,7 +575,7 @@ func TestForFetched(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := b.For("arm", "linux", "arm64")
-	if p := paramsOf(t, err, problems.WorkerBinaryUnsafe); p["path"] != path || p["code"] != string(problems.FileNotRegular.Code()) {
+	if p := kindtest.Want(t, err, problems.WorkerBinaryUnsafe).Params; p["path"] != path || p["code"] != string(problems.FileNotRegular.Code()) {
 		t.Errorf("a link gives %v", p)
 	}
 	if err := os.Remove(path); err != nil {
@@ -611,7 +586,7 @@ func TestForFetched(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = b.For("arm", "linux", "arm64")
-	if p := paramsOf(t, err, problems.WorkerBinaryUnsafe); p["code"] != string(problems.FileChangeable.Code()) {
+	if p := kindtest.Want(t, err, problems.WorkerBinaryUnsafe).Params; p["code"] != string(problems.FileChangeable.Code()) {
 		t.Errorf("a binary others can write gives %v", p)
 	}
 	if err := os.Chmod(path, 0o700); err != nil {
@@ -621,7 +596,7 @@ func TestForFetched(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = b.For("arm", "linux", "arm64")
-	paramsOf(t, err, problems.WorkerBinaryUnsafe)
+	kindtest.Want(t, err, problems.WorkerBinaryUnsafe)
 	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -669,12 +644,12 @@ func TestCacheVariables(t *testing.T) {
 
 	r = newRig(t, "MERIDIAN_CACHE_DIR=cache")
 	_, _, err := Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
-	if p := paramsOf(t, err, problems.DirectoryVariableRelative); p["variable"] != "MERIDIAN_CACHE_DIR" || p["value"] != "cache" {
+	if p := kindtest.Want(t, err, problems.DirectoryVariableRelative).Params; p["variable"] != "MERIDIAN_CACHE_DIR" || p["value"] != "cache" {
 		t.Errorf("a relative MERIDIAN_CACHE_DIR gives %v", p)
 	}
 	r = newRig(t, "HOME=")
 	_, _, err = Install(t.Context(), r.conn, "farm", binary(t, "a meridian binary\n", ""))
-	paramsOf(t, err, problems.HomeUnknown)
+	kindtest.Want(t, err, problems.HomeUnknown)
 
 	home := filepath.Join(t.TempDir(), "a\n{\"said\":\"installed\",\"at\":\"2f\"}")
 	if err := os.Mkdir(home, 0o700); err != nil {

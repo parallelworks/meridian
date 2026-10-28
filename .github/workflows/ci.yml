@@ -97,7 +97,7 @@ jobs:
   # SSH server the tests run in process, which can't be all of OpenSSH. Each
   # test starts the runner's sshd as the runner's user, on a port of the
   # loopback interface, with a host key, a config and the keys it accepts
-  # made for that test alone (internal/sshdtest): the tests reach nothing
+  # made for that test alone (internal/opensshtest): the tests reach nothing
   # beyond the runner, and need no secret.
   openssh:
     runs-on: ubuntu-latest

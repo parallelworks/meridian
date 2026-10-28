@@ -25,12 +25,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/parallelworks/foundation/problem"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -163,17 +163,6 @@ func dial(t *testing.T, d *sshconn.Dialer, target sshconn.Target) *sshconn.Conn 
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c
-}
-
-// paramsOf returns the params of err's problem of kind k, or fails the
-// test.
-func paramsOf(t *testing.T, err error, k *problems.Kind) problems.Params {
-	t.Helper()
-	p, ok := errors.AsType[*problem.Problem](err)
-	if !ok || p.Code != k.Code() {
-		t.Fatalf("got %v, want a problem of %s", err, k.Code())
-	}
-	return p.Params
 }
 
 // TestAlgorithms checks that each algorithm Meridian offers runs under
@@ -310,7 +299,7 @@ func TestUnapproved(t *testing.T) {
 			addr := sshtest.Offering(t, algs)
 			h := newHome(t)
 			_, err := h.dialer().Dial(t.Context(), sshconn.Target{Host: addr})
-			p := paramsOf(t, err, problems.SSHAlgorithmsUnapproved)
+			p := kindtest.Want(t, err, problems.SSHAlgorithmsUnapproved).Params
 			if p["category"] != tc.category || p["offered"] != tc.offered || p["host"] != addr {
 				t.Errorf("the problem's params are %v", p)
 			}
@@ -340,7 +329,7 @@ func TestHostKeys(t *testing.T) {
 	t.Run("unknown", func(t *testing.T) {
 		h.knownHosts()
 		_, err := h.dialer().Dial(t.Context(), target)
-		p := paramsOf(t, err, problems.SSHHostKeyUnknown)
+		p := kindtest.Want(t, err, problems.SSHHostKeyUnknown).Params
 		if p["type"] != ssh.KeyAlgoECDSA256 || p["fingerprint"] != ssh.FingerprintSHA256(ec.PublicKey()) || p["host"] != s.Addr() {
 			t.Errorf("the problem's params are %v", p)
 		}
@@ -351,12 +340,12 @@ func TestHostKeys(t *testing.T) {
 		h.config = []string{"Host *\n  StrictHostKeyChecking no"}
 		defer func() { h.config = nil }()
 		_, err := h.dialer().Dial(t.Context(), target)
-		paramsOf(t, err, problems.SSHHostKeyUnknown)
+		kindtest.Want(t, err, problems.SSHHostKeyUnknown)
 	})
 	t.Run("changed", func(t *testing.T) {
 		h.knownHosts("# a comment\n", line(s.Addr(), other.PublicKey()))
 		_, err := h.dialer().Dial(t.Context(), target)
-		p := paramsOf(t, err, problems.SSHHostKeyChanged)
+		p := kindtest.Want(t, err, problems.SSHHostKeyChanged).Params
 		if p["file"] != h.path(".ssh", "known_hosts") || p["line"] != 2 || p["fingerprint"] != ssh.FingerprintSHA256(ec.PublicKey()) {
 			t.Errorf("the problem's params are %v", p)
 		}
@@ -364,12 +353,12 @@ func TestHostKeys(t *testing.T) {
 	t.Run("another type", func(t *testing.T) {
 		h.knownHosts(line(s.Addr(), ed.PublicKey()))
 		_, err := h.dialer().Dial(t.Context(), target)
-		paramsOf(t, err, problems.SSHHostKeyUnknown)
+		kindtest.Want(t, err, problems.SSHHostKeyUnknown)
 	})
 	t.Run("revoked", func(t *testing.T) {
 		h.knownHosts(line(s.Addr(), ec.PublicKey()), "@revoked * "+string(ssh.MarshalAuthorizedKey(ec.PublicKey())))
 		_, err := h.dialer().Dial(t.Context(), target)
-		paramsOf(t, err, problems.SSHHostKeyRevoked)
+		kindtest.Want(t, err, problems.SSHHostKeyRevoked)
 	})
 	t.Run("the type known_hosts has", func(t *testing.T) {
 		// The host has both keys; known_hosts has only the one that
@@ -408,7 +397,7 @@ func TestHostKeys(t *testing.T) {
 		h.knownHosts(line(s.Addr(), other.PublicKey()))
 		hash()
 		_, err = h.dialer().Dial(t.Context(), target)
-		if p := paramsOf(t, err, problems.SSHHostKeyChanged); p["line"] != 1 {
+		if p := kindtest.Want(t, err, problems.SSHHostKeyChanged).Params; p["line"] != 1 {
 			t.Errorf("the problem's params are %v", p)
 		}
 	})
@@ -417,7 +406,7 @@ func TestHostKeys(t *testing.T) {
 		dial(t, h.dialer(), target)
 		h.knownHosts("[127.0.0.*]:*,![127.0.0.1]:* " + string(ssh.MarshalAuthorizedKey(ec.PublicKey())))
 		_, err := h.dialer().Dial(t.Context(), target)
-		paramsOf(t, err, problems.SSHHostKeyUnknown)
+		kindtest.Want(t, err, problems.SSHHostKeyUnknown)
 	})
 }
 
@@ -465,7 +454,7 @@ func TestAuth(t *testing.T) {
 
 		h.config = []string{"Host *\n  IdentitiesOnly yes"}
 		_, err := h.dialer().Dial(t.Context(), sshconn.Target{Host: s.Addr()})
-		p := paramsOf(t, err, problems.SSHAuthFailed)
+		p := kindtest.Want(t, err, problems.SSHAuthFailed).Params
 		// The default key files hold one key, id_ecdsa, which the host
 		// doesn't take.
 		if p["keys"] != 1 || p["user"] != currentUser(t) || p["host"] != s.Addr() || len(p) != 3 {
@@ -482,7 +471,7 @@ func TestAuth(t *testing.T) {
 		s := h.server(sshtest.Options{})
 		h.knownHosts(s.KnownHosts(""))
 		_, err = h.dialer().Dial(t.Context(), sshconn.Target{Host: s.Addr()})
-		if p := paramsOf(t, err, problems.SSHAuthFailed); p["keys"] != 0 {
+		if p := kindtest.Want(t, err, problems.SSHAuthFailed).Params; p["keys"] != 0 {
 			t.Errorf("a key that needs a passphrase was offered: %v", p)
 		}
 	})
@@ -561,7 +550,7 @@ func TestConfig(t *testing.T) {
 		h := newHome(t)
 		h.config = []string{"NoSuchOption yes"}
 		_, err := h.dialer().Dial(t.Context(), sshconn.Target{Host: "farm"})
-		if p := paramsOf(t, err, problems.SSHConfigUnreadable); !strings.Contains(fmt.Sprint(p["reason"]), "nosuchoption") {
+		if p := kindtest.Want(t, err, problems.SSHConfigUnreadable).Params; !strings.Contains(fmt.Sprint(p["reason"]), "nosuchoption") {
 			t.Errorf("the reason is %q", p["reason"])
 		}
 	})
@@ -574,7 +563,7 @@ func TestConfig(t *testing.T) {
 		// A config that there is no ssh client to read isn't ignored: it
 		// could revoke the host's key.
 		_, err := d.Dial(t.Context(), sshconn.Target{Host: s.Addr()})
-		if p := paramsOf(t, err, problems.SSHClientMissing); p["path"] != d.ConfigFile || p["host"] != s.Host() {
+		if p := kindtest.Want(t, err, problems.SSHClientMissing).Params; p["path"] != d.ConfigFile || p["host"] != s.Host() {
 			t.Errorf("the problem's params are %v", p)
 		}
 		// Without one, OpenSSH's defaults apply, with a note.
@@ -595,7 +584,7 @@ func TestConfig(t *testing.T) {
 		h.knownHosts(s.KnownHosts(""))
 		h.config = []string{"Host *\n  KnownHostsCommand /bin/true %H"}
 		_, err := h.dialer().Dial(t.Context(), sshconn.Target{Host: s.Addr()})
-		paramsOf(t, err, problems.SSHKnownHostsCommand)
+		kindtest.Want(t, err, problems.SSHKnownHostsCommand)
 	})
 }
 
@@ -618,7 +607,7 @@ func TestJumps(t *testing.T) {
 		// The jump host's key is checked against its own entry.
 		h.knownHosts(s.KnownHosts(""))
 		_, err := h.dialer().Dial(t.Context(), sshconn.Target{Host: s.Addr(), JumpHost: j.Addr()})
-		if p := paramsOf(t, err, problems.SSHHostKeyUnknown); p["host"] != j.Host() {
+		if p := kindtest.Want(t, err, problems.SSHHostKeyUnknown).Params; p["host"] != j.Host() {
 			t.Errorf("the problem names %v, want the jump host", p["host"])
 		}
 	})
@@ -649,7 +638,7 @@ Host j2
 		h := newHome(t)
 		h.config = []string{"Host a\n  ProxyJump b\nHost b\n  ProxyJump a"}
 		_, err := h.dialer().Dial(t.Context(), sshconn.Target{Host: "a"})
-		paramsOf(t, err, problems.SSHProxyJumpTooDeep)
+		kindtest.Want(t, err, problems.SSHProxyJumpTooDeep)
 	})
 	t.Run("ProxyCommand", func(t *testing.T) {
 		requireSSH(t)
@@ -685,7 +674,7 @@ Host j2
 			t.Fatal(err)
 		}
 		_, err = d.Dial(t.Context(), sshconn.Target{Host: "proxied"})
-		if p := paramsOf(t, err, problems.SSHCommandUnsafe); p["path"] != shell {
+		if p := kindtest.Want(t, err, problems.SSHCommandUnsafe).Params; p["path"] != shell {
 			t.Errorf("the problem's params are %v", p)
 		}
 	})
@@ -727,7 +716,7 @@ func TestPool(t *testing.T) {
 	now := time.Now()
 	sshconn.SetClock(p, func() time.Time { return now })
 	_, err = p.Get(t.Context(), target)
-	paramsOf(t, err, problems.SSHHostKeyChanged)
+	kindtest.Want(t, err, problems.SSHHostKeyChanged)
 
 	// A failure is followed by a backoff, of a second less up to a quarter
 	// for the first, within which a Get answers at once, without dialing,
@@ -736,7 +725,7 @@ func TestPool(t *testing.T) {
 	if de, ok := errors.AsType[*sshconn.DialError](err); !ok || !de.Waiting || de.Failures != 1 || de.RetryAt.Before(now.Add(750*time.Millisecond)) || de.RetryAt.After(now.Add(time.Second)) {
 		t.Errorf("a Get within the backoff gave %v", err)
 	}
-	paramsOf(t, err, problems.SSHHostKeyChanged)
+	kindtest.Want(t, err, problems.SSHHostKeyChanged)
 }
 
 // TestPoolAnswersAtOnce checks that a pool doesn't keep its users waiting
@@ -1253,7 +1242,7 @@ func TestTargetUnsafe(t *testing.T) {
 		{"jumpNodeUser", sshconn.Target{Host: "farm", JumpHost: "j", JumpUser: "u\x00"}},
 	} {
 		_, err := d.Dial(t.Context(), tc.target)
-		p := paramsOf(t, err, problems.SSHTargetUnsafe)
+		p := kindtest.Want(t, err, problems.SSHTargetUnsafe).Params
 		value := fmt.Sprint(p["value"])
 		if p["key"] != tc.key || strings.ContainsFunc(value, unicode.IsControl) {
 			t.Errorf("%+v is refused for %v, with the value %q, want %s, its control characters escaped", tc.target, p["key"], value, tc.key)
@@ -1261,7 +1250,7 @@ func TestTargetUnsafe(t *testing.T) {
 	}
 	if _, err := d.Dial(t.Context(), sshconn.Target{Host: "farm", User: injected}); err == nil {
 		t.Fatal("a user with a newline was taken")
-	} else if p := paramsOf(t, err, problems.SSHTargetUnsafe); p["value"] != `x\nproxycommand touch `+pwned {
+	} else if p := kindtest.Want(t, err, problems.SSHTargetUnsafe).Params; p["value"] != `x\nproxycommand touch `+pwned {
 		t.Errorf("the value is %q", p["value"])
 	}
 	for _, f := range []string{filepath.Join(dir, "args"), pwned} {
@@ -1293,7 +1282,7 @@ func TestHostForms(t *testing.T) {
 		{"jumpNodeHost", sshconn.Target{Host: "farm", JumpHost: "ssh://login"}},
 	} {
 		_, err := d.Dial(t.Context(), tc.target)
-		if p := paramsOf(t, err, problems.SSHHostFormUnsupported); p["key"] != tc.key {
+		if p := kindtest.Want(t, err, problems.SSHHostFormUnsupported).Params; p["key"] != tc.key {
 			t.Errorf("%+v is refused for %v, want %s", tc.target, p["key"], tc.key)
 		}
 	}
@@ -1303,12 +1292,12 @@ func TestHostForms(t *testing.T) {
 
 	d.SSH = fakeSSH(t, dir, "proxyjump ok@j1,a`touch x`@j2\n")
 	_, err := d.Dial(t.Context(), sshconn.Target{Host: "farm"})
-	if p := paramsOf(t, err, problems.SSHProxyJumpInvalid); p["hop"] != "a`touch x`@j2" {
+	if p := kindtest.Want(t, err, problems.SSHProxyJumpInvalid).Params; p["hop"] != "a`touch x`@j2" {
 		t.Errorf("a hop whose user isn't safe gives %v", p)
 	}
 	d.SSH = fakeSSH(t, dir, "proxyjump j1\x1b[2J\n")
 	_, err = d.Dial(t.Context(), sshconn.Target{Host: "farm"})
-	if p := paramsOf(t, err, problems.SSHProxyJumpInvalid); p["hop"] != `j1\x1b[2J` {
+	if p := kindtest.Want(t, err, problems.SSHProxyJumpInvalid).Params; p["hop"] != `j1\x1b[2J` {
 		t.Errorf("a hop whose host isn't safe gives %v, its control characters escaped", p)
 	}
 }
@@ -1327,7 +1316,7 @@ func TestUsersGivenSSH(t *testing.T) {
 	d.SSH = fakeSSH(t, dir, "userknownhostsfile "+h.path(".ssh", "known_hosts")+"\n")
 	_, err := d.Dial(t.Context(), sshconn.Target{Host: s.Addr(), User: "alice", JumpHost: j.Addr(), JumpUser: "carol"})
 	// The fake prints userknownhostsfile twice, which isn't taken.
-	if p := paramsOf(t, err, problems.SSHConfigOutputUnexpected); p["keyword"] != "userknownhostsfile" {
+	if p := kindtest.Want(t, err, problems.SSHConfigOutputUnexpected).Params; p["keyword"] != "userknownhostsfile" {
 		t.Errorf("the problem's params are %v", p)
 	}
 	if err := os.Remove(filepath.Join(dir, "args")); err != nil {
@@ -1336,7 +1325,7 @@ func TestUsersGivenSSH(t *testing.T) {
 	d.SSH = fakeSSH(t, dir, "")
 	_, err = d.Dial(t.Context(), sshconn.Target{Host: s.Addr(), User: "alice", JumpHost: j.Addr(), JumpUser: "carol"})
 	// The fake's known_hosts are /dev/null, which knows no host.
-	paramsOf(t, err, problems.SSHHostKeyUnknown)
+	kindtest.Want(t, err, problems.SSHHostKeyUnknown)
 	data, err := os.ReadFile(filepath.Join(dir, "args"))
 	if err != nil {
 		t.Fatal(err)
@@ -1382,7 +1371,7 @@ func TestCertificates(t *testing.T) {
 
 	h.knownHosts(authority(other))
 	_, err := h.dialer().Dial(t.Context(), target)
-	paramsOf(t, err, problems.SSHHostKeyUnknown)
+	kindtest.Want(t, err, problems.SSHHostKeyUnknown)
 
 	// Signed by an authority known_hosts doesn't name, a certificate is
 	// checked as its key, as OpenSSH falls back to it.
@@ -1391,15 +1380,15 @@ func TestCertificates(t *testing.T) {
 
 	h.knownHosts(authority(ca), revoked(ca))
 	_, err = h.dialer().Dial(t.Context(), target)
-	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	kindtest.Want(t, err, problems.SSHHostKeyRevoked)
 	h.knownHosts(plain, revoked(ca))
 	_, err = h.dialer().Dial(t.Context(), target)
-	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	kindtest.Want(t, err, problems.SSHHostKeyRevoked)
 
 	expired := h.server(sshtest.Options{HostKeys: []ssh.Signer{certify(uint64(time.Now().Add(-time.Hour).Unix()))}})
 	h.knownHosts(authority(ca), knownhosts.Line([]string{knownhosts.Normalize(expired.Addr())}, hostKey.PublicKey())+"\n")
 	_, err = h.dialer().Dial(t.Context(), sshconn.Target{Host: expired.Addr()})
-	paramsOf(t, err, problems.SSHHostCertificateInvalid)
+	kindtest.Want(t, err, problems.SSHHostCertificateInvalid)
 }
 
 // TestHashedUnmatched checks that, where known_hosts has hashed lines and
@@ -1424,7 +1413,7 @@ func TestHashedUnmatched(t *testing.T) {
 	// No ssh, and so no ssh-keygen beside it, nor a config to read.
 	d.SSH, d.ConfigFile = filepath.Join(h.dir, "no-ssh"), h.path("no-config")
 	_, err = d.Dial(t.Context(), sshconn.Target{Host: s.Addr()})
-	if p := paramsOf(t, err, problems.SSHKnownHostsUnmatched); p["file"] != h.path(".ssh", "known_hosts") {
+	if p := kindtest.Want(t, err, problems.SSHKnownHostsUnmatched).Params; p["file"] != h.path(".ssh", "known_hosts") {
 		t.Errorf("the problem's params are %v", p)
 	}
 }
@@ -1506,7 +1495,7 @@ func TestRevokedHostKeys(t *testing.T) {
 	target, certTarget := sshconn.Target{Host: s.Addr()}, sshconn.Target{Host: certified.Addr()}
 
 	_, err = h.dialer().Dial(t.Context(), target)
-	if p := paramsOf(t, err, problems.SSHRevokedHostKeysUnreadable); p["file"] != revoked || p["host"] != s.Addr() {
+	if p := kindtest.Want(t, err, problems.SSHRevokedHostKeysUnreadable).Params; p["file"] != revoked || p["host"] != s.Addr() {
 		t.Errorf("a revoked keys file that isn't there gives %v", p)
 	}
 	list(other)
@@ -1514,23 +1503,23 @@ func TestRevokedHostKeys(t *testing.T) {
 	dial(t, h.dialer(), certTarget)
 	list(other, hostKey)
 	_, err = h.dialer().Dial(t.Context(), target)
-	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	kindtest.Want(t, err, problems.SSHHostKeyRevoked)
 	_, err = h.dialer().Dial(t.Context(), certTarget)
-	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	kindtest.Want(t, err, problems.SSHHostKeyRevoked)
 	list(ca)
 	dial(t, h.dialer(), target)
 	_, err = h.dialer().Dial(t.Context(), certTarget)
-	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	kindtest.Want(t, err, problems.SSHHostKeyRevoked)
 
 	krl(other)
 	dial(t, h.dialer(), target)
 	krl(hostKey)
 	_, err = h.dialer().Dial(t.Context(), target)
-	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	kindtest.Want(t, err, problems.SSHHostKeyRevoked)
 	krl(ca)
 	dial(t, h.dialer(), target)
 	_, err = h.dialer().Dial(t.Context(), certTarget)
-	paramsOf(t, err, problems.SSHHostKeyRevoked)
+	kindtest.Want(t, err, problems.SSHHostKeyRevoked)
 
 	// An ssh with no ssh-keygen beside it.
 	sshPath, err := exec.LookPath("ssh")
@@ -1544,7 +1533,7 @@ func TestRevokedHostKeys(t *testing.T) {
 	d := h.dialer()
 	d.SSH = alone
 	_, err = d.Dial(t.Context(), target)
-	if p := paramsOf(t, err, problems.SSHRevokedHostKeysUnreadable); p["file"] != revoked {
+	if p := kindtest.Want(t, err, problems.SSHRevokedHostKeysUnreadable).Params; p["file"] != revoked {
 		t.Errorf("a KRL there is no ssh-keygen to check gives %v", p)
 	}
 }
@@ -1560,7 +1549,7 @@ func TestCommandUnsafe(t *testing.T) {
 	}
 	d := &sshconn.Dialer{SSH: fake, Home: dir, User: "tester", Getenv: func(string) string { return "" }}
 	_, err := d.Dial(t.Context(), sshconn.Target{Host: "farm"})
-	if p := paramsOf(t, err, problems.SSHCommandUnsafe); p["path"] != fake || p["code"] != string(problems.FileChangeable.Code()) {
+	if p := kindtest.Want(t, err, problems.SSHCommandUnsafe).Params; p["path"] != fake || p["code"] != string(problems.FileChangeable.Code()) {
 		t.Errorf("the problem's params are %v", p)
 	}
 	if err := os.Chmod(fake, 0o700); err != nil {
@@ -1573,7 +1562,7 @@ func TestCommandUnsafe(t *testing.T) {
 	t.Setenv("PATH", dir)
 	d.SSH = ""
 	_, err = d.Dial(t.Context(), sshconn.Target{Host: "farm"})
-	if p := paramsOf(t, err, problems.SSHCommandUnsafe); p["path"] != fake {
+	if p := kindtest.Want(t, err, problems.SSHCommandUnsafe).Params; p["path"] != fake {
 		t.Errorf("the problem's params are %v", p)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "args")); err == nil {

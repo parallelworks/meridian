@@ -284,7 +284,7 @@ jobs:
 			hold := make(chan struct{})
 			t.Cleanup(func() { close(hold) })
 			byJob(c, map[string]testEnd{"build": {wait: hold}, "main": {wait: hold}})
-			sources := childSources{"github/t/child@main": child}
+			sources := childSources(map[string]string{"github/t/child@main": child})
 			created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(tc.root), nil,
 				compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Sources: sources})
 			if err != nil || diags.HasErrors() {

@@ -296,8 +296,8 @@ func TestCreateChildPinsCheckoutsFromRoot(t *testing.T) {
 	if err != nil || c == nil || diags.HasErrors() {
 		t.Fatal(diags, err)
 	}
-	if len(sources.pinned) > 0 {
-		t.Errorf("a child's Create asked Sources to pin %v", sources.pinned)
+	if len(sources.Pinned()) > 0 {
+		t.Errorf("a child's Create asked Sources to pin %v", sources.Pinned())
 	}
 	steps := c.Plan.Jobs[0].Steps
 	if steps[0].Checkout == nil || *steps[0].Checkout != pinned || steps[1].Checkout != nil || len(c.Plan.Checkouts) != 0 {
@@ -320,13 +320,13 @@ func TestCreateChildPinsFromRoot(t *testing.T) {
 		asked = append(asked, [2]string{caller, step})
 		return pinned, step == "/jobs/main/steps/0"
 	}}
-	sources := &treeSources{}
+	sources := treeSources(nil)
 	_, diags, err := compile.Create(t.Context(), "w.yaml", []byte(text), nil, compile.Options{Parent: parent, Sources: sources})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources.asked) > 0 {
-		t.Errorf("a child's Create asked Sources for %v", sources.asked)
+	if len(sources.Asked()) > 0 {
+		t.Errorf("a child's Create asked Sources for %v", sources.Asked())
 	}
 	errs := diags.Errors()
 	if len(errs) != 1 || errs[0].Code != problems.ChildNotPinned.Code() || errs[0].Path() != "/jobs/main/steps/1/uses" || errs[0].Params["uses"] != "github/t/b@main" {

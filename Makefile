@@ -91,7 +91,7 @@ test-386: ## Run tests on 32-bit x86, where an int is 32 bits, if this machine r
 # sshd, which SSHD names by its absolute path, as well as against the SSH
 # server the tests run in process: each starts the sshd as this machine's
 # user, on a port of the loopback interface, with a host key, a config and
-# the keys it accepts made for that test alone (internal/sshdtest). Where
+# the keys it accepts made for that test alone (internal/opensshtest). Where
 # there is no sshd, it says so and skips them, except in CI, which must run
 # them.
 SSHD ?= /usr/sbin/sshd
@@ -103,8 +103,8 @@ test-openssh: ## Run the ssh backend's tests against OpenSSH's sshd, which SSHD 
 		if [ -n "$$CI" ]; then exit 1; fi; \
 		echo "test-openssh: skipped"; exit 0; \
 	fi && \
-	echo "$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test $(TESTTAGS) -count=1 -run '$(OPENSSH_TESTS)' ./internal/sshdtest ./backend/ssh/... ./cmd/meridian" && \
-	$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test $(TESTTAGS) -count=1 -run '$(OPENSSH_TESTS)' ./internal/sshdtest ./backend/ssh/... ./cmd/meridian
+	echo "$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test $(TESTTAGS) -count=1 -run '$(OPENSSH_TESTS)' ./internal/opensshtest ./backend/ssh/... ./cmd/meridian" && \
+	$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test $(TESTTAGS) -count=1 -run '$(OPENSSH_TESTS)' ./internal/opensshtest ./backend/ssh/... ./cmd/meridian
 
 .PHONY: bench
 bench: ## Run each benchmark once, to check that it still runs
