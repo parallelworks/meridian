@@ -512,8 +512,9 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 	return nil, compile.ErrNotFound
 }
 
-// ResolveInput provides two input types, and no other: the input types
-// that name a scheduler's partitions, accounts and queues come later.
+// ResolveInput provides these input types, and no other: the other types
+// that name a platform's resources, as its regions and its other
+// Kubernetes objects, come later.
 //
 //   - execution-groups, whose value is the name of one of the config's
 //     groups. A value that names none of them is
@@ -521,6 +522,10 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 //   - compute-clusters, whose value names one of the clusters of the
 //     clusters file, or the workspace, and gives its details
 //     (resolveClusters).
+//   - Those whose value is a name, which the run reads as it was given,
+//     as format 1 gives it: a scheduler's partitions, accounts, QoS and
+//     queues, Kubernetes clusters, their namespaces and volume claims, and
+//     an organization's groups (passedThrough).
 //
 // The compiler reports a problem with the input's name.
 func (c *Config) ResolveInput(ctx context.Context, typ string, _ map[string]any, value any) (any, error) {
@@ -532,6 +537,9 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, _ map[string]any,
 	case "compute-clusters":
 		return c.resolveClusters(value)
 	default:
+		if slices.Contains(passedThrough, typ) {
+			return passThrough(value)
+		}
 		return nil, compile.ErrInputType
 	}
 	name, ok := value.(string)

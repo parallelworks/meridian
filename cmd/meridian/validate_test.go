@@ -648,6 +648,85 @@ jobs:
 	}
 }
 
+// TestValidatePlatformNames checks that the inputs whose value is a name,
+// a scheduler's, a Kubernetes cluster's or an organization group's, take
+// the name given, as format 1 does: that an account and a QoS a workflow
+// requires for an existing cluster, as one of clusters.yaml is, are
+// required here too; that, given, the run starts; and that a value that
+// isn't text is refused.
+func TestValidatePlatformNames(t *testing.T) {
+	parallel(t)
+	env := emptyEnv(t)
+	config := env[local.EnvConfigDir]
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, local.ClustersFile), []byte("hpc:\n  host: hpc-login\n  scheduler: slurm\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := writeFile(t, "w.yaml", `on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+      slurm:
+        type: group
+        items:
+          account:
+            type: slurm-accounts
+            resource: ${{ inputs.cluster }}
+            ignore: ${{ 'existing' != inputs.cluster.provider }}
+          qos:
+            type: slurm-qos
+            resource: ${{ inputs.cluster }}
+            ignore: ${{ 'existing' != inputs.cluster.provider }}
+          partition:
+            type: slurm-partitions
+            resource: ${{ inputs.cluster }}
+            optional: true
+      queue:
+        type: pbs-queues
+        resource: ${{ inputs.cluster }}
+        optional: true
+      k8s:
+        type: group
+        items:
+          cluster:
+            type: kubernetes-clusters
+          namespace:
+            type: kubernetes-namespaces
+            clusterName: ${{ inputs.k8s.cluster }}
+          pvc:
+            type: kubernetes-pvc
+            clusterName: ${{ inputs.k8s.cluster }}
+            namespace: ${{ inputs.k8s.namespace }}
+            optional: true
+      allocation:
+        type: organization-groups
+jobs:
+  main:
+    ssh:
+      remoteHost: ${{ inputs.cluster.ip }}
+    steps:
+      - run: echo "#SBATCH --account=${{ inputs.slurm.account }} --qos=${{ inputs.slurm.qos }} --partition=${{ inputs.slurm.partition }}" ${{ inputs.k8s.namespace }} ${{ inputs.allocation }}
+`)
+	named := []string{"--input", "cluster=hpc", "--input", "k8s.cluster=lab", "--input", "k8s.namespace=team", "--input", "allocation=research"}
+	args := append([]string{"validate", "--start"}, named...)
+	r := runCLI(t, env, "", append(args, workflow)...)
+	if r.code != exitInvalid || strings.Count(r.stdout, "(input_required)") != 2 || !strings.Contains(r.stdout, "slurm.account") || !strings.Contains(r.stdout, "slurm.qos") {
+		t.Errorf("meridian validate without the account and the QoS an existing cluster requires = %+v", r)
+	}
+	args = append(args, "--input", "slurm.account=physics", "--input", "slurm.qos=normal", "--input", "slurm.partition=debug", "--input", "queue=workq", "--input", "k8s.pvc=data")
+	if r := runCLI(t, env, "", append(args, workflow)...); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate with every name given = %+v", r)
+	}
+	inputs := writeFile(t, "inputs.json", `{"cluster": "hpc", "slurm": {"account": 7, "qos": "normal"}, "k8s": {"cluster": "lab", "namespace": "team"}, "allocation": "research"}`)
+	r = runCLI(t, env, "", "validate", "--start", "--inputs", inputs, workflow)
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "(input_not_text)") || !strings.Contains(r.stdout, "slurm.account") {
+		t.Errorf("meridian validate with an account that isn't text = %+v", r)
+	}
+}
+
 // TestValidateDevZero checks that a stream that never ends is read only to
 // the limit.
 func TestValidateDevZero(t *testing.T) {
