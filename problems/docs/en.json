@@ -1706,6 +1706,12 @@
       "Give the step a working-directory: inside the run's directory, or none."
     ]
   },
+  "child_not_created": {
+    "why": "A step whose uses: names a workflow runs it as a run of its own, which the coordinator creates from the step's with: as the step runs, as format 1 does. Creating it failed, as for an input it requires that the with: leaves out, so the step fails, with the run's problems after this one.",
+    "fix": [
+      "Fix the problems that follow, in the step's with: or in the workflow it calls."
+    ]
+  },
   "owner_unmapped": {
     "why": "Meridian checks that every directory on the way to its own belongs to you or to root, as OpenSSH checks the way to a user's keys. In a user namespace that doesn't map root, as unshare --user, Apptainer, bubblewrap and some CI sandboxes make, a directory whose owner isn't mapped shows as owned by nobody, so Meridian can't tell who could change it, and refuses it rather than assume.",
     "fix": [

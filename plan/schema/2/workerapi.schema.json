@@ -29,6 +29,15 @@
     },
     {
       "$ref": "#/$defs/ActionAnswer"
+    },
+    {
+      "$ref": "#/$defs/ChildRequest"
+    },
+    {
+      "$ref": "#/$defs/Child"
+    },
+    {
+      "$ref": "#/$defs/ChildStop"
     }
   ],
   "$defs": {
@@ -157,6 +166,10 @@
         "control": {
           "description": "Added in worker API version 2. What the coordinator asks of the worker as of the claim, which the worker does as it asks before anything of the job runs. A claim of version 1 has none.",
           "$ref": "#/$defs/Control"
+        },
+        "tree": {
+          "description": "Added in worker API version 3. What an attempt of a child run has of its tree. A claim of a run no step called, or of an earlier version, has none.",
+          "$ref": "#/$defs/Tree"
         }
       },
       "required": ["runID", "attemptID", "apiVersion", "planVersion", "job", "attempt", "leaseSeconds", "heartbeatSeconds", "run", "runDir"],
@@ -174,6 +187,31 @@
         }
       },
       "required": ["value"],
+      "additionalProperties": false
+    },
+    "Tree": {
+      "description": "What an attempt of a child run has of its tree: its root's identity, and the strings the worker of the step that called it masked. Every member is of worker API version 3.",
+      "type": "object",
+      "properties": {
+        "jobID": {
+          "description": "Added in worker API version 3. The root run's ID, which the job's steps read as PW_JOB_ID.",
+          "type": "string"
+        },
+        "rootDir": {
+          "description": "Added in worker API version 3. The root run's directory, which the job's steps read as PW_PARENT_JOB_DIR.",
+          "type": "string"
+        },
+        "workflowName": {
+          "description": "Added in worker API version 3. Format 1's name for the call that made the run, which the job's steps read as PW_WORKFLOW_NAME.",
+          "type": "string"
+        },
+        "masked": {
+          "description": "Added in worker API version 3. The strings the worker of the step that called the run masked, which the job's phases count as secrets' own texts.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "required": [],
       "additionalProperties": false
     },
     "Container": {
@@ -381,6 +419,119 @@
         "diagnostics": {
           "description": "Added in worker API version 3. The action's problems.",
           "$ref": "#/$defs/Diagnostics"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ChildRequest": {
+      "description": "Added in worker API version 3. A step's try asks for the child run of the workflow its uses: names, which the coordinator reads from the run's plan, at the step. A repeat is answered with the same child.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "description": "Added in worker API version 3. The step's index in its job, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "try": {
+          "description": "Added in worker API version 3. The step's try, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "with": {
+          "description": "Added in worker API version 3. The step's with:, as Step evaluated it, which the child is submitted: a mapping.",
+          "$ref": "plan.schema.json#/$defs/Data",
+          "not": {
+            "type": "null"
+          }
+        },
+        "env": {
+          "description": "Added in worker API version 3. The step's environment, which the child's env: is laid over.",
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "withPrivate": {
+          "description": "Added in worker API version 3. The parts of with: made from a variable or a password but no secret, by their paths.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "withSecrets": {
+          "description": "Added in worker API version 3. The parts of with: made from a secret, by their paths.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "envPrivate": {
+          "description": "Added in worker API version 3. The variables of env made from a variable or a password but no secret.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "envSecrets": {
+          "description": "Added in worker API version 3. The variables of env made from a secret.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "masked": {
+          "description": "Added in worker API version 3. The strings the worker masks for the step, which the child's jobs mask too.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "workingDirectory": {
+          "description": "Added in worker API version 3. The step's working directory, which the child's directory is in.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "Child": {
+      "description": "Added in worker API version 3. The child run of a step's try, as it is.",
+      "type": "object",
+      "properties": {
+        "run": {
+          "description": "Added in worker API version 3. The child run's ID, or none for a child that wasn't made.",
+          "type": "string"
+        },
+        "ended": {
+          "description": "Added in worker API version 3. Set once the child has ended.",
+          "type": "boolean"
+        },
+        "outcome": {
+          "description": "Added in worker API version 3. How the child run ended, once it has.",
+          "$ref": "plan.schema.json#/$defs/Outcome"
+        },
+        "reason": {
+          "description": "Added in worker API version 3. Why the child ended other than as its jobs did.",
+          "$ref": "plan.schema.json#/$defs/Reason"
+        },
+        "diagnostics": {
+          "description": "Added in worker API version 3. Why a child that wasn't made wasn't.",
+          "$ref": "#/$defs/Diagnostics"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ChildStop": {
+      "description": "Added in worker API version 3. Stops the child run of a step's try.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "description": "Added in worker API version 3. The step's index in its job, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "try": {
+          "description": "Added in worker API version 3. The step's try, from 0.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "reason": {
+          "description": "Added in worker API version 3. Why the step is stopped: cancelled, or timeout.",
+          "$ref": "plan.schema.json#/$defs/Reason"
         }
       },
       "required": [],

@@ -336,6 +336,8 @@ type countNotifier struct {
 	ids []string
 }
 
+func (n *countNotifier) Ended(...string) {}
+
 func (n *countNotifier) Notify(ids ...string) {
 	n.n.Add(1)
 	n.mu.Lock()

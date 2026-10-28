@@ -1983,6 +1983,13 @@
       "Da al paso un working-directory: dentro del directorio de la ejecución, o ninguno."
     ]
   },
+  "child_not_created": {
+    "title": "Ejecución del flujo de trabajo llamado no creada",
+    "why": "Un paso cuyo uses: nombra un flujo de trabajo lo ejecuta como una ejecución propia, que el coordinador crea a partir del with: del paso cuando el paso se ejecuta, como hace el formato 1. Crearla falló, por ejemplo por una entrada obligatoria que el with: no da, así que el paso falla, con los problemas de la ejecución después de este.",
+    "fix": [
+      "Corrige los problemas que siguen, en el with: del paso o en el flujo de trabajo al que llama."
+    ]
+  },
   "owner_unmapped": {
     "title": "Propietario oculto por un espacio de nombres de usuario",
     "why": "Meridian comprueba que cada directorio en el camino hacia los suyos es tuyo o de root, como OpenSSH comprueba el camino hacia las claves de un usuario. En un espacio de nombres de usuario que no asocia root, como los que crean unshare --user, Apptainer, bubblewrap y algunos entornos de CI, un directorio cuyo propietario no está asociado aparece como propiedad de nobody, así que Meridian no puede saber quién podría cambiarlo, y lo rechaza en lugar de suponerlo.",

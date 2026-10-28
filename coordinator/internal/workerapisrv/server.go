@@ -1,7 +1,7 @@
 // Package workerapisrv serves the worker API (package workerapi) for the
 // coordinator, from its store: the claims of attempts, their heartbeats,
-// control polls, step events, logs, ends and actions (docs/design.md, The
-// worker API).
+// control polls, step events, logs, ends and actions, and the child runs
+// of steps (docs/design.md, The worker API).
 //
 // The server keeps nothing between requests but the control polls it
 // holds: each request reads the store, acts, and stores what it did, so any
@@ -25,8 +25,9 @@
 // interfaces: the store; where logs go (runlog.Logs); the run's secret
 // record, opened and sealed again (Sealer); the job an attempt claims, as
 // Ready gives it again (Readier, which the coordinator gives); the
-// built-in actions steps ask the coordinator for (Actions); and whom to
-// wake once an attempt changes (Options.Wake).
+// built-in actions steps ask the coordinator for (Actions), and the child
+// runs they ask for (Children); and whom to wake once an attempt changes
+// (Options.Wake).
 package workerapisrv
 
 import (
@@ -140,6 +141,9 @@ type Options struct {
 	// Actions performs the built-in actions that attempts' steps ask the
 	// coordinator for.
 	Actions Actions
+	// Children makes and stops the child runs that attempts' steps ask
+	// for.
+	Children Children
 	// Peers says whom the server takes requests from, and for which runs.
 	// Nil means LocalPeers: the process's own user, or root, for every run.
 	Peers Peers
@@ -167,11 +171,14 @@ type Server struct {
 	sealer   Sealer
 	readier  Readier
 	actions  Actions
+	children Children
 	peers    Peers
 	maxConns int
 	wake     func(ctx context.Context, tx *store.Tx, run, job string) (func(), error)
 	log      *slog.Logger
 	polls    *polls
+	// ends are the polls for the ends of child runs the server holds.
+	ends endWaits
 	// budgets are what the server has reserved of attempts' limits on
 	// their logs (spendLogBytes).
 	budgets logBudgets
@@ -201,6 +208,7 @@ type Server struct {
 	maxEventsBytes int64
 	headerTime     time.Duration
 	bodyTime       time.Duration
+	childRecheck   time.Duration
 	// beforeEnd, if it is set, is called as an end is stored, between its
 	// checks and its transaction; and beforeClaim as a claim is, between
 	// its refusals and its transaction.
@@ -220,12 +228,15 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("workerapisrv: no Readier")
 	case opts.Actions == nil:
 		return nil, errors.New("workerapisrv: no Actions")
+	case opts.Children == nil:
+		return nil, errors.New("workerapisrv: no Children")
 	}
 	s := &Server{
-		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, actions: opts.Actions, peers: opts.Peers,
-		maxConns: opts.MaxConnections, wake: opts.Wake, log: opts.Log,
+		store: opts.Store, logs: opts.Logs, sealer: opts.Sealer, readier: opts.Readier, actions: opts.Actions, children: opts.Children,
+		peers: opts.Peers, maxConns: opts.MaxConnections, wake: opts.Wake, log: opts.Log,
 		reads: plan.Version, speaks: workerapi.Version, needs: 1, hold: workerapi.ControlWaitSeconds * time.Second, placedWait: placedWait, placedRecheck: placedRecheck,
 		maxLogBytes: MaxLogBytes, logReserve: logReserve, maxEvents: MaxEvents, maxEventsBytes: MaxEventsBytes, headerTime: headerTime, bodyTime: bodyTime,
+		childRecheck: childRecheck,
 	}
 	if s.peers == nil {
 		s.peers = LocalPeers{}
@@ -562,6 +573,9 @@ var routes = map[string]route{
 	workerapi.PathLogs:      {http.MethodPost, 1},
 	workerapi.PathComplete:  {http.MethodPost, 1},
 	workerapi.PathAction:    {http.MethodPost, workerapi.Version3},
+	workerapi.PathChild:     {http.MethodPost, workerapi.Version3},
+	workerapi.PathChildEnd:  {http.MethodGet, workerapi.Version3},
+	workerapi.PathChildStop: {http.MethodPost, workerapi.Version3},
 }
 
 // ServeHTTP serves one request of the worker API, which came on a
@@ -607,6 +621,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveComplete(w, r, a, run)
 	case workerapi.PathAction:
 		s.serveAction(w, r, a, run)
+	case workerapi.PathChild:
+		s.serveChild(w, r, a, run)
+	case workerapi.PathChildEnd:
+		s.serveChildEnd(w, r, a)
+	case workerapi.PathChildStop:
+		s.serveChildStop(w, r, a)
 	}
 }
 
