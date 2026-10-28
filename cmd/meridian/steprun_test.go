@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -170,6 +172,12 @@ func TestSSHStepRunHosts(t *testing.T) {
           echo "node ${{ needs.main.outputs.node }}"
 `)
 	hasLines(t, logs, "after step 0| east "+hosts["east"].home, "after step 0| west "+hosts["west"].home, "after step 0| node "+hosts["node"].home)
+	// The jump host forwarded the connection to node, as sshtest says;
+	// OpenSSH's sshd doesn't log it at the level opensshtest runs it at.
+	node := net.JoinHostPort(hosts["node"].server.Host(), hosts["node"].server.Port())
+	if login, ok := hosts["login"].server.(interface{ Forwards() []string }); ok && !slices.Contains(login.Forwards(), node) {
+		t.Errorf("the jump host forwarded %v, not %s", login.Forwards(), node)
+	}
 	if left, _ := filepath.Glob(filepath.Join(hosts["login"].home, ".local", "state", "meridian", "runs", "*")); len(left) > 0 {
 		t.Errorf("a step ran on the jump host: %v", left)
 	}
@@ -218,17 +226,18 @@ jobs:
 `
 
 // TestSSHStepRunStopped checks that a stop of a step on a host stops its
-// step run's worker there: its timeout:, which fails it, and the run's
-// cancel, which cancels it; and that the placement there is forgotten.
+// step run, which ends, whenever the stop comes: its timeout:, which fails
+// the step, whether its step run's worker has started on the host yet or
+// not, as the timeout runs from the try's start; and the run's cancel,
+// once the step waits on the host, which cancels it, and reaches the
+// worker there. Either way, the placement there is forgotten.
 func TestSSHStepRunStopped(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, stop string
 		end        string
 	}{
-		// Long enough for the step run's worker to start on a loaded
-		// runner, under the race detector, before the timeout stops it.
-		{"its timeout", "timeout: 10s", "run 1 finished: failure\n"},
+		{"its timeout", "timeout: 2s", "run 1 finished: failure\n"},
 		{"the run's cancel", "", "run 1 finished: cancelled (cancelled)\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,15 +245,22 @@ func TestSSHStepRunStopped(t *testing.T) {
 			env := runEnv(t)
 			h := newSSHHost(t, env)
 			running := startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", strings.Replace(sshWaiting, "STOP", tc.stop, 1)))
-			waitUntil(t, "the step to wait on the host", func() bool { return strings.Contains(running.stdout.String(), "| waiting") })
 			if tc.stop == "" {
+				waitUntil(t, "the step to wait on the host", func() bool { return strings.Contains(running.stdout.String(), "| waiting") })
 				if err := meridianProcess(t, env, "cancel", "1").cmd.Wait(); err != nil {
 					t.Fatal(err)
 				}
 			}
 			r := endedWithin(t, running)
-			if !strings.HasSuffix(r.stdout, tc.end) || strings.Contains(r.stdout, "| after") {
+			if !strings.HasSuffix(r.stdout, tc.end) || strings.Contains(r.stdout, "| after") ||
+				!strings.Contains(r.stdout, "main step 0 › run 2 finished: ") || !strings.Contains(r.stdout, "main step 0 finished: ") {
 				t.Fatalf("meridian run of a step on a host stopped = %+v", r)
+			}
+			if tc.stop != "" && !strings.Contains(r.stdout, "main step 0 finished: failure") {
+				t.Errorf("the step its timeout stopped didn't fail:\n%s", r.stdout)
+			}
+			if st := commandTest(t, env, "status", "2"); !strings.HasPrefix(st.stdout, "run 2: ended, ") {
+				t.Errorf("the step run stopped is %+v", st)
 			}
 			waitUntil(t, "the placement to be forgotten", func() bool { return len(placementsOn(h)) == 0 })
 		})
@@ -356,6 +372,55 @@ func TestSSHStepRunPrivateHost(t *testing.T) {
 		data, err := os.ReadFile(path)
 		if err == nil && bytes.Contains(data, []byte(alias)) {
 			t.Errorf("%s holds the host in the clear", path)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSSHStepRunPrivateHostUnreachable checks a step whose ssh: names its
+// host from a variable, which is private, and which can't be reached: the
+// try fails, saying so, but the host is never in the clear, in what
+// meridian run shows, or meridian logs or status, or in the run's logs or
+// its store where the run started.
+func TestSSHStepRunPrivateHostUnreachable(t *testing.T) {
+	parallel(t)
+	env := runEnv(t)
+	const alias = "h1dd3n-d0wn"
+	hosts := newSSHHosts(t, env, hostSpec{alias: alias, unreachable: true}, hostSpec{alias: "farm"})
+	if err := os.WriteFile(filepath.Join(env[local.EnvConfigDir], local.VariablesFile), []byte("vars:\n  HOST: "+alias+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := endedWithin(t, startCommand(t, env, hosts["farm"].setUp, "run", writeFile(t, "w.yaml", `jobs:
+  main:
+    steps:
+      - run: echo "on $HOME"
+        ssh: {remoteHost: "${{ vars.HOST }}"}
+`)))
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "main step 0 finished: failure") {
+		t.Fatalf("meridian run of a step on a private host that can't be reached = %+v", r)
+	}
+	var b strings.Builder
+	b.WriteString(r.stdout + r.stderr)
+	for _, args := range [][]string{{"logs", "1"}, {"logs", "2"}, {"status", "-all"}, {"status", "--format", "json", "1"}, {"status", "--format", "json", "2"}} {
+		got := commandTest(t, env, args...)
+		b.WriteString(got.stdout + got.stderr)
+	}
+	shown := b.String()
+	if strings.Contains(shown, alias) {
+		t.Errorf("meridian shows the private host:\n%s", shown)
+	}
+	if !strings.Contains(shown, "couldn't reach the host") {
+		t.Errorf("meridian doesn't say the host couldn't be reached:\n%s", shown)
+	}
+	if err := filepath.WalkDir(env[local.EnvStateDir], func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err == nil && bytes.Contains(data, []byte(alias)) {
+			t.Errorf("%s holds the private host in the clear", path)
 		}
 		return err
 	}); err != nil {

@@ -85,7 +85,10 @@ type Server struct {
 	// env is added to the environment of exec requests after
 	// Options.Env (SetEnv).
 	env []string
-	wg  sync.WaitGroup
+	// forwards are the addresses of the connections it forwarded
+	// (direct-tcpip), in order (Forwards).
+	forwards []string
+	wg       sync.WaitGroup
 }
 
 // New starts a server, which stops when the test ends.
@@ -196,6 +199,14 @@ func (s *Server) Scripts() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.scripts...)
+}
+
+// Forwards returns the addresses, host:port, of the connections the
+// server forwarded (direct-tcpip), as a jump host does, in order.
+func (s *Server) Forwards() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.forwards...)
 }
 
 // OpenSessions is how many sessions are open, of every connection's: those
@@ -377,11 +388,15 @@ func (s *Server) serve(c net.Conn) {
 				_ = nc.Reject(ssh.ConnectionFailed, "sshtest: bad request")
 				continue
 			}
-			to, err := (&net.Dialer{}).DialContext(s.t.Context(), "tcp", net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port))))
+			addr := net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port)))
+			to, err := (&net.Dialer{}).DialContext(s.t.Context(), "tcp", addr)
 			if err != nil {
 				_ = nc.Reject(ssh.ConnectionFailed, err.Error())
 				continue
 			}
+			s.mu.Lock()
+			s.forwards = append(s.forwards, addr)
+			s.mu.Unlock()
 			ch, reqs, err := nc.Accept()
 			if err != nil {
 				_ = to.Close()

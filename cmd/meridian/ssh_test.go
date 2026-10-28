@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,7 +58,7 @@ func newSSHHost(t *testing.T, env map[string]string, with ...func(*sshtest.Optio
 // clusters.yaml whose host it is, if any; the home it shares with another
 // host, by that host's alias, as a cluster's login nodes share one, or ""
 // for one of its own; and what the test changes of its server.
-// Unreachable is a host nothing listens at.
+// Unreachable is a host nothing listens at: port 1 of 127.0.0.1.
 type hostSpec struct {
 	alias, cluster, sameHome string
 	unreachable              bool
@@ -98,7 +97,9 @@ func newSSHHosts(t *testing.T, env map[string]string, specs ...hostSpec) map[str
 			fmt.Fprintf(&clusters, "%s:\n  host: %s\n", spec.cluster, spec.alias)
 		}
 		if spec.unreachable {
-			fmt.Fprintf(&config, "Host %s\n  HostName 127.0.0.1\n  Port %d\n  ConnectTimeout 1\n", spec.alias, closedPort(t))
+			// Port 1, which nothing listens at, and which no listener bound
+			// to port 0, as the tests' servers are, is given.
+			fmt.Fprintf(&config, "Host %s\n  HostName 127.0.0.1\n  Port 1\n  ConnectTimeout 1\n", spec.alias)
 			continue
 		}
 		// The user's runtime directory on the host, short enough for its
@@ -160,20 +161,6 @@ func newSSHHosts(t *testing.T, env map[string]string, specs ...hostSpec) map[str
 		t.Fatal(err)
 	}
 	return hosts
-}
-
-// closedPort returns a port on 127.0.0.1 that nothing listens at.
-func closedPort(t *testing.T) int {
-	t.Helper()
-	l, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	if err := l.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return port
 }
 
 // stopWorkers stops the workers meridian placed on h that are still
