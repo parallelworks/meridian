@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -302,7 +303,7 @@ func (d *Dialer) handshake(ctx context.Context, c *hostConfig, conn net.Conn, ad
 	}
 	if negotiation, ok := errors.AsType[*ssh.AlgorithmNegotiationError](r.err); ok {
 		return nil, problems.SSHAlgorithmsUnapproved.Problem(problems.Params{
-			"host": c.alias, "category": category(negotiation.What), "offered": strings.Join(negotiation.RequestedAlgorithms, ", "),
+			"host": c.alias, "category": category(negotiation.What), "offered": strings.Join(algorithms(negotiation.RequestedAlgorithms), ", "),
 		})
 	}
 	if strings.Contains(r.err.Error(), "ssh: unable to authenticate") {
@@ -389,3 +390,13 @@ type proxyAddr struct{}
 
 func (proxyAddr) Network() string { return "proxycommand" }
 func (proxyAddr) String() string  { return "proxycommand" }
+
+// algorithms returns names, what a host offered, without the markers
+// OpenSSH puts among its key exchanges to say what else it does, which
+// aren't algorithms: RFC 8308's ext-info-s, and its strict key exchange's
+// kex-strict-s-v00@openssh.com.
+func algorithms(names []string) []string {
+	return slices.DeleteFunc(slices.Clone(names), func(name string) bool {
+		return strings.HasPrefix(name, "ext-info-") || strings.HasPrefix(name, "kex-strict-")
+	})
+}
