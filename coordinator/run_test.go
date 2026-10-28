@@ -315,8 +315,8 @@ func TestStartQueue(t *testing.T) {
 
 	serve(t, other)
 	// Long enough for the other coordinator to have started it, if it
-	// could.
-	time.Sleep(300 * time.Millisecond) //nolint:forbidigo // what the test waits for is that nothing happens
+	// could: ten polls of its queues.
+	time.Sleep(10 * testPollInterval) //nolint:forbidigo // what the test waits for is that nothing happens
 	if r := storedRun(t, creator, id); r.State != store.RunCreated {
 		t.Fatalf("a coordinator that didn't create the run started it: %s", r.State)
 	}
