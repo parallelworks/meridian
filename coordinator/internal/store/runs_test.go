@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +25,8 @@ func testState() *compile.StartState {
 // TestStartStateKept checks that the start state Run reads is decoded once
 // a run, and kept, while the bytes the run holds are the ones it was
 // decoded from: a Start whose transaction rolled back, and the next whose
-// start state differs, has the next decoded.
+// start state differs, has the next decoded. Once the run ends, it isn't
+// kept.
 func TestStartStateKept(t *testing.T) {
 	t.Parallel()
 	s := open(t)
@@ -66,32 +68,67 @@ func TestStartStateKept(t *testing.T) {
 	if again := read(); again != first {
 		t.Error("the start state was decoded again")
 	}
+
+	kept := func() bool {
+		s.starts.mu.Lock()
+		defer s.starts.mu.Unlock()
+		n, _ := runNumber(id)
+		_, ok := s.starts.runs.Peek(n)
+		return ok
+	}
+	inTx(t, s, func(tx *Tx) error { return tx.EndRun(id, plan.OutcomeSuccess, "") })
+	if kept() {
+		t.Error("the start state was kept once the run ended")
+	}
+	if st := read(); st == nil || st.TimeoutSeconds != 90 || kept() {
+		t.Errorf("the ended run's start state is %+v, kept %v", st, kept())
+	}
 }
 
 // TestStartsForgotten checks that the store keeps the start states of the
 // runs read most recently, as many as its count and its bytes allow,
-// forgetting the one read longest ago to keep another; and doesn't keep
-// one larger than its bytes.
+// forgetting the one read longest ago to keep another; doesn't keep one
+// larger than its bytes, which forgets none of the others; keeps a run's
+// again as its bytes change; and lets go of an ended run's.
 func TestStartsForgotten(t *testing.T) {
 	t.Parallel()
-	raw, err := compile.EncodeStartState(testState())
-	if err != nil {
-		t.Fatal(err)
-	}
-	decode := func(c *startCache, n int64) *compile.StartState {
+	encode := func(st *compile.StartState) []byte {
 		t.Helper()
-		st, err := c.decode(n, raw)
+		raw, err := compile.EncodeStartState(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	raw := encode(testState())
+	size := startSize(raw)
+	decodeOf := func(c *startCache, n int64, raw []byte, ended bool) *compile.StartState {
+		t.Helper()
+		st, err := c.decode(n, raw, ended)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return st
 	}
-	if maxStarts < 1024 || maxStartBytes < 16<<20 {
+	decode := func(c *startCache, n int64) *compile.StartState {
+		t.Helper()
+		return decodeOf(c, n, raw, false)
+	}
+	kept := func(c *startCache, ns ...int64) bool {
+		for _, n := range ns {
+			if _, ok := c.runs.Peek(n); !ok {
+				return false
+			}
+		}
+		return true
+	}
+	// A tree's runs fit, as they read in turn.
+	if maxStarts < 1024 || maxStartBytes < 64<<20 {
 		t.Errorf("the store keeps %d start states, and %d bytes of them, at most: too few for a tree of runs", maxStarts, maxStartBytes)
 	}
 	for name, c := range map[string]*startCache{
 		"by count": {maxCount: 4},
-		"by bytes": {maxBytes: 4 * int64(len(raw))},
+		"by bytes": {maxBytes: 4 * size},
 	} {
 		first, second := decode(c, 1), decode(c, 2)
 		decode(c, 3)
@@ -100,7 +137,7 @@ func TestStartsForgotten(t *testing.T) {
 			t.Errorf("%s: a start state was forgotten before the store was full", name)
 		}
 		decode(c, 5)
-		if c.runs.Len() != 4 || c.bytes != 4*int64(len(raw)) {
+		if c.runs.Len() != 4 || c.bytes != 4*size {
 			t.Errorf("%s: the store keeps %d start states, of %d bytes", name, c.runs.Len(), c.bytes)
 		}
 		if again := decode(c, 1); again != first {
@@ -110,10 +147,42 @@ func TestStartsForgotten(t *testing.T) {
 			t.Errorf("%s: the start state read longest ago wasn't forgotten", name)
 		}
 	}
-	c := &startCache{maxBytes: int64(len(raw)) - 1}
-	decode(c, 1)
-	if c.runs.Len() != 0 || c.bytes != 0 {
-		t.Errorf("a start state larger than the store's bytes was kept: %d, of %d bytes", c.runs.Len(), c.bytes)
+
+	// One larger than the store's bytes isn't kept, and the full store
+	// forgets none of its others for it.
+	c := &startCache{maxBytes: 4 * size}
+	for n := range int64(4) {
+		decode(c, n+1)
+	}
+	large := testState()
+	large.Run.Inputs = plan.DataOf(map[string]any{"region": strings.Repeat("us", int(size))})
+	if st := decodeOf(c, 5, encode(large), false); st == nil || c.runs.Len() != 4 || c.bytes != 4*size || !kept(c, 1, 2, 3, 4) {
+		t.Errorf("a start state larger than the store's bytes: %v, and the store keeps %d, of %d bytes", st != nil, c.runs.Len(), c.bytes)
+	}
+
+	// A run whose bytes changed, as a Start that rolled back and another
+	// may, is decoded again, and kept for its new bytes.
+	changed := testState()
+	changed.TimeoutSeconds = 90
+	newRaw := encode(changed)
+	if st := decodeOf(c, 1, newRaw, false); st.TimeoutSeconds != 90 || c.runs.Len() != 4 || c.bytes != 3*size+startSize(newRaw) {
+		t.Errorf("run 1's start state, of new bytes, is %+v, and the store keeps %d, of %d bytes", st, c.runs.Len(), c.bytes)
+	}
+	if again := decodeOf(c, 1, newRaw, false); again.TimeoutSeconds != 90 {
+		t.Errorf("run 1's start state, read again, is %+v", again)
+	}
+
+	// An ended run's isn't kept: let go of as the store ends it, or as it
+	// reads it ended.
+	c.forget([]string{"2", "no run"})
+	if kept(c, 2) || !kept(c, 1, 3, 4) || c.bytes != 2*size+startSize(newRaw) {
+		t.Errorf("forgetting run 2, the store keeps %d, of %d bytes", c.runs.Len(), c.bytes)
+	}
+	if st := decodeOf(c, 3, raw, true); st == nil || kept(c, 3) || c.bytes != size+startSize(newRaw) {
+		t.Errorf("reading ended run 3, the store keeps %d, of %d bytes", c.runs.Len(), c.bytes)
+	}
+	if st := decodeOf(c, 6, raw, true); st == nil || kept(c, 6) {
+		t.Error("an ended run's start state was kept")
 	}
 }
 

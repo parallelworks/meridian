@@ -38,6 +38,10 @@ func testPlans(t *testing.T) (a, b *plan.Plan) {
 
 func TestPlanCache(t *testing.T) {
 	parallel(t)
+	// A tree's runs fit, as their supervisors read them in turn.
+	if planCacheCount < 1024 || planCacheBytes < 64<<20 {
+		t.Errorf("the coordinator keeps %d plans, and %d bytes of them, at most: too few for a tree of runs", planCacheCount, planCacheBytes)
+	}
 	a, b := testPlans(t)
 	runs := []*store.Run{storedPlan(t, "1", a), storedPlan(t, "2", a), storedPlan(t, "3", b)}
 
@@ -54,7 +58,7 @@ func TestPlanCache(t *testing.T) {
 	if _, ok := c.runs.Peek("1"); c.runs.Len() != 2 || ok {
 		t.Errorf("the cache holds %d plans, run 1's among them %v, want the 2 last used", c.runs.Len(), ok)
 	}
-	if c.bytes != int64(len(runs[1].Plan)+len(runs[2].Plan)) {
+	if c.bytes != planSize(runs[1].Plan)+planSize(runs[2].Plan) {
 		t.Errorf("the cache counts %d bytes", c.bytes)
 	}
 
@@ -67,16 +71,43 @@ func TestPlanCache(t *testing.T) {
 		t.Error("the cache gave the plan of the run that had the ID before")
 	}
 
-	// The bytes bound the cache too; a plan larger than it isn't kept.
-	c = newPlanCache(10, int64(len(runs[0].Plan)))
+	// The bytes bound the cache too; a plan larger than it isn't kept,
+	// and the full cache forgets none of its others for it.
+	c = newPlanCache(10, planSize(runs[0].Plan))
 	_, _ = c.get(runs[0])
 	_, _ = c.get(runs[2])
 	if _, ok := c.runs.Peek("3"); c.runs.Len() != 1 || !ok {
 		t.Errorf("the cache holds %d plans, run 3's among them %v", c.runs.Len(), ok)
 	}
-	small := newPlanCache(10, 1)
-	if p, err := small.get(runs[0]); err != nil || p == nil || small.runs.Len() != 0 {
-		t.Errorf("a plan larger than the cache: %v, %v, %d kept", p, err, small.runs.Len())
+	created, _, err := compile.Create(t.Context(), "w.yaml", []byte("jobs:\n  main:\n    steps:\n      - run: echo 0\n      - run: echo 1\n"), nil, compile.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := c.get(storedPlan(t, "4", created.Plan)); err != nil || p == nil || c.runs.Len() != 1 || c.bytes != planSize(runs[2].Plan) {
+		t.Errorf("a plan larger than the cache: %v, %v, and the cache holds %d, of %d bytes", p, err, c.runs.Len(), c.bytes)
+	}
+
+	// An ended run's plan isn't kept: let go of as the store ends the run,
+	// or as it is asked for with the run ended.
+	c = newPlanCache(10, 1<<20)
+	for _, r := range runs {
+		_, _ = c.get(r)
+	}
+	c.forget("1", "no run")
+	if _, ok := c.runs.Peek("1"); ok || c.runs.Len() != 2 || c.bytes != planSize(runs[1].Plan)+planSize(runs[2].Plan) {
+		t.Errorf("forgetting run 1, the cache holds %d, of %d bytes", c.runs.Len(), c.bytes)
+	}
+	ended := *runs[1]
+	ended.State = store.RunEnded
+	if p, err := c.get(&ended); err != nil || p == nil {
+		t.Errorf("ended run 2's plan: %v, %v", p, err)
+	}
+	if _, ok := c.runs.Peek("2"); ok || c.runs.Len() != 1 || c.bytes != planSize(runs[2].Plan) {
+		t.Errorf("asked for ended run 2's plan, the cache holds %d, of %d bytes", c.runs.Len(), c.bytes)
+	}
+	_, _ = c.get(&ended)
+	if c.runs.Len() != 1 {
+		t.Error("an ended run's plan was kept")
 	}
 
 	// A plan of another version is told without decoding it, and one
@@ -90,4 +121,20 @@ func TestPlanCache(t *testing.T) {
 	if _, kept := c.runs.Peek("5"); !errors.Is(err, plan.ErrMalformed) || kept {
 		t.Errorf("get of a plan that doesn't decode = %v", err)
 	}
+}
+
+// TestPlanForgottenAtEnd checks that the coordinator doesn't keep a run's
+// plan once the run has ended.
+func TestPlanForgottenAtEnd(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{})
+	serve(t, c)
+	id, _ := create(t, c, "jobs:\n  main:\n    steps:\n      - run: echo hi\n", nil, nil)
+	waitEnded(t, c, id)
+	waitFor(t, func() bool {
+		c.plans.mu.Lock()
+		defer c.plans.mu.Unlock()
+		_, ok := c.plans.runs.Peek(id)
+		return !ok
+	})
 }
