@@ -31,7 +31,7 @@ import (
 	"github.com/parallelworks/meridian/backend/hostproto"
 	"github.com/parallelworks/meridian/backend/ssh/internal/hostbin"
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
-	"github.com/parallelworks/meridian/backend/ssh/internal/sshtest"
+	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -131,7 +131,7 @@ type rig struct {
 
 // newRig starts a host, and a Driver that reaches it, whose connections
 // find a host that stopped answering within a second and a half.
-func newRig(t *testing.T) *rig {
+func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	t.Helper()
 	built.once.Do(func() { build(buildDir) })
 	switch {
@@ -164,10 +164,14 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.server = sshtest.New(t, sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: []string{
+	opts := sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: []string{
 		"HOME=" + r.home, "XDG_RUNTIME_DIR=" + runtimeDir,
 		"XDG_CACHE_HOME=", "XDG_STATE_HOME=", "XDG_CONFIG_HOME=", "MERIDIAN_CACHE_DIR=", "MERIDIAN_STATE_DIR=", "MERIDIAN_CONFIG_DIR=",
-	}})
+	}}
+	for _, f := range with {
+		f(&opts)
+	}
+	r.server = sshtest.New(t, opts)
 	write(t, filepath.Join(client, ".ssh", "known_hosts"), []byte(r.server.KnownHosts("")))
 	dialer := &sshconn.Dialer{
 		SSH: filepath.Join(client, "no-ssh"), ConfigFile: filepath.Join(client, "no-config"), Home: client, User: "tester",

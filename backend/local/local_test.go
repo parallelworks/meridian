@@ -272,7 +272,10 @@ func mustStart(t *testing.T, pid int) string {
 func TestPlace(t *testing.T) {
 	t.Parallel()
 	d, out := newDriver(t, "run")
-	req := backend.PlaceRequest{Attempt: "run1-build-1", BootstrapToken: "token-" + strconv.Itoa(os.Getpid()) + "-secret", Resources: backend.Resources{MilliCPU: 500}}
+	req := backend.PlaceRequest{
+		Attempt: "run1-build-1", BootstrapToken: "token-" + strconv.Itoa(os.Getpid()) + "-secret", Resources: backend.Resources{MilliCPU: 500},
+		RunDir: "/runs/run1",
+	}
 	p := place(t, d, host, req)
 	r := readReport(t, out)
 	switch {
@@ -292,6 +295,8 @@ func TestPlace(t *testing.T) {
 		t.Errorf("the placement is %+v, of worker %d", p, r.PID)
 	case p.WorkerDigest != binaryDigest(t):
 		t.Errorf("the placement says the worker's digest is %q, not %q", p.WorkerDigest, binaryDigest(t))
+	case p.RunDir != req.RunDir:
+		t.Errorf("the placement says the run's directory is %q", p.RunDir)
 	}
 	// The token is in no file of the driver's.
 	_ = filepath.WalkDir(d.State, func(path string, e fs.DirEntry, err error) error {

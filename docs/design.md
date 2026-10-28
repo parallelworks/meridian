@@ -437,12 +437,6 @@ the SHA-256 hash of its content: 218 files.
   run, so that whether it had started was a race at most, which no
   workflow can rely on. ACTIVATE takes the same fix by ending a job marked
   as cancelling as it would start it, or as it waits for its turn.
-- **`parallelworks/update-session` updates only the run's own sessions**,
-  one of those the run's `sessions:` made, which `${{ sessions.<name> }}`
-  names, a fix for security that ACTIVATE takes too. All 15 known
-  update-session steps name one of their run's own sessions, as
-  `${{ sessions.<name> }}`. It is decided, and built with update-session
-  ([Built-in actions](#built-in-actions)).
 - **`vars.*` and `org.*` read every variable of their context**, as
   `inputs.*` reads every input's value: a list of the variables' values, in
   the order of their names, with the rest of the path read from each, as in
@@ -2009,7 +2003,10 @@ transaction.
   woke it meanwhile, and looks again if so; hopper applies the snooze once
   it has returned, so a wake that commits in between finds it still
   running, and is tried again, briefly apart, until hopper no longer runs
-  it. Each instance of a matrix job
+  it: a few times as the waker waits, and then in the background, further
+  apart, for up to 30 seconds, since hopper records a snooze in batches,
+  and late on a loaded host. So is a wake of a marker of a need on any
+  instance ([Matrices](#matrices)). Each instance of a matrix job
   has a supervisor of its own, which the job's inserts
   ([Matrices](#matrices)).
 - **Meridian decides what a dependency's outcome means.** Its edges let a
@@ -2175,13 +2172,14 @@ attempt's claim has of its tree, which its worker reads; and the worker's
 run of a calling step: it makes the child's directory, and cleans it as
 `clean-on-retry:` says, never following a symbolic link, asks for the
 child, waits for it, stops it as the step is stopped, and ends the step as
-below; and the caller's attempt parked while it waits. The rest isn't
-built yet: an attempt that ends without its worker doesn't stop its
-steps' children; `meridian run`, `status` and `logs` show a root run's
-own jobs alone; and
-a step whose `ssh:` names a host is refused (`step_ssh_not_supported`), as
-any step's is, where format 1 connects to the host but runs the child
-where its caller runs, as some known calls do.
+below; the coordinator's stop of a step's children, in the transaction
+that ends its attempt, however it ends, and in the one that stops its run,
+or its job, as the plan says of its `if:`; and the caller's attempt parked
+while it waits. The rest isn't built yet: `meridian run`, `status` and
+`logs` show a root run's own jobs alone; and a step whose `ssh:` names a
+host is refused (`step_ssh_not_supported`), as any step's is, where format 1
+connects to the host but runs the child where its caller runs, as some
+known calls do.
 
 - **The whole tree is pinned when the root is created.** The compiler
   resolves each workflow the run's own steps name through the Sources
@@ -2326,13 +2324,25 @@ where its caller runs, as some known calls do.
   private, as a root's is, since what holds it is, which one elsewhere
   wouldn't be. The step fails when it runs, as its child would be created
   (`child_dir_outside`), never as the root is created, since an `if:` may
-  skip it; none of the 270 known calls sets `working-directory:`. A step's
+  skip it; none of the 270 known calls sets `working-directory:`. A
+  child's directory is on the coordinator's machine, under its caller's
+  run directory there, even where the step runs on a host, as format 1
+  prepares a subworkflow on the machine the run started on, resolving
+  the step's `working-directory:` there before it maps the run's
+  directory to the host's: a working directory a worker on a host gives
+  inside its run's directory there, as one `PW_JOB_DIR` gives, is the same
+  place in the run's directory on the coordinator's machine. A step's
   `clean-on-retry:` cleans it before the step's next try (below). The
   step's worker makes it, and cleans it, a directory at a time from its
   root's run directory, and never follows a symbolic link on the way,
   which a step of the run could leave there to put the child elsewhere:
   the step fails instead (`child_dir_unusable`), and so does the child's
-  job, as its worker makes it again (`run_dir_unusable`).
+  job, as its worker makes it again (`run_dir_unusable`). A worker on a
+  host makes and cleans the same place under its run's directory there,
+  which the child doesn't use, and the child's job, where it runs on the
+  coordinator's machine, makes the child's directory there: which side
+  makes and cleans a child's directory, for a caller on a host, isn't
+  settled yet.
 - **Its variables** are its root's: the root's Start reads the variables
   every workflow in the tree reads (`Run.TreeVariables`, which the root's
   Create finds in each pinned workflow's expressions), once, into the
@@ -2342,6 +2352,12 @@ where its caller runs, as some known calls do.
   starts it, `resume` among them, its Start in the queue every coordinator
   works. The root's record is kept until every run in its tree has ended:
   the root's finisher waits for them, and the end of each wakes it.
+- **Its sessions.** A child's `sessions:` makes its own sessions, as its
+  run's. Its `parallelworks/update-session` asks the provider as any
+  run's does, which is told the child's tree's root and the root's
+  `permissions:`, never the child's own, so that it authorizes the step
+  as format 1 does a tree's, whose sessions it makes with the root's run,
+  and whose token is the root's ([Built-in actions](#built-in-actions)).
 - **Its groups.** A job of a child, and a job that calls one, may name
   groups with `runs-on:`, which format 1 refuses in both as not supported
   yet, so no workflow format 1 runs has either: a difference that takes
@@ -2350,7 +2366,12 @@ where its caller runs, as some known calls do.
   group is built: the child runs in the group its caller's attempt was
   placed in, or its caller's run's default group where that placement is
   private, which no caller format 1 runs has; its caller's member isn't
-  built yet, and its jobs are placed on any member of the group.
+  built yet, and its jobs are placed on any member of the group. A caller
+  on the host its format 1 `ssh:` names is in no group a name finds, so
+  its child runs in its run's default group: format 1 runs a
+  subworkflow's jobs where their own `ssh:` says, or else on the machine
+  the run started on, never on its caller's host because the caller ran
+  there.
 - **Its end is its step's**, as format 1 maps it, from the child's jobs
   and its stop, rather than from its outcome:
   - a child that was cancelled, or whose caller's step stopped it, ends
@@ -2376,7 +2397,11 @@ where its caller runs, as some known calls do.
 - **Stopping it.** A calling step that is stopped stops its child, and
   waits for the child to end, its cleanups among it, as format 1's call
   returns only once its child has; the child's jobs end as any run's do
-  when it is stopped.
+  when it is stopped. The step's worker stops it, and the coordinator does
+  too, as it tells the step's job to stop, in the same transaction: the
+  children of the steps a stop of the job stops, those whose `if:` doesn't
+  outlive a cancel, for the stop's reason; and those of a step that does
+  run on, as the step does.
   - A run's cancel stops a step that doesn't outlive it, and its child
     with `cancelled`; the step ends cancelled.
   - The cancel of the step's job, as by `parallelworks/cancel-jobs`, stops
@@ -2398,13 +2423,16 @@ where its caller runs, as some known calls do.
     `early-cancel: any-job-failed`: the one place where a job's own
     timeout doesn't fail it. A job that needs it is skipped as after one
     that failed.
-  - An attempt that ends without its worker, lost, withdrawn or
-    superseded, stops the children of its steps with `cancelled`, in the
-    transaction that ends it; its job's next attempt runs its steps again,
-    with new children. A worker that is only cut off keeps its children:
-    asked again, the coordinator gives it the same.
+  - An attempt that ends, without its worker, as lost, withdrawn or
+    superseded, or with it, stops the children of its steps that haven't
+    ended with `cancelled`, in the transaction that ends it, whatever ends
+    it: nothing waits for them any more. Its job's next attempt runs its
+    steps again, with new children. A worker that is only cut off keeps
+    its children: asked again, the coordinator gives it the same.
   - A root run doesn't end while a run of its tree hasn't, which it waits
-    for.
+    for, so its tree ends before it: a stop of the root, a cancel or its
+    `timeout:`, stops the children of its steps it stops, and so on down
+    its tree, and its end waits for theirs.
 - **Each try is a child of its own.** A step's `retry:` runs the whole
   child again, evaluating its `with:` again, as in format 1: a child for
   each try, linked to it. A rerun, which is Meridian's own, makes new
@@ -2451,7 +2479,7 @@ session Sessions', and the run's jobs the coordinator's own.
 | --- | --- | --- | --- |
 | `parallelworks/checkout` | A Git repository | The coordinator, which pins it through Sources as the run is created, and sends its tree to the worker, which writes it | Works, with Git on the coordinator's host, as Sources needs |
 | `parallelworks/cancel-jobs` | Jobs of the step's run | The coordinator, asked by the worker | Works |
-| `parallelworks/update-session` | One of the run's sessions | The coordinator, through Sessions | The step fails (`resolver_missing`), as there is no local Sessions |
+| `parallelworks/update-session` | A session the run may update, as the provider decides | The coordinator, through Sessions | The step fails (`resolver_missing`), as there is no local Sessions |
 | `parallelworks/scheduler-agent`, `parallelworks/wait-for-agent` | A platform's agent on a cluster's compute node, which the first starts through the cluster's scheduler with the platform's command-line tool and credentials, and the second waits for | A platform | The step fails (`action_needs_platform`) |
 
 None of them is a no-op where nothing provides it: a step that succeeded
@@ -2469,10 +2497,8 @@ of them leaves false. That differs from a feature whose interface is
 missing, which fails to compile ([Interfaces](#interfaces)): every run
 makes its `sessions:`, but a step may never run. The worker fails a step
 that uses scheduler-agent or wait-for-agent with `action_needs_platform`
-already, and the coordinator does cancel-jobs and checkout. Until
-update-session is built, a step that uses it fails with
-`uses_not_supported`; what this section says of it is decided, and built
-next.
+already, and the coordinator does cancel-jobs, update-session and
+checkout.
 
 - **checkout.**
   - **Pinned as the run is created.** Create pins each checkout's `repo`
@@ -2590,12 +2616,19 @@ next.
     named by its workflow's `name:` and its ID, and has no slug. A
     `workflow` without a `run`, or with a negative one, fails the step, as
     in format 1 (`cancel_jobs_run_missing`). With no `jobs:`, or an empty
-    one, the step cancels its own run, as a person does, and succeeds; in
-    a child run, that is the child, as a subworkflow's in format 1. A
+    one, the step cancels its own run, as a person does, and succeeds. A
     `jobs:` that isn't a list of names, a `slug` or `workflow` that isn't
     a string, or a `run` that isn't a whole number, fails the step
     (`wrong_type`), as format 1 refuses it too; null, and `""` for a
     `slug` or `workflow`, are as if not given.
+  - **From a child run**, as format 1's from a subworkflow, the step's own
+    run is named as its root is, by the root's workflow and number, as
+    format 1 names a subworkflow's run, which is its root's: a `workflow`
+    and `run` that name the root cancel the root's jobs, or with no
+    `jobs:` the root, which stops its tree as a person's cancel does; a
+    `run` alone that names the root, or nothing, cancels the child's own,
+    as format 1's does. A child's own number, which format 1 doesn't know,
+    names another run, which fails the step.
   - A job that has ended, or is cancelled already, is left as it is. One
     that runs stops as a cancel stops it
     ([Cancellation, timeouts and cleanup](#cancellation-timeouts-and-cleanup)),
@@ -2619,15 +2652,36 @@ next.
   - A job cancelled this way doesn't fail the run, as in format 1, but the
     jobs that need it are skipped, which does, as a job they need that
     failed does.
-- **update-session** updates one of the run's own sessions, which its
-  `name` names, through Sessions, with the rest of its `with:` as it was
-  evaluated; a name that isn't one of the run's sessions' is refused, a
-  [bug fix](#bug-fixes-to-format-1). Where nothing provides Sessions, as
-  with `meridian run`, the step fails when it runs (`resolver_missing`,
-  with the interface Sessions), as a feature whose interface is missing
-  fails, but when the step runs, not as the run is created; a run with
-  `sessions:` can't start there anyway, and all 15 known update-session
-  steps are in workflows that have them.
+- **update-session** updates the session its `name` names, as text,
+  through Sessions (`Sessions.Update`), with the rest of its `with:` as
+  it was evaluated, and whether that read a variable or a password, which
+  the provider keeps private, or a secret, which it masks. A name is any
+  session's: `${{ sessions.<key> }}` gives one of the run's own, as format
+  1's does, but Meridian doesn't hold a step to those. The provider
+  decides whether the run may update the session, as format 1's platform
+  decides whether the run's token may. It is told the run, its tree's
+  root, and the root's `permissions:` to decide by: format 1 gates the top
+  workflow's alone, and a child runs with its root's token, so a workflow
+  a step calls that asks for more than its root did is given none of it.
+  - A run whose tree's `permissions:` hold `'*'` acts as the person who
+    runs it, and may update any session of their own, as they could
+    themself through the platform's API. One only shared with them it may
+    not: sharing gives a session's use, never its administration.
+  - Any other may update only a session of its own tree, which a run of
+    the tree made, as format 1 makes a tree's sessions with its root's
+    run, and only one of the person who runs it.
+
+  The coordinator asks the provider before it stores the step's answer,
+  and asks it nothing for a step that its job's cancel, or its
+  `early-cancel:`, stops. A refusal of the provider's, as of a session the
+  run may not update, fails the step, as a command that fails does, so
+  its `retry:` tries it again; a provider that can't answer is asked
+  again, as the worker repeats its request. Where nothing provides
+  Sessions, as with `meridian run`, the step fails when it runs
+  (`resolver_missing`, with the interface Sessions), as a feature whose
+  interface is missing fails, but when the step runs, not as the run is
+  created; a run with `sessions:` can't start there anyway, and all 15
+  known update-session steps are in workflows that have them.
 - **scheduler-agent and wait-for-agent** need a platform's agent, its
   command-line tool and its credentials, which Meridian has none of, so the
   step fails (`action_needs_platform`). A platform that embeds Meridian can
@@ -3565,10 +3619,10 @@ and a platform that embeds Meridian serve the same API.
   SIGKILL: the step ends as the answer says, and the stop applies from
   the step after; past it, the step ends as the stop has it, though
   the coordinator may have done the action. In an attempt of an earlier
-  version, the step fails as before (`uses_not_supported`). The
-  coordinator doesn't do update-session yet: it fails such a step with
-  `uses_not_supported`, as the worker did. The worker fails a step that
-  uses an action only a platform provides (`action_needs_platform`).
+  version, the step fails as before (`uses_not_supported`). The request
+  also says what evaluating `with:` read, which update-session's provider
+  is given. The worker fails a step that uses an action only a platform
+  provides (`action_needs_platform`).
 - **Checkout's tree:** once a checkout's action succeeded, the same
   request reads its tree (`/v1/checkout`, of version 3), which the
   coordinator serves only for that request, as a tar stream of the
@@ -3614,10 +3668,14 @@ version says what a job means; the API's says what a worker and a
 coordinator say to each other.
 
 - **One number.** The API's version is one integer, and every change to
-  the API raises it: a path, a member of a body, or a kind of event,
-  added. Version 2 added a failed try's event saying whether it was its
-  step's last, and the attempt's control in the claim's answer; version 3,
-  the request for a built-in action the coordinator performs. Neither
+  the API after a release has written its version raises it: a path, a
+  member of a body, or a kind of event, added. A version no release has
+  written yet stays open, as a plan version does until a release writes
+  it: what is added before a release joins the newest version, and the
+  release that first writes it freezes it. Version 2 added a failed try's
+  event saying whether it was its step's last, and the attempt's control
+  in the claim's answer; version 3, the request for a built-in action the
+  coordinator performs, with what evaluating its `with:` read. Neither
   side reads a member it doesn't know, so a major and a minor number,
   which tell an addition a reader can skip from one it can't, would say
   nothing more. The paths stay under `/v1/`: a version is served beside
@@ -3889,7 +3947,11 @@ own runs.
 - **A step ends when its output closes**, as in format 1, not when its
   shell exits: what it starts in the background and leaves writing to its
   output is still the step's. It runs in a process group of its own, which
-  is what SIGTERM and SIGKILL stop.
+  is what SIGTERM and SIGKILL stop. The group is sent SIGTERM once,
+  however many things stop it at once, as a halt stops a step both as a
+  step and as one of the attempt's groups: a second SIGTERM would run a
+  step's trap again, and stop what the first runs, as format 1's single
+  SIGTERM doesn't.
 - **Logs** are masked on the worker, before they leave the host, and so are
   outputs ([Outputs](#outputs)). Once an upload has sent all a log had,
   the worker starts the next no sooner than 100 ms after that one
@@ -4095,7 +4157,10 @@ it within a minute, is stopped, and isn't placed
   sends work to see it, and so do the cluster's other login nodes, which a
   reconnect to the same host name can reach. The temporary directory, where a run's directory is on the
   coordinator's own host, is each node's own. `place` chooses it, and
-  returns it.
+  returns it, and `find` too, as the local backend records it with the
+  placement; the coordinator records it with the attempt, sealed where
+  the placement is private, and gives it to the worker as it claims the
+  attempt, in place of the run's directory on the coordinator's machine.
 - **A worker starts detached**: in a session of its own, unless logind runs,
   as its directory of seats says, and ends a session's processes as it
   ends (`KillUserProcesses=yes`, as `loginctl` says). Then it starts in a
@@ -4181,10 +4246,9 @@ fall back between. So `ssh:` is deprecated in favor of execution groups:
 ### The `ssh` backend
 
 A format 1 `ssh:` makes a group of one member of the `ssh` backend, and a
-configured group can name hosts too. It isn't built yet: a member of it
-has `backend_not_built`. The coordinator connects to a host as the
-user's `ssh` would ([Connections](#connections)), and runs the local
-backend there through `meridian host`
+configured group can name hosts too. The coordinator connects to a host
+as the user's `ssh` would ([Connections](#connections)), and runs the
+local backend there through `meridian host`
 ([Backends and isolation](#backends-and-isolation)). Besides those:
 
 - **The binary on the host.** A host of the coordinator's system and
@@ -4201,14 +4265,35 @@ backend there through `meridian host`
 - **Reaching the coordinator.** One replica at a time holds a host's
   connection, under a lease in the store named by a keyed hash of the
   host and its login, so the store never holds in the clear a host that
-  came from a variable or a password. It asks the host to listen on a
-  socket in the host's sockets directory, named by the same hash, and
-  serves the worker API on what the host forwards, to the attempts placed
-  on that member only, since a forwarded connection has no user the
-  system can name. It first removes a socket that an earlier holder left
-  at the path, over which sshd's default, `StreamLocalBindUnlink no`,
+  came from a variable or a password; locally, the lease is a lock on a
+  file beside the database, as the coordinator's socket's is, and the
+  hash is keyed by a key derived from the state directory's key file. It
+  asks the host to listen on a socket in the host's sockets directory,
+  named by the same hash, and serves the worker API on what the host
+  forwards, to the attempts placed on that member only, since a forwarded
+  connection has no user the system can name: the store records the hash
+  with each attempt placed on a host, and a request on a member's socket
+  for an attempt of another member, or a request on the coordinator's own
+  socket for an attempt on a host, is refused as one with no credential
+  is. A connection forwarded over SSH takes no deadlines, so each is
+  passed through one that does, and the server's bounds on a request's
+  time hold on it too. It first removes a socket that an earlier holder
+  left at the path, over which sshd's default, `StreamLocalBindUnlink no`,
   won't listen. A host whose sshd forbids forwarding Unix sockets takes
   no workers (`ssh_forwarding_refused`); Meridian opens no port instead.
+  Each `meridian run` or `resume` of a store holds the hosts' sockets
+  that no other holds, as the attempts it places need them, and as the
+  store's attempts that haven't ended do, which it looks for every few
+  seconds; one that another holds, it waits for, and takes over once that
+  one stops. An attempt whose member it can't find, as when its group
+  can't be read, it looks for again after a wait that doubles, from 10
+  seconds to 5 minutes. A process holds a host's socket, its lease and
+  its connection until it stops, which `run` and `resume` do once their
+  runs have ended; a coordinator that outlives its runs, as a platform's
+  does, would let a host's go once no attempt placed there is left, which
+  isn't built yet. A host's connection is where the holder's last dial
+  reached: where a host's name leads to several nodes, the workers of a
+  node it no longer reaches can't reach the coordinator until it does.
 - **Which host.** A connection made again can reach another host than the
   last did, as a cluster's login nodes behind one name do, each with
   placements of its own. So a placement's ID begins with a keyed hash of
@@ -4233,9 +4318,11 @@ backend there through `meridian host`
   (`ssh_host_helper_failed`), or one of another release
   (`ssh_host_release_mismatch`), is unknown for five minutes at most. A replica that
   takes a host's connection over, as `meridian resume` does once the
-  process that held it has stopped, wakes the supervisors of the attempts
-  placed on it, which connect again; the grace after a takeover keeps
-  their leases from counting as lapsed meanwhile
+  process that held it has stopped, finds the attempts placed on it in
+  the store, by the hash they were recorded with, readies their jobs
+  again for the members' settings, which the store doesn't hold, and
+  forwards their sockets again; the grace after a takeover keeps their
+  leases from counting as lapsed meanwhile
   ([Leases and fencing](#leases-and-fencing)).
 - **A host that can't be reached** as a job is placed is tried four times,
   as format 1 tries it, each try bounded by the host's `ConnectTimeout`,
@@ -4457,6 +4544,12 @@ Meridian's must (`internal/fipsmode`).
   bound by its associated data to its store, its run and its generation.
   A platform's Keys interface wraps the data keys with its own key
   management, and the local one with AES-256-GCM under a key in a file.
+  The local key file's key is HKDF-SHA256's input too, for the keys
+  derived from it (`local.Keys.Derive`), as the one that keys the hash
+  naming a host's lease and socket: one key used both to wrap and to
+  derive, each derived key under a label of its own. A later version of
+  the key file could wrap with a key derived from it as well, keeping the
+  file's own key for deriving alone.
 - **Tokens** come from `crypto/rand` and are stored as SHA-256 hashes;
   digests are SHA-256, and a digest of what can hold a secret, as an
   action's request, is an HMAC-SHA256 under a key that HKDF-SHA256

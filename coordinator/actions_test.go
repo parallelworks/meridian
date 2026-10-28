@@ -8,9 +8,7 @@ import (
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/plan"
-	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
-	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
 // finishedStep returns the finished event of the step's try of the latest
@@ -35,40 +33,23 @@ func finishedStep(t *testing.T, c *Coordinator, id, key string, step, try int) w
 	return events[i]
 }
 
-// TestActionsNotPerformedYet checks that a step that uses an action the
-// coordinator performs, which it doesn't perform yet, asks the
-// coordinator for it, which fails it, as the worker failed it before it
-// asked: a failure that the step's if: failure() after it sees.
-func TestActionsNotPerformedYet(t *testing.T) {
+// TestNotAnAction checks that a step that runs a command, or that its job
+// doesn't have, uses no action the coordinator performs, as the worker
+// never asks for one: Act refuses it (workerapisrv.ErrNotAction).
+func TestNotAnAction(t *testing.T) {
 	t.Parallel()
 	r := newWorkerRig(t, nil)
 	id := r.create(t, []byte(`
 jobs:
   main:
     steps:
-      - uses: parallelworks/update-session
-        with:
-          name: desktop
-      - if: ${{ failure() }}
-        run: echo failed
+      - run: "true"
+      - run: "true"
 `), nil, nil)
 	serve(t, r.c)
 	run := waitEnded(t, r.c, id)
-	if run.Outcome != plan.OutcomeFailure {
+	if run.Outcome != plan.OutcomeSuccess {
 		t.Errorf("the run ended %s", run.Outcome)
-	}
-	e := finishedStep(t, r.c, id, "main", 0, 0)
-	want := problems.UsesNotSupported.At("", problems.Position{}, "/jobs/main/steps/0", problems.Params{"uses": "parallelworks/update-session"})
-	if e.Outcome != plan.OutcomeFailure || len(e.Diagnostics) != 1 || e.Diagnostics[0].Code != want.Code || e.Diagnostics[0].Pointer != want.Pointer {
-		t.Errorf("the step ended %s, with %+v", e.Outcome, e.Diagnostics)
-	}
-	j := storedJob(t, r.c, id, "main")
-	logs := r.logs.Of(id, "main", j.Attempts)
-	if got := string(logs[workerapitest.LogKey{Part: workerapi.LogStep, Step: 0}].Data); got != want.Message()+"\n" {
-		t.Errorf("the step's log is %q", got)
-	}
-	if got := string(logs[workerapitest.LogKey{Part: workerapi.LogStep, Step: 1}].Data); got != "failed\n" {
-		t.Errorf("the step after's log is %q", got)
 	}
 
 	// A step that runs a command, or that the job doesn't have, uses no

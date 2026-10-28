@@ -108,18 +108,22 @@ func runNumber(v any, pointer string) (int64, bool, *problems.Diagnostic) {
 // warns, and cancels nothing, as in format 1; a cancel of another run's
 // jobs fails the step, as one Meridian doesn't make yet.
 //
+// A child run is named as its root is, as format 1 names a subworkflow's
+// run, which is its root's, as its PW_JOB_NUMBER is (targetRun): a
+// workflow and run that name the root cancel the root's jobs, or the root,
+// as format 1's do from a subworkflow; one that names nothing, or a run
+// alone that names the root, the child's own, as format 1's do.
+//
 // Of two jobs that cancel each other at once, the second step's answer is
 // cancelled, and cancels nothing, since the first cancelled its job
 // already: Commit answers so for a step that doesn't outlive the cancel,
 // of an attempt whose control asks it.
 func (c *Coordinator) cancelJobs(ctx context.Context, call *workerapisrv.ActionCall, step *plan.Step) (workerapi.ActionAnswer, error) {
 	with, _ := call.Request.With.Get().(map[string]any)
-	p, err := c.plans.get(call.Run)
+	run, p, own, err := c.targetRun(ctx, call.Run, with)
 	if err != nil {
 		return workerapi.ActionAnswer{}, err
 	}
-	own := runName{workflow: p.Run.Name}
-	own.number, _ = strconv.ParseInt(call.Run.ID, 10, 64)
 	switch key, wrong := otherRun(with, own, step.Path+"/with"); {
 	case wrong != nil:
 		return call.Commit(ctx, step, func(*store.Tx) (workerapi.ActionAnswer, error) { return actionFailed(*wrong), nil })
@@ -133,7 +137,7 @@ func (c *Coordinator) cancelJobs(ctx context.Context, call *workerapisrv.ActionC
 		return call.Commit(ctx, step, func(*store.Tx) (workerapi.ActionAnswer, error) { return actionFailed(*wrong), nil })
 	}
 	if len(names) == 0 {
-		return c.cancelRun(ctx, call, step)
+		return c.cancelRun(ctx, call, step, run)
 	}
 	var (
 		targets []string
@@ -152,11 +156,15 @@ func (c *Coordinator) cancelJobs(ctx context.Context, call *workerapisrv.ActionC
 		}
 	}
 	by := "/jobs/" + call.Attempt.Job + "/steps/" + strconv.Itoa(call.Request.Step)
+	if run.ID != call.Run.ID {
+		// A step of a run of the tree's, which names the root's jobs.
+		by = call.Run.ID + ":" + by
+	}
 	var woken []*waking
 	answer, err := call.Commit(ctx, step, func(tx *store.Tx) (workerapi.ActionAnswer, error) {
 		woken = woken[:0]
 		for _, key := range targets {
-			ws, err := c.cancelJobTx(ctx, tx, call.Run.ID, key, by)
+			ws, err := c.cancelJobTx(ctx, tx, run.ID, key, by)
 			if err != nil {
 				return workerapi.ActionAnswer{}, err
 			}
@@ -170,12 +178,48 @@ func (c *Coordinator) cancelJobs(ctx context.Context, call *workerapisrv.ActionC
 	return answer, err
 }
 
-// cancelRun cancels the run of call's attempt, as a cancel-jobs step
-// without jobs: does, as a person cancels it (Cancel), in the transaction
-// that stores the step's answer, which is success, whether it stopped the
-// run or the run was stopped already.
-func (c *Coordinator) cancelRun(ctx context.Context, call *workerapisrv.ActionCall, step *plan.Step) (workerapi.ActionAnswer, error) {
-	paths, err := c.cancelPaths(ctx, call.Run)
+// targetRun returns the run whose jobs the cancel-jobs step of a step of
+// own, its run, cancels, as its with:, with, names it, with its plan, and
+// what format 1 names own as (runName): own, by its workflow's name and its
+// ID; but for a child run, its root's, as format 1 names a subworkflow's
+// run, and the root itself for a with: that names it by its workflow,
+// which a subworkflow's step cancels the root's jobs with in format 1.
+func (c *Coordinator) targetRun(ctx context.Context, own *store.Run, with map[string]any) (*store.Run, *plan.Plan, runName, error) {
+	p, err := c.plans.get(own)
+	if err != nil {
+		return nil, nil, runName{}, err
+	}
+	if own.Parent == nil {
+		name := runName{workflow: p.Run.Name}
+		name.number, _ = strconv.ParseInt(own.ID, 10, 64)
+		return own, p, name, nil
+	}
+	var root *store.Run
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		root, err = tx.Run(own.Parent.Root)
+		return err
+	}); err != nil {
+		return nil, nil, runName{}, err
+	}
+	rootPlan, err := c.plans.get(root)
+	if err != nil {
+		return nil, nil, runName{}, err
+	}
+	name := runName{workflow: rootPlan.Run.Name}
+	name.number, _ = strconv.ParseInt(root.ID, 10, 64)
+	if workflow, _ := with["workflow"].(string); workflow != "" {
+		return root, rootPlan, name, nil
+	}
+	return own, p, name, nil
+}
+
+// cancelRun cancels the run run, the run of call's attempt or its root, as
+// a cancel-jobs step without jobs: does, as a person cancels it (Cancel),
+// in the transaction that stores the step's answer, which is success,
+// whether it stopped the run or the run was stopped already.
+func (c *Coordinator) cancelRun(ctx context.Context, call *workerapisrv.ActionCall, step *plan.Step, run *store.Run) (workerapi.ActionAnswer, error) {
+	paths, err := c.cancelPaths(ctx, run)
 	if err != nil {
 		return workerapi.ActionAnswer{}, err
 	}
@@ -185,14 +229,14 @@ func (c *Coordinator) cancelRun(ctx context.Context, call *workerapisrv.ActionCa
 	)
 	answer, err := call.Commit(ctx, step, func(tx *store.Tx) (workerapi.ActionAnswer, error) {
 		var err error
-		if stopped, woken, err = c.stopTx(ctx, tx, call.Run.ID, plan.ReasonCancelled, paths); err != nil {
+		if stopped, woken, err = c.stopTx(ctx, tx, run.ID, plan.ReasonCancelled, paths); err != nil {
 			return workerapi.ActionAnswer{}, err
 		}
 		return workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess}, nil
 	})
 	if err == nil && stopped {
-		run := *call.Run
-		c.stopped(context.WithoutCancel(ctx), &run, plan.ReasonCancelled, paths, woken)
+		stoppedRun := *run
+		c.stopped(context.WithoutCancel(ctx), &stoppedRun, plan.ReasonCancelled, paths, woken)
 	}
 	return answer, err
 }
@@ -216,8 +260,16 @@ func (c *Coordinator) cancelJobTx(ctx context.Context, tx *store.Tx, run, key, b
 	}
 	if !betweenAttempts(a) {
 		// Its worker, told, ends it, or its supervisor does, as its
-		// attempt ended.
-		return nil, nil
+		// attempt ended; and the children of its steps the cancel stops
+		// stop now, as its worker would stop them.
+		if a == nil || a.State == store.AttemptEnded {
+			return nil, nil
+		}
+		r, err := tx.Run(run)
+		if err != nil {
+			return nil, err
+		}
+		return c.stopStepChildrenTx(ctx, tx, r, a, plan.ReasonCancelled)
 	}
 	var woken []*waking
 	if !j.ReadyAt.IsZero() {

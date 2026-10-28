@@ -85,9 +85,13 @@ func (e *StepStoppedError) Error() string {
 //   - Its directory is subworkflows/<job>/step_<n> in the step's working
 //     directory, as format 1's is, where <job> is the step's job's name, a
 //     hyphen and the instance's index for a matrix job's: one outside its
-//     root's run directory is child_dir_outside.
+//     root's run directory is child_dir_outside. It is on the
+//     coordinator's machine, under its caller's run directory there, even
+//     where the step runs on a host, as format 1 prepares a subworkflow on
+//     the machine the run started on (childPlace).
 //   - It runs in the group the step's attempt was placed in, or, for one
-//     whose placement is private, its run's default group.
+//     whose placement is private, or is on the host a format 1 ssh:
+//     names, its run's default group (childPlace).
 //   - One transaction stores it, linked to the step's try (store.Link), as
 //     CreateRun stores a run, with its Start in the queue every coordinator
 //     works: its variables are its root's, so any replica starts it.
@@ -200,8 +204,12 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 		}
 		text = w.Text
 	}
-	dir := plan.ChildDir(parent.RunDir, req.WorkingDirectory, attempt.Job, req.Step)
-	if rel, err := filepath.Rel(root.RunDir, dir); err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+	wd, group, err := c.childPlace(ctx, parent, attempt, req.WorkingDirectory)
+	if err != nil {
+		return "", nil, err
+	}
+	dir := plan.ChildDir(parent.RunDir, wd, attempt.Job, req.Step)
+	if !within(root.RunDir, dir) {
 		return "", nil, problems.ChildDirOutside.Problem(problems.Params{"dir": dir})
 	}
 	vars, err := c.rootVariables(ctx, root.ID)
@@ -228,10 +236,6 @@ func (c *Coordinator) CreateChild(ctx context.Context, req ChildRequest) (string
 	})
 	if err != nil || created == nil {
 		return "", diags, err
-	}
-	group := attempt.Placement.Group
-	if group == "" {
-		group = parent.DefaultGroup
 	}
 	if c.beforeChildStore != nil {
 		c.beforeChildStore()
@@ -306,6 +310,59 @@ func privateNames(with, env []string) []string {
 		out = append(out, plan.JoinPath("env", name))
 	}
 	return out
+}
+
+// childPlace returns where the child of a step of the attempt a, of run,
+// is prepared, as format 1 prepares a subworkflow: the step's working
+// directory, wd, as the step's worker gives it, as the child's directory
+// takes it (plan.ChildDir), and the group the child runs in.
+//
+//   - Format 1 prepares a subworkflow on the machine the run started on,
+//     even for a step on a host, and so resolves the step's
+//     working-directory: there, before it maps the run's directory to the
+//     host's. A worker on a host gives a working directory on the host,
+//     which, where it is inside the attempt's run directory there
+//     (attemptRunDir), as one that PW_JOB_DIR gives is, is taken relative
+//     to it: the child's directory is the same place under the run's
+//     directory on the coordinator's machine. One elsewhere is as it is.
+//   - The child runs in the group the attempt was placed in, as the
+//     group's other members can run its jobs, but for one placed in the
+//     group of one member that a format 1 ssh: makes (plan.Target.Inline),
+//     which no name finds, and one whose placement is private, whose group
+//     the store doesn't hold in the clear: then in its run's default
+//     group, as format 1 runs a subworkflow's jobs where their own ssh:
+//     says, or else on the machine the run started on, and never on its
+//     caller's host because the caller ran there.
+func (c *Coordinator) childPlace(ctx context.Context, run *store.Run, a *store.Attempt, wd string) (string, string, error) {
+	if filepath.IsAbs(wd) {
+		memberDir, err := c.attemptRunDir(ctx, run, a)
+		if err != nil {
+			return "", "", err
+		}
+		if memberDir != "" && within(memberDir, wd) {
+			if wd, err = filepath.Rel(memberDir, wd); err != nil {
+				return "", "", err
+			}
+		}
+	}
+	group := a.Placement.Group
+	if group == "" {
+		return wd, run.DefaultGroup, nil
+	}
+	r, err := c.readyJob(ctx, run, a.Job)
+	if err != nil {
+		return "", "", err
+	}
+	if r.result != nil && r.result.Job != nil && r.result.Job.Target.Inline != nil {
+		group = run.DefaultGroup
+	}
+	return wd, group, nil
+}
+
+// within reports whether path is dir, or inside it.
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
 }
 
 // treeVariables are a child run's organization and user variables: those

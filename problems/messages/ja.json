@@ -368,6 +368,7 @@
   "ssh_host_missing": "ssh バックエンドのメンバー {member} はホストを示していません。remoteHost が空のため、Meridian はそこでジョブを実行できません。",
   "ssh_unreachable": "Meridian は 4 回試しましたが、SSH でホスト {host} に到達できませんでした: {reason}。",
   "ssh_host_helper_failed": "{host} 上の Meridian の補助プログラム meridian host は、{op} に応答する前に停止しました: {reason}。",
+  "ssh_forwarding_refused": "{host} の sshd は、そこにある Meridian のワーカーのために {path} で待ち受けないため、ワーカーはコーディネーターに到達できません。",
   "ssh_host_release_mismatch": "{host} 上の Meridian の補助プログラム meridian host はリリース {release} で、コーディネーターのリリース {expected} ではないため、Meridian はそれを操作しません。",
   "ssh_placement_elsewhere": "Meridian の {host} への接続は、ワーカーを配置したノードではなく別のノードに届くため、ワーカーがまだ動いているかどうかを判断できません。",
   "worker_token_not_taken": "Meridian が起動したワーカーはブートストラップトークンを受け取りませんでした。{ended, select, true {先に終了コード {exit} で終了しました} other {1 分以内に要求しなかったため、Meridian が停止しました}}。ワーカーが標準エラー出力に書いた内容は {log} にあります。",

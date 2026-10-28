@@ -14,7 +14,8 @@ import (
 // runProcess runs cmd, in a process group of its own, which it reports to
 // started, with what it prints on its standard output and error written to
 // out, until it has exited and closed its output. When stop asks it to,
-// it sends the group SIGTERM, and SIGKILL when the latest request says,
+// it sends the group SIGTERM, through terminate, which sends it once, and
+// SIGKILL when the latest request says,
 // which a later request can make sooner, never later; then it stops
 // reading the output afterKill later, should something the step started
 // keep it open. It returns the command's exit status, -1 if a signal ended
@@ -23,7 +24,7 @@ import (
 // A step ends when its output closes, as in format 1, not when its shell
 // exits: what it starts in the background and leaves writing to it is
 // still the step's.
-func runProcess(cmd *exec.Cmd, out io.Writer, stop <-chan stopRequest, started func(group int)) (int, stopCause, error) {
+func runProcess(cmd *exec.Cmd, out io.Writer, stop <-chan stopRequest, started, terminate func(group int)) (int, stopCause, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return -1, noStop, err
@@ -73,7 +74,7 @@ func runProcess(cmd *exec.Cmd, out io.Writer, stop <-chan stopRequest, started f
 		case req := <-stop:
 			if cause == noStop {
 				cause = req.cause
-				signalGroup(group, syscall.SIGTERM)
+				terminate(group)
 			}
 			if killAt.IsZero() || req.kill.Before(killAt) {
 				killAt, afterKill = req.kill, req.afterKill

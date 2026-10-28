@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -49,6 +51,7 @@ type Keys struct {
 
 	mu   sync.Mutex
 	aead cipher.AEAD
+	key  []byte
 }
 
 var _ coordinator.Keys = (*Keys)(nil)
@@ -92,6 +95,20 @@ func (k *Keys) Unwrap(ctx context.Context, runID string, wrapped []byte) ([]byte
 		return nil, problems.KeyUnwrapFailed.Problem(problems.Params{"run": runID, "path": filepath.Join(k.dir, KeyFile)})
 	}
 	return key, nil
+}
+
+// Derive returns a key of size bytes for purpose, derived from the key
+// file's key with HKDF-SHA256, which it creates if it isn't there: as a
+// key that names what a store's runs reach, which the same key file gives
+// each time, and from which no one can tell the key file's.
+func (k *Keys) Derive(purpose string, size int) ([]byte, error) {
+	if _, err := k.cipher(true); err != nil {
+		return nil, err
+	}
+	k.mu.Lock()
+	secret := k.key
+	k.mu.Unlock()
+	return hkdf.Key(sha256.New, secret, nil, "meridian "+purpose, size)
 }
 
 // associated is the associated data of the data key of the run runID's
@@ -142,7 +159,7 @@ func (k *Keys) cipher(create bool) (cipher.AEAD, error) {
 	if err != nil {
 		return nil, err
 	}
-	k.aead = aead
+	k.aead, k.key = aead, key
 	return aead, nil
 }
 

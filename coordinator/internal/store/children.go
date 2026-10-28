@@ -49,6 +49,45 @@ func (tx *Tx) Child(attempt string, step, try int) (string, error) {
 	return runID(n), nil
 }
 
+// A LiveChild is a child run that hasn't ended, of a try of a step of an
+// attempt's job (Tx.LiveChildren).
+type LiveChild struct {
+	// ID is the run's ID, Attempt the ID of the attempt that ran the
+	// step, Step the step's index in its job, and Try its try.
+	ID, Attempt string
+	Step, Try   int
+}
+
+// LiveChildren returns the children of the steps' tries of the attempts
+// ids that haven't ended, in the order of the attempts, and of their IDs.
+func (tx *Tx) LiveChildren(ids ...string) ([]LiveChild, error) {
+	var out []LiveChild
+	for _, attempt := range ids {
+		rows, err := tx.query(`SELECT id, parent_step, parent_try FROM meridian_runs WHERE parent_attempt = ? AND state <> ? ORDER BY id`,
+			attempt, RunEnded)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var n int64
+			c := LiveChild{Attempt: attempt}
+			if err := rows.Scan(&n, &c.Step, &c.Try); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			c.ID = runID(n)
+			out = append(out, c)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // LiveDescendants returns how many runs of the tree whose root is the run
 // root haven't ended, at any depth.
 func (tx *Tx) LiveDescendants(root string) (int, error) {

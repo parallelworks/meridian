@@ -12,6 +12,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
@@ -197,17 +198,29 @@ func TestCreateChild(t *testing.T) {
 	if co := p.Jobs[0].Steps[2].Checkout; !ok || co == nil || *co != checkout || co.Commit != childCommit {
 		t.Errorf("the child's checkout is pinned to %+v, want the root's pin %+v", co, checkout)
 	}
-	// The child starts with the root's variables.
-	waitFor(t, func() bool { return storedRun(t, c, child).StartState != nil })
+	// The child starts with the root's variables, and its job is placed,
+	// its worker waiting to claim it.
+	waitFor(t, func() bool {
+		return storedRun(t, c, child).StartState != nil && c.store.View(t.Context(), func(tx *store.Tx) error {
+			_, err := tx.LatestAttempt(child, "main")
+			return err
+		}) == nil
+	})
 	if rec := storedRecord(t, c, child); rec == nil || rec.Run == nil || rec.Run.Env["FROM_VAR"] != "from-the-root-east" {
 		t.Errorf("the child's record holds %+v", rec)
 	}
 
-	// The root's job ends, and its finisher waits for the child.
+	// The root's job ends, which stops the child of its step, as the end
+	// of the attempt that called it does, and its finisher waits for the
+	// child, whose job's placement no worker has claimed yet, so it runs
+	// on until one does.
 	close(buildGo)
 	waitFor(t, func() bool { return !storedRun(t, c, root).WaitedAt.IsZero() })
 	if r := storedRun(t, c, root); r.State == store.RunEnded || storedRecord(t, c, root) == nil {
 		t.Errorf("the root ended before its child: %+v", r)
+	}
+	if r := storedRun(t, c, child); r.State == store.RunEnded || r.StopReason != plan.ReasonCancelled {
+		t.Errorf("the child of the ended attempt's step is %s, stopped for %q", r.State, r.StopReason)
 	}
 	// A step of an attempt that has ended gets no child.
 	if _, _, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: 1, With: req.With}); !errors.Is(err, ErrStepGone) {
@@ -222,6 +235,74 @@ func TestCreateChild(t *testing.T) {
 	}
 	if r := storedRun(t, c, child); r.State != store.RunEnded {
 		t.Errorf("the child is %s once its root ended", r.State)
+	}
+}
+
+// TestCreateChildOnHost checks the child of a step whose job runs on the
+// host its format 1 ssh: names: it is prepared on the coordinator's
+// machine, under its caller's run directory there, as format 1 prepares a
+// subworkflow, so a working directory the worker on the host gives in its
+// run's directory there is the same place in the run's directory here,
+// and one elsewhere is outside it; and the child runs in its run's default
+// group, not in the group of the ssh: host, which no name finds.
+func TestCreateChildOnHost(t *testing.T) {
+	parallel(t)
+	vars := conformancetest.Variables{"vars.CHILD_VAR": {Value: "v"}}
+	d := newTestDriver()
+	d.runDir = "/home/alice/.local/state/meridian/runs/1-store"
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+	d.worker = func(backend.PlaceRequest) testEnd {
+		return testEnd{wait: hold, result: plan.JobResult{Outcome: plan.OutcomeSuccess}}
+	}
+	c := open(t, Options{Variables: vars, Drivers: map[string]backend.Driver{testBackend: d, "ssh": d}})
+	created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(`jobs:
+  build:
+    ssh:
+      remoteHost: farm
+    steps:
+      - uses: github/t/child@main
+        with: {$yaml: w.yaml, region: east}
+        retry: {max-retries: 20}
+`), nil, compile.Options{Source: plan.Source{Location: "workflow.yaml"}, Sources: treeSources, Variables: vars})
+	if err != nil || diags.HasErrors() {
+		t.Fatal(diags, err)
+	}
+	root, err := c.CreateRun(t.Context(), created, runOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve(t, c)
+	var attempt *store.Attempt
+	waitFor(t, func() bool {
+		return c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			attempt, err = tx.LatestAttempt(root, "build")
+			return err
+		}) == nil && attempt.Placed() && storedRun(t, c, root).StartState != nil
+	})
+	if attempt.Placement.Backend != "ssh" || attempt.Placement.RunDir != d.runDir {
+		t.Fatalf("the job was placed at %+v", attempt.Placement)
+	}
+	with := map[string]any{"$yaml": "w.yaml", "region": "east"}
+	for try, tc := range []struct{ wd, dir string }{
+		{"", "/runs/" + root + "/subworkflows/build/step_0"},
+		{"work", "/runs/" + root + "/work/subworkflows/build/step_0"},
+		// As PW_JOB_DIR gives it on the host.
+		{d.runDir, "/runs/" + root + "/subworkflows/build/step_0"},
+		{d.runDir + "/work", "/runs/" + root + "/work/subworkflows/build/step_0"},
+	} {
+		child, diags, err := c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: try, With: with, WorkingDirectory: tc.wd})
+		if err != nil || diags.HasErrors() {
+			t.Fatalf("working directory %q: %v, %v", tc.wd, diags, err)
+		}
+		if r := storedRun(t, c, child); r.RunDir != tc.dir || r.DefaultGroup != "local" {
+			t.Errorf("working directory %q: the child runs in %s, in %s, want %s, in local", tc.wd, r.RunDir, r.DefaultGroup, tc.dir)
+		}
+	}
+	_, _, err = c.CreateChild(t.Context(), ChildRequest{Attempt: attempt.ID, Step: 0, Try: 4, With: with, WorkingDirectory: "/scratch/work"})
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.ChildDirOutside.Code() || p.Params["dir"] != "/scratch/work/subworkflows/build/step_0" {
+		t.Errorf("a working directory outside the run's on the host: %v", err)
 	}
 }
 

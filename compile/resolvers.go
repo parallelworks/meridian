@@ -135,4 +135,109 @@ type Sessions interface {
 	// starts the run again after another stopped does, makes nothing more;
 	// a rerun, whose sessions ended with the run, makes them again.
 	Make(ctx context.Context, runID string, sessions map[string]any, names map[string]string, read expr.Read) error
+	// Update updates the session u.Name with u.With, as a step of the run
+	// u.Run that uses parallelworks/update-session asks. Meridian doesn't
+	// restrict which session a step names: Update decides whether the run
+	// may update it, as format 1's platform decides whether the run's
+	// token may, from who runs it and its tree's permissions:
+	// (u.Permissions).
+	//
+	//   - A run whose permissions: hold '*' acts as the person who runs it,
+	//     and may update any session of their own, as they could
+	//     themself. One only shared with them it may not: sharing gives a
+	//     session's use, never its administration.
+	//   - Any other may update only a session of its own tree, one that a
+	//     run of the tree whose root is u.Root made (Make), as format 1
+	//     makes a tree's sessions with its root's run, and only one of the
+	//     person who runs it.
+	//
+	// A session the run may not update, or that isn't there, is a refusal:
+	// a problem of one of a workflow's kinds of error, which fails the
+	// step. Update mustn't log or quote what u.With gives where
+	// u.Read.Private is set, and masks it as one of the run's secrets where
+	// u.Read.Marked is. Any other error says it couldn't answer, and the
+	// step asks again. Updating a session again with the same, as a worker
+	// that repeats its request does, changes nothing more (UpdateSession).
+	Update(ctx context.Context, u SessionUpdate) error
 }
+
+// A SessionUpdate is what a step that uses parallelworks/update-session
+// asks of a session provider (Sessions.Update).
+type SessionUpdate struct {
+	// Run is the ID of the run whose step asks, and Root the ID of the run
+	// at the top of its tree, which no step called: Run's own for a run no
+	// step called.
+	Run, Root string
+	// Permissions are the permissions: of the workflow of the run's tree's
+	// root (plan.Run.Permissions), which say what the run's token may do:
+	// '*' all that the person who runs it may. Format 1 gates the top
+	// workflow's alone, and a child runs with its root's token, so a
+	// workflow a step calls that asks for more than its root did is given
+	// none of it: its own permissions: count for nothing.
+	Permissions []string
+	// Name is the session's name, as the step's with: gives it, read as
+	// text: as sessions.<key> reads one of a run's sessions (Check), or
+	// any other.
+	Name string
+	// With is the rest of the step's with:, as it was evaluated: where the
+	// session points, as url, or remoteHost and remotePort.
+	With map[string]any
+	// Read says what evaluating with: read, as for Make.
+	Read expr.Read
+}
+
+// UpdateSession does what a step that uses parallelworks/update-session
+// asks, through s, which is nil where nothing provides sessions: u is
+// what it asks, but for its Name and With, which UpdateSession takes from
+// with, the step's with: as it was evaluated, its name, read as text, and
+// the rest; and path is the step's in the workflow, at which its problems
+// are. It returns them: none when the session was updated;
+// resolver_missing where s is nil, as a feature whose interface is
+// missing fails, but only as the step runs, which an if: may skip; and a
+// refusal of s's, as Update gives it, as of a session the run may not
+// update, with its params masked where with: is private: where it read a
+// variable or a password (u.Read.Private), or a secret (u.Read.Marked),
+// which a secret variable is too. It returns s's other errors, for the
+// caller to ask again: where with: is private, one that says only that s
+// couldn't update the session.
+func UpdateSession(ctx context.Context, s Sessions, u SessionUpdate, path string, with map[string]any) (problems.Diagnostics, error) {
+	private := u.Read.Private || u.Read.Marked
+	at := func(k *problems.Kind, pointer string, params problems.Params) problems.Diagnostics {
+		if private {
+			params = mask(params)
+		}
+		return problems.Diagnostics{k.At("", problems.Position{}, pointer, params)}
+	}
+	if s == nil {
+		return problems.Diagnostics{problems.ResolverMissing.At("", problems.Position{}, path+"/uses", problems.Params{"key": "uses", "interface": "Sessions"})}, nil
+	}
+	u.Name = expr.Text(with["name"])
+	u.With = maps.Clone(with)
+	delete(u.With, "name")
+	err := s.Update(ctx, u)
+	switch {
+	case err == nil:
+		return nil, nil
+	case ctx.Err() != nil:
+		return nil, ctx.Err()
+	}
+	if k, params, ok := workflowProblem(err); ok {
+		return at(k, path, params), nil
+	}
+	if private {
+		return nil, &sessionNotUpdated{ctx: contextEnd(err)}
+	}
+	return nil, err
+}
+
+// sessionNotUpdated is the error of a session provider that couldn't
+// update a session as a with: that read a variable or a password asked. It
+// says nothing of the provider's error, which can quote what with: gave,
+// and wraps only the context's error, where the context was done.
+type sessionNotUpdated struct{ ctx error }
+
+func (e *sessionNotUpdated) Error() string {
+	return "compile: the session provider couldn't update the session"
+}
+
+func (e *sessionNotUpdated) Unwrap() error { return e.ctx }

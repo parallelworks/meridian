@@ -1,6 +1,7 @@
 package workerapisrv
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -53,12 +54,16 @@ type Ready struct {
 	// Tree is what an attempt of a child run has of its tree, or nil for a
 	// run no step called (workerapi.Claim.Tree).
 	Tree *workerapi.Tree
+	// RunDir is the run's directory where the attempt runs, where its
+	// member chose it (store.Placement.RunDir, or what a private
+	// placement holds sealed), or "" for the run's.
+	RunDir string
 }
 
 // serveClaim claims the attempt the bootstrap token is for, and answers
 // with its Claim, at the lower of the worker's version of the API and the
 // server's.
-func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
+func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, from peer) {
 	ctx := r.Context()
 	token := bearer(r)
 	if token == "" {
@@ -83,7 +88,13 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 	case err != nil:
 		s.writeError(w, r, err)
 		return
-	case !s.peers.Allows(ctx, uid, run):
+	case from.member == "" && !s.peers.Allows(ctx, from.uid, run):
+		writeStatus(w, http.StatusUnauthorized)
+		return
+	case a.Placed() && !s.allows(ctx, from, run, a):
+		// Whom the claim came from is held to the member the attempt was
+		// placed on, once that is recorded, before anything else is
+		// answered of it, as below for one placed meanwhile.
 		writeStatus(w, http.StatusUnauthorized)
 		return
 	case run.PlanVersion > s.reads, a.APIVersion > s.speaks:
@@ -126,13 +137,19 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, uid int) {
 	// speak a version of the API that has everything the attempt needs, or
 	// that isn't the binary its placement started, which ends the attempt,
 	// failed before its first step.
-	if a.Holds && a.ClaimedAt.IsZero() {
-		if !a.Placed() {
-			if a, ok = s.awaitPlaced(ctx, token, a); !ok {
-				notPlaced(w)
-				return
-			}
+	if a.Holds && a.ClaimedAt.IsZero() && !a.Placed() {
+		if a, ok = s.awaitPlaced(ctx, token, a); !ok {
+			notPlaced(w)
+			return
 		}
+	}
+	// Whom the claim came from is held to the member the attempt was
+	// placed on, once that is recorded, before the claim can end it.
+	if !s.allows(ctx, from, run, a) {
+		writeStatus(w, http.StatusUnauthorized)
+		return
+	}
+	if a.Holds && a.ClaimedAt.IsZero() {
 		needs, err := s.readier.Needs(ctx, run, a)
 		if err != nil {
 			s.writeError(w, r, err)
@@ -352,7 +369,7 @@ func (s *Server) claim(ctx context.Context, run *store.Run, a *store.Attempt) (*
 		RunID: run.ID, AttemptID: a.ID, APIVersion: a.APIVersion, PlanVersion: run.PlanVersion, Job: job,
 		Attempt: a.Number, Group: a.Placement.Group, Member: a.Placement.Member,
 		LeaseSeconds: a.LeaseSeconds, HeartbeatSeconds: a.HeartbeatSeconds, SelfFencing: a.SelfFencing,
-		Run: ready.Run, Needs: ready.Needs, RunDir: run.RunDir, Env: ready.Env, Retry: retry, Container: ready.Container,
+		Run: ready.Run, Needs: ready.Needs, RunDir: cmp.Or(ready.RunDir, run.RunDir), Env: ready.Env, Retry: retry, Container: ready.Container,
 		Control: control, Tree: tree,
 	}, nil
 }

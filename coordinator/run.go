@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -205,6 +207,10 @@ type Coordinator struct {
 	// placed, if it is set, hears of each job a supervisor places, as it
 	// readied it, before the attempt's driver places it.
 	placed func(run *store.Run, attempt string, job *plan.ReadyJob)
+	// rewake, if it is set, is called with the supervisors a transaction
+	// that stopped children woke while hopper ran them, as it has them
+	// woken again once it commits (wakeAgainAfter).
+	rewake func([]*waking)
 	// beforeChildStore, if it is set, is called as CreateChild stores a
 	// child, between its Create and its transaction, as when a test races
 	// two asks.
@@ -232,6 +238,13 @@ type Coordinator struct {
 	// connections are where members' workers reach the coordinator, as
 	// their drivers' Connect gave it, by member.
 	connections map[string]connection
+	// server is the worker API's server while ServeWorkers or ServeMembers
+	// serves it, and serverUsers how many of them do (useServer).
+	server      *workerapisrv.Server
+	serverUsers int
+	// forwarding is what ServeMembers serves members' listeners with
+	// while it runs, or nil.
+	forwarding *forwarding
 	// controls hears which attempts' controls changed: the worker API's
 	// server while ServeWorkers serves it, or nil.
 	controls controlNotifier
@@ -281,7 +294,8 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	}
 	// The store asks c, as it stores a failed step's events, whether the
 	// try was the step's last (lastTry), and whether the job's retry: lists
-	// a reason (retriesFor), once c is filled in below; a reset of the
+	// a reason (retriesFor), and has it stop the children of the attempts
+	// it ends (attemptsEnded), once c is filled in below; a reset of the
 	// store's clock wakes the supervisors c knows of, once it is open;
 	// and a change to attempts' controls answers the polls c's server of
 	// the worker API holds of them (controlsChanged).
@@ -289,6 +303,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	var opened atomic.Pointer[Coordinator]
 	st, err := store.Open(ctx, opts.Database, &store.Options{
 		Log: log, LastTry: c.lastTry, RetriesFor: c.retriesFor, ReadOnly: opts.ReadOnly, Now: opts.now, MaxLead: timing.Grace,
+		OnAttemptsEnded: c.attemptsEnded,
 		OnClockReset: func(ctx context.Context) {
 			if c := opened.Load(); c != nil {
 				c.wakeReadied(ctx)
@@ -390,8 +405,9 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 }
 
 // Close closes what members' drivers set up for their workers to reach the
-// coordinator, releases its holds on runs' Starts, and closes the
-// coordinator's store. Serve must have returned.
+// coordinator, and the drivers that are io.Closers, releases its holds on
+// runs' Starts, and closes the coordinator's store. Serve, ServeWorkers
+// and ServeMembers must have returned.
 func (c *Coordinator) Close() error {
 	c.mu.Lock()
 	var errs []error
@@ -401,6 +417,11 @@ func (c *Coordinator) Close() error {
 		}
 	}
 	clear(c.connections)
+	for _, name := range slices.Sorted(maps.Keys(c.opts.Drivers)) {
+		if closer, ok := c.opts.Drivers[name].(io.Closer); ok {
+			errs = append(errs, closer.Close())
+		}
+	}
 	for _, release := range c.queues {
 		if release != nil {
 			release()

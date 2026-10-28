@@ -13,6 +13,7 @@ import (
 
 	"github.com/parallelworks/meridian/backend"
 	localbackend "github.com/parallelworks/meridian/backend/local"
+	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/harden"
@@ -27,11 +28,13 @@ func startQueue(id string) string { return "meridian.start." + id }
 
 // coordinate opens a coordinator of the store at db, in the state
 // directory dirs names, that works its runs as meridian run and resume do:
-// with the user's variables and groups, cfg, and the local backend, which
+// with the user's variables and groups, cfg; the local backend, which
 // runs each job's worker as a process of the user's, which reaches the
 // coordinator on its socket, with the environment of the command but the
-// variables that hold secret variables' values (local.Config.SecretEnv).
-// It logs what no answer says to c's standard error.
+// variables that hold secret variables' values (local.Config.SecretEnv);
+// and the ssh backend, which reaches hosts as the user's ssh would, and
+// names them by a key derived from the state directory's key file. It logs
+// what no answer says to c's standard error.
 //
 // First it keeps the user's other processes, the steps of its runs' jobs
 // among them, out of the process's memory, where it holds the runs' secret
@@ -41,15 +44,38 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	if err := c.hardenProcess(); err != nil {
 		return nil, err
 	}
-	return coordinator.Open(ctx, coordinator.Options{
-		Database: db, Keys: local.NewKeys(dirs.State),
+	keys := local.NewKeys(dirs.State)
+	sshKey, err := keys.Derive("ssh member names", backendssh.MinKeyLen)
+	if err != nil {
+		return nil, err
+	}
+	version, _ := buildVersion()
+	opts := backendssh.Options{
+		Home: c.getenv("HOME"), Getenv: c.getenv,
+		Version: version, Binaries: filepath.Join(dirs.Cache, "binaries"), Key: sshKey,
+	}
+	if c.ssh != nil {
+		c.ssh(&opts)
+	}
+	ssh := backendssh.New(opts)
+	coord, err := coordinator.Open(ctx, coordinator.Options{
+		Database: db, Keys: keys,
 		Variables: cfg, Inputs: cfg, Groups: cfg,
-		Trees:      &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
-		Drivers:    map[string]backend.Driver{"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()}},
+		Trees: &cacheSources{dirs: dirs, servers: cfg.GitLabServers()},
+		Drivers: map[string]backend.Driver{
+			"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()},
+			"ssh":   ssh,
+		},
 		Endpoint:   backend.Endpoint{Address: dirs.Socket()},
 		StartQueue: startQueue,
 		Log:        slog.New(slog.NewTextHandler(c.stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
 	})
+	if err != nil {
+		return nil, errors.Join(err, ssh.Close())
+	}
+	// The store names runs' directories on hosts, with their runs.
+	ssh.Store = coord.StoreID()
+	return coord, nil
 }
 
 // hardenProcess keeps the user's other processes out of the process's

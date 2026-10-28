@@ -204,6 +204,9 @@ func (tx *Tx) NewAttempt(n NewAttempt) (*Attempt, string, error) {
 			return nil, "", err
 		}
 	}
+	if err := tx.attemptsEnded(ended); err != nil {
+		return nil, "", err
+	}
 	var fence, number int64
 	if err := tx.queryRow("UPDATE meridian_jobs SET fence = fence + 1, attempts = attempts + 1 WHERE run_id = ? AND key = ? RETURNING fence, attempts",
 		run, n.Job).Scan(&fence, &number); err != nil {
@@ -247,7 +250,7 @@ func (tx *Tx) NewToken(id string) (string, error) {
 
 const attemptColumns = `a.id, a.run_id, a.job_key, a.number, a.fence, a.state, a.token_hash, a.credential_hash,
   a.self_fencing, a.lease_seconds, a.heartbeat_seconds, a.worker_version, a.worker_digest, a.api_version,
-  a.grp, a.member, a.backend, a.placement_id, a.placed_digest, a.private_placement IS NOT NULL,
+  a.grp, a.member, a.backend, a.placement_id, a.placed_digest, a.member_key, a.run_dir, a.private_placement IS NOT NULL,
   a.created_at, a.claimed_at, a.renewed_at, a.step_started_at, a.problem_since,
   a.end_kind, a.outcome, a.reason, a.report, a.problem, a.ended_at,
   a.state <> 'ended' AND a.fence = j.fence AND j.outcome IS NULL`
@@ -261,6 +264,7 @@ func (tx *Tx) attemptWhere(where string, args ...any) (*Attempt, error) {
 		state                                   string
 		version, wdigest, kind, outcome, reason sql.NullString
 		group, member, backend, pid, placed     sql.NullString
+		key, runDir                             sql.NullString
 		claimed, renewed, started, ended        sql.NullInt64
 		problemSince                            sql.NullInt64
 		api                                     sql.NullInt64
@@ -271,7 +275,7 @@ FROM meridian_attempts a JOIN meridian_jobs j ON j.run_id = a.run_id AND j.key =
 WHERE `+where, args...).Scan(
 		&a.ID, &run, &a.Job, &a.Number, &a.Fence, &state, &a.tokenHash, &a.credentialHash,
 		&a.SelfFencing, &a.LeaseSeconds, &a.HeartbeatSeconds, &version, &wdigest, &api,
-		&group, &member, &backend, &pid, &placed, &a.Private,
+		&group, &member, &backend, &pid, &placed, &key, &runDir, &a.Private,
 		&created, &claimed, &renewed, &started, &problemSince,
 		&kind, &outcome, &reason, &a.End.Report, &prob, &ended, &a.Holds)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -282,7 +286,10 @@ WHERE `+where, args...).Scan(
 	}
 	a.Run, a.State = runID(run), AttemptState(state)
 	a.Worker, a.APIVersion = workerapi.Worker{Version: version.String, Digest: wdigest.String}, int(api.Int64)
-	a.Placement = Placement{Group: group.String, Member: member.String, Backend: backend.String, ID: pid.String, WorkerDigest: placed.String}
+	a.Placement = Placement{
+		Group: group.String, Member: member.String, Backend: backend.String, ID: pid.String, WorkerDigest: placed.String,
+		MemberKey: key.String, RunDir: runDir.String,
+	}
 	a.CreatedAt, a.ClaimedAt, a.RenewedAt, a.StepStartedAt = time.UnixMicro(created).UTC(), timeOf(claimed), timeOf(renewed), timeOf(started)
 	a.ProblemSince = timeOf(problemSince)
 	a.End.Kind, a.End.Outcome, a.End.Reason = EndKind(kind.String), plan.Outcome(outcome.String), plan.Reason(reason.String)
@@ -543,7 +550,19 @@ func (tx *Tx) EndAttempt(id string, end AttemptEnd) error {
 		return err
 	}
 	n, _ := runNumber(a.Run)
-	return tx.addEvent(n, EventAttemptEnded, a.Job, id, 0)
+	if err := tx.addEvent(n, EventAttemptEnded, a.Job, id, 0); err != nil {
+		return err
+	}
+	return tx.attemptsEnded([]string{id})
+}
+
+// attemptsEnded tells whoever opened the store, in tx, that tx ended the
+// attempts ids (Options.OnAttemptsEnded).
+func (tx *Tx) attemptsEnded(ids []string) error {
+	if len(ids) == 0 || tx.s.attemptsEnded == nil {
+		return nil
+	}
+	return tx.s.attemptsEnded(tx.ctx, tx, ids)
 }
 
 // digest returns the SHA-256 digest of a secret, as the store keeps a

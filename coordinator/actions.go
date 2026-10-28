@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -27,10 +29,8 @@ type actions struct{ c *Coordinator }
 
 var _ workerapisrv.Actions = actions{}
 
-// Act performs the action the step of call's attempt uses: cancel-jobs
-// (cancelJobs). An action of the coordinator's that it doesn't perform
-// yet, update-session, fails the step, as the worker failed it before it
-// asked the coordinator.
+// Act performs the action the step of call's attempt uses: checkout
+// (checkout), cancel-jobs (cancelJobs) or update-session (updateSession).
 func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (workerapi.ActionAnswer, error) {
 	step, err := r.c.actionStep(ctx, call)
 	if err != nil {
@@ -42,11 +42,68 @@ func (r actions) Act(ctx context.Context, call *workerapisrv.ActionCall) (worker
 	case actionCancelJobs:
 		return r.c.cancelJobs(ctx, call, step)
 	case actionUpdateSession:
-		return call.Commit(ctx, step, func(*store.Tx) (workerapi.ActionAnswer, error) {
-			return actionFailed(problems.UsesNotSupported.At("", problems.Position{}, step.Path, problems.Params{"uses": step.Uses})), nil
-		})
+		return r.c.updateSession(ctx, call, step)
 	}
 	return workerapi.ActionAnswer{}, fmt.Errorf("%w: %q", workerapisrv.ErrNotAction, step.Uses)
+}
+
+// updateSession performs step's parallelworks/update-session, as call asks:
+// it updates the session with:'s name names, through Options.Sessions,
+// which decides whether the run may, from who runs it and its
+// permissions:, as format 1's platform does (compile.UpdateSession). The
+// provider isn't the store's, so it asks it before Commit stores the
+// answer, and asks it nothing for a step that its job's cancel or its
+// early-cancel: stops, which Commit answers cancelled
+// (ActionCall.Cancelled). A refusal of the provider's, as of a session the
+// run may not update, and no provider fail the step; a provider that
+// can't answer is an error, which the worker asks again after.
+func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.ActionCall, step *plan.Step) (workerapi.ActionAnswer, error) {
+	answer := workerapi.ActionAnswer{Outcome: plan.OutcomeSuccess}
+	cancelled, err := call.Cancelled(ctx, step)
+	if err != nil {
+		return workerapi.ActionAnswer{}, err
+	}
+	if !cancelled {
+		u, err := c.sessionRun(ctx, call.Run)
+		if err != nil {
+			return workerapi.ActionAnswer{}, err
+		}
+		u.Read = expr.Read{Private: call.Request.Private, Marked: call.Request.Secret}
+		with, _ := call.Request.With.Get().(map[string]any)
+		diags, err := compile.UpdateSession(ctx, c.opts.Sessions, u, step.Path, with)
+		if err != nil {
+			return workerapi.ActionAnswer{}, err
+		}
+		answer.Diagnostics = diags
+		if diags.HasErrors() {
+			answer.Outcome = plan.OutcomeFailure
+		}
+	}
+	return call.Commit(ctx, step, func(*store.Tx) (workerapi.ActionAnswer, error) { return answer, nil })
+}
+
+// sessionRun returns what update-session tells the session provider of
+// run, which it authorizes the step by (compile.Sessions.Update): its ID,
+// its tree's root's, and the permissions: of the root's workflow. Format 1
+// gates the top workflow's alone, and a child runs with its root's token,
+// so a workflow a step calls that asks for more than its root did is given
+// none of it.
+func (c *Coordinator) sessionRun(ctx context.Context, run *store.Run) (compile.SessionUpdate, error) {
+	root := run
+	if run.Parent != nil {
+		if err := c.store.View(ctx, func(tx *store.Tx) error {
+			var err error
+			root, err = tx.Run(run.Parent.Root)
+			return err
+		}); err != nil {
+			return compile.SessionUpdate{}, err
+		}
+	}
+	p, err := c.plans.get(root)
+	if err != nil {
+		return compile.SessionUpdate{}, err
+	}
+	return compile.SessionUpdate{Run: run.ID, Root: root.ID, Permissions: p.Run.Permissions}, nil
 }
 
 // Tree writes the tree of the parallelworks/checkout step of call's

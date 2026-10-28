@@ -460,9 +460,14 @@ func TestFenceKeepsSending(t *testing.T) {
 
 // TestStoppedKeepsLastWords checks that a worker stopped from outside
 // sends what a step prints in its grace period: the flush period starts
-// once the steps have stopped.
+// once the steps have stopped. The step prints 1.5 s after SIGTERM, past
+// the 1 s flush period, which a flush that started at the stop would have
+// ended, and its grace period is long enough that SIGKILL never comes
+// first, however late a loaded host runs its trap.
 func TestStoppedKeepsLastWords(t *testing.T) {
 	t.Parallel()
+	tm := testTiming
+	tm.grace = 30 * time.Second
 	f := workerapitest.NewFake(t, newJob(command(`trap 'sleep 1.5; echo last words; exit 0' TERM; echo started; while :; do sleep 0.1; done`)))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -473,7 +478,7 @@ func TestStoppedKeepsLastWords(t *testing.T) {
 		}
 		return workerapitest.Answer
 	}
-	if err := runWorker(t, f, ctx, Config{}); !errors.Is(err, context.Canceled) {
+	if err := runWorkerTimed(t, f, ctx, Config{}, tm); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
 	if log, ended := logOf(f, logKey{workerapi.LogStep, 0, 0}); !ended || !strings.HasPrefix(log, "started\n") || !strings.HasSuffix(log, "last words\n") {
