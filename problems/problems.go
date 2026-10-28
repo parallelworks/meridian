@@ -430,20 +430,21 @@ func (k *Kind) Message(params Params) string {
 	return string(k.typ.Code)
 }
 
-// mustHaveDeclared panics, in a build with the paramcheck tag
-// (checkDeclared), as the tests are built, if params lacks a param the
-// kind declares, but filled, if it isn't "", which its caller fills:
-// foundation sends a problem that lacks one as its invalid, with no
-// params, so whoever reads it never learns what was wrong. Every other
-// build checks nothing.
+// mustHaveDeclared ends the test binary, in a build with the paramcheck
+// tag (checkDeclared), as the tests are built, if params lacks a param the
+// kind declares, but filled, if it isn't "", which its caller fills
+// (undeclared): foundation sends a problem that lacks one as its invalid,
+// with no params, so whoever reads it never learns what was wrong. Every
+// other build checks nothing. What builds a problem without Problem or
+// At, as MaskProblem and the worker's last-resort end of an attempt do
+// from one that was, isn't checked.
 func (k *Kind) mustHaveDeclared(params Params, filled string) {
 	if !checkDeclared {
 		return
 	}
 	for _, name := range k.typ.Params {
 		if _, ok := params[name]; !ok && name != filled {
-			//nolint:forbidigo // a broken invariant, checked in the tests alone: the call site that left the param out is the bug, and its stack says where it is
-			panic(fmt.Sprintf("problems: a %s problem built without its param %q, which foundation would send as invalid", k.typ.Code, name))
+			undeclared(k.typ.Code, name)
 		}
 	}
 }
