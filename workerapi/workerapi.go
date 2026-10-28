@@ -666,7 +666,8 @@ type Complete struct {
 // the coordinator's, as cancel-jobs's is the run, which the worker can't
 // perform. The coordinator reads which action it is from the run's plan,
 // at the step, and never from the request, and answers a step that uses
-// no action it performs as a request it can't read, 400.
+// no action it performs as a request it can't read, 400. So it reads
+// whether the step outlives its job's cancellation (ActionAnswer.Outcome).
 //
 // The coordinator performs the action once for a step's try: a repeat of
 // the request is given the same answer, and one with another With is
@@ -685,13 +686,6 @@ type ActionRequest struct {
 	// With is the step's with:, as Step evaluated it for the try: a
 	// mapping, or nothing for a step without one.
 	With plan.Data `json:"with,omitzero"`
-	// OutlivesCancel is set when the step outlives its job's
-	// cancellation, as Step decided it (plan.ReadyStep.OutlivesCancel).
-	// The coordinator answers a step that doesn't, of an attempt whose
-	// control asks to cancel its job, for any reason but the run's
-	// timeout, cancelled, without performing the action, as the worker
-	// would have stopped the step had it read the control first.
-	OutlivesCancel bool `json:"outlivesCancel,omitzero"`
 }
 
 // An ActionAnswer is how the action an ActionRequest asked for ended, as
@@ -700,8 +694,9 @@ type ActionAnswer struct {
 	// Outcome is success or failure, as the action ended, and so the try,
 	// as for a command that exits 0 or not; or cancelled, for a step whose
 	// action the coordinator didn't perform, as the worker would have
-	// stopped it: one of a job the coordinator is cancelling that doesn't
-	// outlive that (ActionRequest.OutlivesCancel), with the cancel's
+	// stopped it: one of a job the coordinator is cancelling whose if:
+	// doesn't outlive that, as the coordinator reads it from the run's plan
+	// (plan.OutlivesCancel), never from the request, with the cancel's
 	// Reason; or one whose early-cancel: is any-job-failed, once a job of
 	// the run has failed (Control.AnyJobFailed), with none.
 	Outcome plan.Outcome `json:"outcome,omitzero"`

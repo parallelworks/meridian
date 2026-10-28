@@ -42,7 +42,7 @@ var since = map[string]int{
 	"Complete.seq": 1, "Complete.result": 1, "Complete.reason": 1, "Complete.problem": 1,
 	"Complete.diagnostics": 1,
 
-	"ActionRequest.step": 3, "ActionRequest.try": 3, "ActionRequest.with": 3, "ActionRequest.outlivesCancel": 3,
+	"ActionRequest.step": 3, "ActionRequest.try": 3, "ActionRequest.with": 3,
 	"ActionAnswer.outcome": 3, "ActionAnswer.reason": 3, "ActionAnswer.diagnostics": 3,
 }
 

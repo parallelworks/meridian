@@ -1,0 +1,17 @@
+jobs:
+  main:
+    steps:
+      - uses: parallelworks/cancel-jobs
+        with:
+          jobs: [main]
+      - run: echo success
+      - if: ${{ failure() }}
+        run: echo failure
+      - if: ${{ cancelled() }}
+        run: echo cancelled
+      - if: ${{ !success() }}
+        run: echo not success
+      - if: ${{ always() }}
+        run: echo always
+      - if: false
+        run: echo never

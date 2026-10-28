@@ -1099,6 +1099,29 @@
       "같은 릴리스라면 이유와 워커의 로그와 함께 이 버그를 보고하세요."
     ]
   },
+  "cancel_jobs_job_unknown": {
+    "title": "단계가 취소할 수 없는 작업",
+    "why": "parallelworks/cancel-jobs 단계의 jobs:는 취소할 그 실행의 작업을 가리킵니다. 이 이름은 실행의 어떤 작업의 것도 아니거나, 매트릭스 작업의 것입니다. 형식 1은 매트릭스 작업의 인스턴스를 다른 이름으로 알기 때문에 그중 어느 것도 취소하지 않습니다. 형식 1과 같이, 단계는 이 이름에 대해 아무것도 하지 않고 성공합니다.",
+    "fix": [
+      "작업의 이름을 고치거나 jobs:에서 빼세요."
+    ]
+  },
+  "cancel_jobs_other_run": {
+    "title": "다른 실행의 작업 취소",
+    "why": "형식 1에서 parallelworks/cancel-jobs 단계는 slug, workflow와 run, 또는 run만으로 다른 실행의 작업을 취소합니다. Meridian은 아직 그렇게 하지 않으므로, 단계는 실행될 때 명령이 실패한 단계처럼 실패합니다. retry:는 다시 시도하고, ignore-errors:는 마지막 시도를 성공시킵니다. 그때만 실패합니다. if:로 건너뛸 수 있습니다.",
+    "fix": [
+      "단계 자신의 실행의 작업을 취소하려면 slug, workflow, run을 빼세요.",
+      "meridian cancel 등으로 다른 실행 자체를 취소하세요."
+    ]
+  },
+  "cancel_jobs_run_missing": {
+    "title": "번호 없는 워크플로 실행의 취소",
+    "why": "parallelworks/cancel-jobs 단계의 with:는 형식 1이 읽는 대로 취소할 실행을 그 워크플로와 번호로 가리킵니다. run이 없거나 음수인 워크플로는 아무 실행도 가리키지 않으며, 형식 1은 Meridian과 같이 단계를 실패시킵니다.",
+    "fix": [
+      "workflow:와 함께 run:에 실행의 번호를 주세요.",
+      "단계 자신의 실행의 작업을 취소하려면 workflow:를 빼세요."
+    ]
+  },
   "step_ssh_not_supported": {
     "title": "다른 호스트에서 실행하는 단계",
     "why": "형식 1 단계의 ssh:는 SSH를 통해 다른 호스트에서 단계를 실행합니다. 이 버전의 Meridian 워커는 자신이 실행되는 호스트에서만 단계를 실행하므로, 잘못된 호스트에서 실행하는 대신 단계를 실패시킵니다.",

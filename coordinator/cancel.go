@@ -104,7 +104,7 @@ func (c *Coordinator) stopCreated(ctx context.Context, id string, reason plan.Re
 // the running attempts of its jobs that don't outlive the stop to stop,
 // in one transaction; then it wakes the supervisors of its readied jobs,
 // and ends at once the jobs not yet readied whose if: takes them so
-// (plan.CancelPathSkip).
+// (plan.CancelPathSkip): stopTx, then stopped.
 func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason plan.Reason) error {
 	paths, err := c.cancelPaths(ctx, run)
 	if err != nil {
@@ -115,42 +115,9 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 		woken   []*waking
 	)
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
-		woken = woken[:0]
 		var err error
-		if stopped, err = tx.StopRun(run.ID, reason); err != nil || !stopped {
-			return err
-		}
-		live, err := tx.LiveAttempts(run.ID)
-		if err != nil {
-			return err
-		}
-		for _, a := range live {
-			// A job readied meanwhile has its supervisor decide.
-			if outlives, known := paths.outlives[a.Job]; !known || outlives {
-				continue
-			}
-			if err := tellStop(tx, a.ID, reason); err != nil {
-				return err
-			}
-		}
-		jobs, err := tx.Jobs(run.ID)
-		if err != nil {
-			return err
-		}
-		// A supervisor waiting for the jobs its job needs isn't woken: it
-		// readies its job once they have finished, as stopped. One of an
-		// instance waiting for its turn under max-parallel: is, and ends
-		// it at once (instanceStep).
-		for _, j := range jobs {
-			if j.Outcome == "" && (!j.ReadyAt.IsZero() || j.Instance >= 0) {
-				w, err := c.wakeJobTx(ctx, tx, run.ID, j.Key)
-				if err != nil {
-					return err
-				}
-				woken = append(woken, w)
-			}
-		}
-		return nil
+		stopped, woken, err = c.stopTx(ctx, tx, run.ID, reason, paths)
+		return err
 	})
 	switch {
 	case errors.Is(err, store.ErrState):
@@ -158,6 +125,60 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 	case err != nil || !stopped:
 		return err
 	}
+	c.stopped(ctx, run, reason, paths, woken)
+	return nil
+}
+
+// stopTx stores, in tx, the stop record of the run id, which has started,
+// for reason, and tells the running attempts of its jobs that don't
+// outlive the stop, as paths says, to stop; and wakes the supervisors of
+// its readied jobs. It reports whether it stored the stop, which a run
+// stopped already has, and returns the supervisors it woke that hopper
+// was running (waking). A run that has ended is store.ErrState.
+func (c *Coordinator) stopTx(ctx context.Context, tx *store.Tx, id string, reason plan.Reason, paths *cancelPaths) (bool, []*waking, error) {
+	stopped, err := tx.StopRun(id, reason)
+	if err != nil || !stopped {
+		return false, nil, err
+	}
+	live, err := tx.LiveAttempts(id)
+	if err != nil {
+		return false, nil, err
+	}
+	for _, a := range live {
+		// A job readied meanwhile has its supervisor decide.
+		if outlives, known := paths.outlives[a.Job]; !known || outlives {
+			continue
+		}
+		if err := tellStop(tx, a.ID, reason); err != nil {
+			return false, nil, err
+		}
+	}
+	jobs, err := tx.Jobs(id)
+	if err != nil {
+		return false, nil, err
+	}
+	// A supervisor waiting for the jobs its job needs isn't woken: it
+	// readies its job once they have finished, as stopped. One of an
+	// instance waiting for its turn under max-parallel: is, and ends it at
+	// once (instanceStep).
+	var woken []*waking
+	for _, j := range jobs {
+		if j.Outcome == "" && (!j.ReadyAt.IsZero() || j.Instance >= 0) {
+			w, err := c.wakeJobTx(ctx, tx, id, j.Key)
+			if err != nil {
+				return false, nil, err
+			}
+			woken = append(woken, w)
+		}
+	}
+	return true, woken, nil
+}
+
+// stopped does what follows the stop of run, for reason, once the
+// transaction that stored it (stopTx) has committed: it wakes again the
+// supervisors that transaction woke, woken, and ends at once the jobs not
+// yet readied whose path ends them so, as paths says.
+func (c *Coordinator) stopped(ctx context.Context, run *store.Run, reason plan.Reason, paths *cancelPaths, woken []*waking) {
 	c.log.InfoContext(ctx, "coordinator: a run was stopped", "run", run.ID, "reason", reason)
 	c.wakeAgain(ctx, woken...)
 	// The stop is stored: a job that can't be ended now, its supervisor
@@ -168,7 +189,6 @@ func (c *Coordinator) stopRunning(ctx context.Context, run *store.Run, reason pl
 			c.log.WarnContext(ctx, "coordinator: a job of a stopped run couldn't be ended at once, so its supervisor ends it", "run", run.ID, "job", key, "error", err)
 		}
 	}
-	return nil
 }
 
 // cancelPaths is what becomes of a run's jobs once it stops, as
@@ -297,15 +317,25 @@ func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.
 // attempt of it again, as after a failure before its first step, or once a
 // backend answers, and ends it as the stop says (stopEnd).
 func (c *Coordinator) placesNoMore(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (bool, error) {
-	switch {
-	case a == nil:
-	case a.State != store.AttemptEnded:
-		return false, nil
-	case a.End.Kind == store.EndCompleted && a.End.Reason != plan.ReasonSetupFailed:
-		// Its worker's end is the job's.
+	if !betweenAttempts(a) {
 		return false, nil
 	}
 	return c.stopEnds(ctx, run, job)
+}
+
+// betweenAttempts reports whether a job whose latest attempt is a, or nil
+// before its first, has no attempt that runs, nor one whose worker's end
+// is the job's: it waits for its first placement, or to be placed again,
+// as after a failure before its first step, or a worker lost.
+func betweenAttempts(a *store.Attempt) bool {
+	switch {
+	case a == nil:
+		return true
+	case a.State != store.AttemptEnded:
+		return false
+	}
+	// A worker's end of its own is the job's, but one before its first step.
+	return a.End.Kind != store.EndCompleted || a.End.Reason == plan.ReasonSetupFailed
 }
 
 // stopEnds reports whether the job's run has stopped, and the job, readied

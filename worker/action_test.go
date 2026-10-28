@@ -73,7 +73,6 @@ func TestActions(t *testing.T) {
 
 	type asked struct {
 		step, try int
-		outlives  bool
 		with      string
 	}
 	var got []asked
@@ -82,14 +81,14 @@ func TestActions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got = append(got, asked{a.Request.Step, a.Request.Try, a.Request.OutlivesCancel, string(with)})
+		got = append(got, asked{a.Request.Step, a.Request.Try, string(with)})
 	}
 	want := []asked{
-		{0, 0, false, `{"jobs":["other"]}`},
-		{1, 0, true, `{"name":"s"}`},
-		{1, 1, true, `{"name":"s"}`},
-		{2, 0, true, `{"jobs":["ignored"]}`},
-		{3, 0, true, `{"jobs":["build-x"]}`},
+		{0, 0, `{"jobs":["other"]}`},
+		{1, 0, `{"name":"s"}`},
+		{1, 1, `{"name":"s"}`},
+		{2, 0, `{"jobs":["ignored"]}`},
+		{3, 0, `{"jobs":["build-x"]}`},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("the worker asked for\n%v\nwant\n%v", got, want)
