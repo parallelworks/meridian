@@ -31,6 +31,7 @@ const stepRunRoot = `jobs:
         with: {repo: https://example.com/app.git, branch: main}
       - run: echo there
         ssh: {remoteHost: farm}
+        cleanup: echo tidy
       - uses: github/t/grand@main
         ssh: {remoteHost: farm}
         with: {$yaml: w.yaml}
@@ -87,12 +88,24 @@ type stepRunRig struct {
 
 func newStepRunRig(t *testing.T) *stepRunRig {
 	t.Helper()
+	return newStepRunRigWith(t, nil)
+}
+
+// newStepRunRigWith is newStepRunRig, whose step runs' workers end as
+// stepRuns says, where it isn't nil, rather than hold their places.
+func newStepRunRigWith(t *testing.T, stepRuns func(backend.PlaceRequest) testEnd) *stepRunRig {
+	t.Helper()
 	vars := conformancetest.Variables{"vars.FARM": {Value: "farm"}}
 	d := newTestDriver()
 	d.runDir = "/home/alice/.local/state/meridian/runs/1-store"
 	hold := make(chan struct{})
 	t.Cleanup(func() { close(hold) })
-	d.worker = func(backend.PlaceRequest) testEnd {
+	d.worker = func(req backend.PlaceRequest) testEnd {
+		// A step run's job is placed in its root's tree; the root's
+		// jobs aren't.
+		if req.Root != "" && stepRuns != nil {
+			return stepRuns(req)
+		}
 		return testEnd{wait: hold, result: plan.JobResult{Outcome: plan.OutcomeSuccess}}
 	}
 	c := open(t, Options{Variables: vars, Drivers: map[string]backend.Driver{testBackend: d, "ssh": d}})

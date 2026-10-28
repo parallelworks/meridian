@@ -102,8 +102,10 @@ type wakesAfter struct{ woken []*waking }
 // stopStepChildrenTx stops, in tx, for reason, the children of the steps'
 // tries of the attempt a, of run, that a stop of its job stops, as its
 // worker would: those whose step doesn't outlive its job's cancellation,
-// as its if: says (plan.OutlivesCancel). Those whose step does run on. It
-// returns the supervisors it woke that hopper was running (waking).
+// as its if: says (plan.OutlivesCancel). Those whose step does run on, and
+// so does a step run of a step's cleanup, which runs however its job
+// ended, until its attempt ends (attemptsEnded). It returns the
+// supervisors it woke that hopper was running (waking).
 func (c *Coordinator) stopStepChildrenTx(ctx context.Context, tx *store.Tx, run *store.Run, a *store.Attempt, reason plan.Reason) ([]*waking, error) {
 	children, err := tx.LiveChildren(a.ID)
 	if err != nil || len(children) == 0 {
@@ -120,7 +122,7 @@ func (c *Coordinator) stopStepChildrenTx(ctx context.Context, tx *store.Tx, run 
 	}
 	var woken []*waking
 	for _, child := range children {
-		if job != nil && child.Step < len(job.Steps) && plan.OutlivesCancel(job.Steps[child.Step].If) {
+		if child.Cleanup || job != nil && child.Step < len(job.Steps) && plan.OutlivesCancel(job.Steps[child.Step].If) {
 			continue
 		}
 		ws, err := c.stopChildTx(ctx, tx, child.ID, reason)

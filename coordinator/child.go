@@ -89,7 +89,7 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 	if err := c.writable(); err != nil {
 		return "", nil, err
 	}
-	cl, existing, err := c.readCaller(ctx, a.ID, req.Step, req.Try)
+	cl, existing, err := c.readCaller(ctx, a.ID, req.Step, req.Try, false)
 	switch {
 	case err != nil:
 		return "", nil, err
@@ -98,7 +98,7 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 	}
 	// Whether the step outlives its run's stop, or its job's, is the plan's
 	// to say, from its if:, as Step decides it, never the worker's.
-	if err := stepLives(cl.attempt, cl.run, step, cl.control); err != nil {
+	if err := stepLives(cl.attempt, cl.run, step, cl.control, false); err != nil {
 		return "", nil, err
 	}
 	rootPlan := p
@@ -148,10 +148,11 @@ type caller struct {
 }
 
 // readCaller reads, in one transaction, the caller of the step step's try
-// try, of the attempt attempt, and returns it; or the ID of the child that
-// the try has already, with no caller. It returns errStepGone for an
+// try, of the attempt attempt, or of the step's cleanup where cleanup is
+// set, and returns it; or the ID of the child that the try, or the
+// cleanup, has already, with no caller. It returns errStepGone for an
 // attempt that no longer holds its job, or of a run that isn't running.
-func (c *Coordinator) readCaller(ctx context.Context, attempt string, step, try int) (*caller, string, error) {
+func (c *Coordinator) readCaller(ctx context.Context, attempt string, step, try int, cleanup bool) (*caller, string, error) {
 	var (
 		cl       caller
 		existing string
@@ -161,7 +162,7 @@ func (c *Coordinator) readCaller(ctx context.Context, attempt string, step, try 
 		if cl.attempt, err = tx.Attempt(attempt); err != nil {
 			return err
 		}
-		if existing, err = tx.Child(attempt, step, try); err == nil || !errors.Is(err, store.ErrNotFound) {
+		if existing, err = tx.ChildOf(attempt, step, try, cleanup); err == nil || !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
 		if !cl.attempt.Holds {
@@ -265,7 +266,7 @@ func (c *Coordinator) storeChild(ctx context.Context, step *plan.Step, link *sto
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
 		// What another ask stored meanwhile is the try's child.
 		var err error
-		if id, err = tx.Child(link.Attempt, link.Step, link.Try); err == nil || !errors.Is(err, store.ErrNotFound) {
+		if id, err = tx.ChildOf(link.Attempt, link.Step, link.Try, link.Cleanup); err == nil || !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
 		// What changed meanwhile, as the attempt's being superseded or
@@ -283,7 +284,7 @@ func (c *Coordinator) storeChild(ctx context.Context, step *plan.Step, link *sto
 		if err != nil {
 			return err
 		}
-		if err := stepLives(now, r, step, ctl); err != nil {
+		if err := stepLives(now, r, step, ctl, link.Cleanup); err != nil {
 			return err
 		}
 		if id, err = tx.NewRunID(); err != nil {
@@ -300,12 +301,15 @@ func (c *Coordinator) storeChild(ctx context.Context, step *plan.Step, link *sto
 // (plan.OutlivesCancel); and a *stepStoppedError for a step that ctl, the
 // attempt's control, stops: a cancel of its job, for any reason but the
 // run's timeout, of such a step, or, for a step whose early-cancel: is
-// any-job-failed, a job of the run having failed.
-func stepLives(a *store.Attempt, run *store.Run, step *plan.Step, ctl workerapi.Control) error {
+// any-job-failed, a job of the run having failed. A step's cleanup, for
+// cleanup, outlives them all, as its job's cleanups run however it ended.
+func stepLives(a *store.Attempt, run *store.Run, step *plan.Step, ctl workerapi.Control, cleanup bool) error {
 	outlives := plan.OutlivesCancel(step.If)
 	switch {
 	case !a.Holds || run.State != store.RunRunning:
 		return errStepGone
+	case cleanup:
+		return nil
 	case !run.StoppedAt.IsZero() && !outlives:
 		return errRunStopped
 	case ctl.Cancel && ctl.Reason != plan.ReasonTimeout && !outlives:

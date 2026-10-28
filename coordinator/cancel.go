@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/parallelworks/hopper"
@@ -281,6 +282,9 @@ func (c *Coordinator) readiedOutlives(ctx context.Context, run *store.Run, j *st
 // stopped, and the coordinator keeps it, rather than open the run's
 // secret record at each look.
 func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.Job) (bool, error) {
+	if run.StepRun {
+		return c.stepRunOutlives(run)
+	}
 	id := run.ID + "/" + j.Key
 	c.mu.Lock()
 	outlives, ok := c.outlives[id]
@@ -320,6 +324,24 @@ func (c *Coordinator) jobOutlives(ctx context.Context, run *store.Run, j *store.
 	c.outlives[id] = outlives
 	c.mu.Unlock()
 	return outlives, nil
+}
+
+// stepRunOutlives reports whether the step run run, which has been
+// stopped, outlives the stop, as the stop of its caller's job's steps'
+// children judges it (stopStepChildrenTx): as its step does, as the step's
+// if: says, or always, for the step's cleanup's. It reads the plan alone,
+// not its caller's job's if:, which a step run's job doesn't run by.
+func (c *Coordinator) stepRunOutlives(run *store.Run) (bool, error) {
+	p, err := c.plans.get(run)
+	if err != nil {
+		return false, err
+	}
+	name, _, _ := strings.Cut(run.Parent.Job, "#")
+	j := p.Job(name)
+	if j == nil || run.Parent.Step >= len(j.Steps) {
+		return false, fmt.Errorf("coordinator: step run %s's caller's plan has no step %d of job %q", run.ID, run.Parent.Step, name)
+	}
+	return run.Parent.Cleanup || plan.OutlivesCancel(j.Steps[run.Parent.Step].If), nil
 }
 
 // placesNoMore reports whether the job, whose latest attempt is a, or nil

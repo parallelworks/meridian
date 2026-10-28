@@ -289,7 +289,9 @@ func (c *Coordinator) setupFailed(ctx context.Context, run *store.Run, job *stor
 	same := last != nil && slices.ContainsFunc(failures[:n-1], func(f *store.Attempt) bool {
 		return f.End.Problem != nil && f.End.Problem.Code == last.Code
 	})
-	if n > len(c.supervision.setup) || same {
+	// A step run is one try of a step, which fails as format 1's try
+	// fails when it can't connect: its caller's step's retry: tries again.
+	if n > len(c.supervision.setup) || same || run.StepRun {
 		diags := problems.Diagnostics{diagnostic(problems.SetupFailed, problems.Params{"job": job.Key, "tries": n})}
 		if last != nil {
 			// Stored masked when where the job ran was private
