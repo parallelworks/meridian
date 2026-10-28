@@ -664,17 +664,20 @@ type route struct {
 // routes are the API's paths. A path a later version added is one an
 // attempt of an earlier version doesn't have, 404.
 var routes = map[string]route{
-	workerapi.PathClaim:     {http.MethodPost, 1},
-	workerapi.PathHeartbeat: {http.MethodPost, 1},
-	workerapi.PathControl:   {http.MethodGet, 1},
-	workerapi.PathEvents:    {http.MethodPost, 1},
-	workerapi.PathLogs:      {http.MethodPost, 1},
-	workerapi.PathComplete:  {http.MethodPost, 1},
-	workerapi.PathAction:    {http.MethodPost, workerapi.Version3},
-	workerapi.PathChild:     {http.MethodPost, workerapi.Version3},
-	workerapi.PathChildEnd:  {http.MethodGet, workerapi.Version3},
-	workerapi.PathChildStop: {http.MethodPost, workerapi.Version3},
-	workerapi.PathCheckout:  {http.MethodPost, workerapi.Version3},
+	workerapi.PathClaim:       {http.MethodPost, 1},
+	workerapi.PathHeartbeat:   {http.MethodPost, 1},
+	workerapi.PathControl:     {http.MethodGet, 1},
+	workerapi.PathEvents:      {http.MethodPost, 1},
+	workerapi.PathLogs:        {http.MethodPost, 1},
+	workerapi.PathComplete:    {http.MethodPost, 1},
+	workerapi.PathAction:      {http.MethodPost, workerapi.Version3},
+	workerapi.PathChild:       {http.MethodPost, workerapi.Version3},
+	workerapi.PathChildEnd:    {http.MethodGet, workerapi.Version3},
+	workerapi.PathChildStop:   {http.MethodPost, workerapi.Version3},
+	workerapi.PathStepRun:     {http.MethodPost, workerapi.Version3},
+	workerapi.PathStepRunEnd:  {http.MethodGet, workerapi.Version3},
+	workerapi.PathStepRunStop: {http.MethodPost, workerapi.Version3},
+	workerapi.PathCheckout:    {http.MethodPost, workerapi.Version3},
 }
 
 // ServeHTTP serves one request of the worker API, which came on a
@@ -726,6 +729,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveChildEnd(w, r, a)
 	case workerapi.PathChildStop:
 		s.serveChildStop(w, r, a)
+	case workerapi.PathStepRun:
+		s.serveStepRun(w, r, a, run)
+	case workerapi.PathStepRunEnd:
+		s.serveStepRunEnd(w, r, a)
+	case workerapi.PathStepRunStop:
+		s.serveStepRunStop(w, r, a)
 	case workerapi.PathCheckout:
 		s.serveCheckout(w, r, a, run)
 	}

@@ -353,6 +353,61 @@ func (j *Job) ReadsNeeds(needs map[string]JobResult) map[string]JobResult {
 	return out
 }
 
+// ReadsSteps returns steps, the results of the job's steps that have had
+// their turn, as a step run of one of the job's steps, or of its
+// cleanup:, is given them (docs/design.md, Steps on another host), the job
+// being the step run's own: that step, and the steps before it by their
+// id alone, which read nothing. Of their outputs, it keeps only those the
+// job's values read (workerValues): a step's with an id, as
+// steps.<id>.outputs.<name> reads it, or needs.<job>.steps.<id>.outputs.<name>,
+// and a step's without one, and each cleanup's, which are the job's own,
+// as needs.<job>.outputs.<name> does, as readsOutput and readsStepOutput
+// match them. Each result keeps its outcome, and its cleanup's, which the
+// status functions read. The coordinator never gives a step run more.
+func (j *Job) ReadsSteps(steps []StepResult) []StepResult {
+	var stepPaths, needsPaths [][]string
+	for _, v := range j.workerValues() {
+		for _, e := range v.Exprs() {
+			for _, r := range e.Refs() {
+				switch r.Context {
+				case "steps":
+					stepPaths = append(stepPaths, r.Path)
+				case "needs":
+					needsPaths = append(needsPaths, r.Path)
+				}
+			}
+		}
+	}
+	reads := func(id, name string) bool {
+		if id == "" {
+			return slices.ContainsFunc(needsPaths, func(p []string) bool { return readsOutput(p, j.Name, name) })
+		}
+		return slices.ContainsFunc(stepPaths, func(p []string) bool { return readsOutput(p, id, name) }) ||
+			slices.ContainsFunc(needsPaths, func(p []string) bool { return readsStepOutput(p, j.Name, id, name) })
+	}
+	kept := func(outputs map[string]string, id string) map[string]string {
+		var out map[string]string
+		for name, v := range outputs {
+			if reads(id, name) {
+				if out == nil {
+					out = map[string]string{}
+				}
+				out[name] = v
+			}
+		}
+		return out
+	}
+	out := make([]StepResult, len(steps))
+	for i, r := range steps {
+		id := ""
+		if i < len(j.Steps) {
+			id = j.Steps[i].ID
+		}
+		out[i] = StepResult{Outcome: r.Outcome, Outputs: kept(r.Outputs, id), CleanupOutcome: r.CleanupOutcome, CleanupOutputs: kept(r.CleanupOutputs, "")}
+	}
+	return out
+}
+
 // readsOutput reports whether a reference to needs that follows path can
 // read the output of the job job named output: as needs.<job>.outputs.<name>,
 // or with a * or an [index] in the place of the job's name or the

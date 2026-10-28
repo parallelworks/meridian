@@ -54,6 +54,9 @@ type Ready struct {
 	// Tree is what an attempt of a child run has of its tree, or nil for a
 	// run no step called (workerapi.Claim.Tree).
 	Tree *workerapi.Tree
+	// StepRun is what an attempt of a step run has of the try of the step
+	// it runs, or nil for any other run (workerapi.Claim.StepRun).
+	StepRun *workerapi.StepRunClaim
 	// RunDir is the run's directory where the attempt runs, where its
 	// member chose it (store.Placement.RunDir, or what a private
 	// placement holds sealed), or "" for the run's; and RunDirOnMember
@@ -408,15 +411,16 @@ func (s *Server) claim(ctx context.Context, run *store.Run, a *store.Attempt) (*
 	var (
 		tree     *workerapi.Tree
 		onMember bool
+		stepRun  *workerapi.StepRunClaim
 	)
 	if a.APIVersion >= workerapi.Version3 {
-		tree, onMember = ready.Tree, ready.RunDirOnMember
+		tree, onMember, stepRun = ready.Tree, ready.RunDirOnMember, ready.StepRun
 	}
 	return &workerapi.Claim{
 		RunID: run.ID, AttemptID: a.ID, APIVersion: a.APIVersion, PlanVersion: run.PlanVersion, Job: job,
 		Attempt: a.Number, Group: a.Placement.Group, Member: a.Placement.Member,
 		LeaseSeconds: a.LeaseSeconds, HeartbeatSeconds: a.HeartbeatSeconds, SelfFencing: a.SelfFencing,
 		Run: ready.Run, Needs: ready.Needs, RunDir: cmp.Or(ready.RunDir, run.RunDir), Env: ready.Env, Retry: retry, Container: ready.Container,
-		Control: control, Tree: tree, RunDirOnMember: onMember,
+		Control: control, Tree: tree, RunDirOnMember: onMember, StepRun: stepRun,
 	}, nil
 }

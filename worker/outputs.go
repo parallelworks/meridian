@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // maxOutputs is the most bytes of $OUTPUTS the worker reads: a job's
 // outputs are capped at 1 MiB (docs/design.md, Outputs). They are counted
 // as they are kept, each byte that isn't UTF-8 as the 3 of the U+FFFD
 // that replaces it, so that what the worker reports keeps to the cap.
-const maxOutputs = 1 << 20
+const maxOutputs = workerapi.MaxOutputs
 
 // maxOutputsLine is how long a line of $OUTPUTS can be, newline aside, for
 // format 1 to read the file: shorter than bufio.Scanner's longest token,

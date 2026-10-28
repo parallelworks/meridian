@@ -1371,6 +1371,34 @@ jobs:
 	}
 }
 
+// A first try given what its caller decided, as a step run's is, is
+// evaluated as a later try is: its if: isn't evaluated again, false as it
+// is here, nor its retry:, and the word always it carries over reads an
+// output that nothing wrote as "".
+func TestStepFirstTryGiven(t *testing.T) {
+	p := compiled(t, `
+jobs:
+  main:
+    steps:
+      - run: echo [${{ needs.main.outputs.none }}]
+        if: ${{ false }}
+        retry: {max-retries: 2}
+`, nil)
+	run := runValues(t, p, nil)
+	ready, _, err := p.Ready(t.Context(), "main", plan.ReadyInput{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := plan.JobState{Run: run, FirstTry: &plan.ReadyStep{IfAlways: true}, Env: map[string]string{"PW_WORKFLOW_STEP_CURRENT_RETRY": "0"}}
+	s, diags, err := ready.Job.Step(t.Context(), 0, state)
+	if err != nil || len(diags) > 0 || s.Skipped || s.Run != "echo []" || s.Retry != nil || !s.IfAlways {
+		t.Errorf("a first try given its caller's decision: %+v, %v, %v", s, diags, err)
+	}
+	if s, _, err := ready.Job.Step(t.Context(), 0, plan.JobState{Run: run}); err != nil || !s.Skipped {
+		t.Errorf("a first try evaluates its if: %+v, %v", s, err)
+	}
+}
+
 // The job's env: and working-directory: read only the variables format 1
 // defines as a job starts, the same for each step, and a step reads each
 // that format 1 defines, but none that it doesn't, such as a credential.

@@ -1,6 +1,7 @@
 package plan_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/parallelworks/meridian/plan"
@@ -137,5 +138,40 @@ func TestStepTarget(t *testing.T) {
 	}
 	if target, _, _, err := p.StepTarget(t.Context(), "build", 3, 0, in); err != nil || target != nil {
 		t.Errorf("a step whose ssh: names no host is on %+v, %v", target, err)
+	}
+}
+
+// TestReadsSteps checks what of its job's steps' results a step run is
+// given, its job being the step and the steps before it by their id: each
+// outcome, and of the outputs only those it reads, a step's with an id by
+// name, or every one's where a * names it, or through needs, and the
+// job's own, those written without an id and by cleanups, through needs.
+func TestReadsSteps(t *testing.T) {
+	p := compiled(t, `jobs:
+  build:
+    steps:
+      - id: a
+        run: echo a
+      - id: b
+        run: echo b
+      - run: echo c
+      - run: echo ${{ steps.a.outputs.x }} ${{ steps.*.outputs.y }} ${{ needs.build.outputs.z }} ${{ needs.build.steps.b.outputs.w }}
+        ssh: {remoteHost: farm}
+`, nil)
+	j := *p.Job("build")
+	j.Steps = []plan.Step{{ID: "a"}, {ID: "b"}, {}, j.Steps[3]}
+	all := map[string]string{"x": "1", "y": "2", "z": "3", "w": "4"}
+	got := j.ReadsSteps([]plan.StepResult{
+		{Outcome: plan.OutcomeSuccess, Outputs: all},
+		{Outcome: plan.OutcomeFailure, Outputs: all, CleanupOutputs: all},
+		{Outcome: plan.OutcomeSkipped, Outputs: all},
+	})
+	want := []plan.StepResult{
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1", "y": "2"}},
+		{Outcome: plan.OutcomeFailure, Outputs: map[string]string{"y": "2", "w": "4"}, CleanupOutputs: map[string]string{"z": "3"}},
+		{Outcome: plan.OutcomeSkipped, Outputs: map[string]string{"z": "3"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("a step run is given %+v, want %+v", got, want)
 	}
 }

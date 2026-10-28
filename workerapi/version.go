@@ -27,7 +27,8 @@ var since = map[string]int{
 	"Claim.attempt": 1, "Claim.group": 1, "Claim.member": 1,
 	"Claim.leaseSeconds": 1, "Claim.heartbeatSeconds": 1, "Claim.selfFencing": 1,
 	"Claim.run": 1, "Claim.needs": 1, "Claim.runDir": 1, "Claim.env": 1, "Claim.retry": 1,
-	"Claim.container": 1, "Claim.traceParent": 1, "Claim.control": 2, "Claim.tree": 3, "Claim.runDirOnMember": 3,
+	"Claim.container": 1, "Claim.traceParent": 1, "Claim.control": 2,
+	"Claim.tree": 3, "Claim.runDirOnMember": 3, "Claim.stepRun": 3,
 	"Tree.jobID": 3, "Tree.rootDir": 3, "Tree.workflowName": 3, "Tree.masked": 3,
 	"EnvVar.value": 1, "EnvVar.secret": 1,
 	"Container.runtime": 1, "Container.image": 1,
@@ -55,6 +56,17 @@ var since = map[string]int{
 	"ChildRequest.envSecrets": 3, "ChildRequest.masked": 3, "ChildRequest.workingDirectory": 3,
 	"Child.run": 3, "Child.ended": 3, "Child.outcome": 3, "Child.reason": 3, "Child.diagnostics": 3,
 	"ChildStop.step": 3, "ChildStop.try": 3, "ChildStop.reason": 3,
+
+	"StepRunClaim.step": 3, "StepRunClaim.try": 3, "StepRunClaim.cleanup": 3, "StepRunClaim.state": 3,
+	"StepRunState.steps": 3, "StepRunState.cancelled": 3, "StepRunState.maxRetries": 3, "StepRunState.ifAlways": 3,
+	"StepRunState.jobRetry": 3, "StepRunState.jobAttempt": 3,
+	"StepRunResult.outcome": 3, "StepRunResult.outputs": 3,
+	"StepRunResult.cleanupOutcome": 3, "StepRunResult.cleanupOutputs": 3,
+	"StepRunRequest.step": 3, "StepRunRequest.try": 3, "StepRunRequest.cleanup": 3,
+	"StepRunRequest.ssh": 3, "StepRunRequest.state": 3, "StepRunRequest.masked": 3,
+	"StepRun.run": 3, "StepRun.ended": 3, "StepRun.outcome": 3, "StepRun.reason": 3, "StepRun.exitCode": 3,
+	"StepRun.outputs": 3, "StepRun.private": 3, "StepRun.secrets": 3, "StepRun.diagnostics": 3,
+	"StepRunStop.step": 3, "StepRunStop.try": 3, "StepRunStop.cleanup": 3, "StepRunStop.reason": 3,
 }
 
 // CheckVersion returns an error if v, a body of an attempt of version of

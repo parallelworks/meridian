@@ -31,7 +31,22 @@ type Children interface {
 	// as its step asks: one that has ended, or was stopped already, is
 	// left as it is.
 	StopChild(ctx context.Context, id string, reason plan.Reason) error
+	// StepRun returns the step run of the try of a step of the attempt a,
+	// or of its cleanup:, of run, that req asks for: the one it has, or one
+	// made now; or how it wasn't made, ended (docs/design.md, Steps on
+	// another host). It returns store.ErrFenced for an attempt that no
+	// longer holds its job, which the server answers Fenced, and an error
+	// that wraps ErrNotStepRun for a step, a try or a host that can't
+	// have one.
+	StepRun(ctx context.Context, run *store.Run, a *store.Attempt, req *workerapi.StepRunRequest) (*workerapi.StepRun, error)
+	// StepRunEnd returns how the step run id, which has ended, ended.
+	StepRunEnd(ctx context.Context, id string) (*workerapi.StepRun, error)
 }
+
+// ErrNotStepRun is what Children.StepRun returns, wrapped, for a step, a
+// try or a host that can't have a step run, as one the worker never asks
+// for, which the server answers 400.
+var ErrNotStepRun = errors.New("workerapisrv: the step's try has no step run")
 
 // ErrNotChild is what Children.Child returns, wrapped, for a step whose
 // uses: names no workflow, or a try past the step's retry:, as one the
