@@ -403,7 +403,11 @@ func (c *compiler) pinSource(ctx context.Context, t *tree, root node, s *plan.St
 	}
 	copied := *p.source
 	s.Source = &copied
-	return &node{pin: p, keys: append(slices.Clone(root.keys), ref.Normal()), chain: append(slices.Clone(root.chain), p.source.Location), root: usesLoc}, nil
+	chain := append(slices.Clone(root.chain), p.source.Location)
+	// The run's own step is the only one at usesLoc: its workflow's text
+	// needs no digest to tell it apart.
+	c.checkCallInputs(t, usesLoc, chain, "", loc, stepMap, p.doc)
+	return &node{pin: p, keys: append(slices.Clone(root.keys), ref.Normal()), chain: chain, root: usesLoc}, nil
 }
 
 // stepRef reads the reference that step, at loc in the workflow rep

@@ -297,10 +297,14 @@ func (f *field) ownsKey() bool {
 	return !f.container || !f.flatten || f.typ != "step"
 }
 
-// label names an input in messages: its path, and its label if it has one.
-func (f *field) label() string {
-	name := strings.Join(f.path, ".")
-	if l, ok := f.def["label"].(string); ok && l != "" && l != name {
+// label names an input in messages (inputLabel).
+func (f *field) label() string { return inputLabel(f.path, f.def) }
+
+// inputLabel names the input that def defines, whose value is at path, in
+// messages: its path, and its label if it has one.
+func inputLabel(path []string, def map[string]any) string {
+	name := strings.Join(path, ".")
+	if l, ok := def["label"].(string); ok && l != "" && l != name {
 		return fmt.Sprintf("%s (%s)", name, l)
 	}
 	return name
