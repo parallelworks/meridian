@@ -135,7 +135,7 @@ func TestHoldIdleEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := h.Endpoint(); e.TakenAt.IsZero() || e.GraceFrom.UnixMicro() != 0 || !graceFrom().Equal(before) {
+	if e := h.Endpoint(); e.TakenAt.IsZero() || !e.GraceFrom.IsZero() || !graceFrom().Equal(before) {
 		t.Errorf("an idle endpoint taken again is %+v, and the store's grace is from %v, was %v", e, graceFrom(), before)
 	}
 	if err := h.Release(t.Context()); err != nil {

@@ -21,7 +21,8 @@ type Endpoint struct {
 	TakenAt time.Time
 	// GraceFrom is when the grace period after which the coordinator acts
 	// on lapsed leases began: when the endpoint was taken, or when its
-	// holder's host last woke (RestartGrace).
+	// holder's host last woke (RestartGrace); or the zero time for one
+	// taken as idle, which started none (HoldIdleEndpoint).
 	GraceFrom time.Time
 }
 
@@ -42,7 +43,11 @@ func (tx *Tx) Endpoint(name string) (*Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.TakenAt, e.GraceFrom = time.UnixMicro(taken).UTC(), time.UnixMicro(grace).UTC()
+	e.TakenAt = time.UnixMicro(taken).UTC()
+	if grace != 0 {
+		// 0 is no grace (HoldIdleEndpoint).
+		e.GraceFrom = time.UnixMicro(grace).UTC()
+	}
 	return &e, nil
 }
 

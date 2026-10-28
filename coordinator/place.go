@@ -398,14 +398,12 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	}
 	if found {
 		// Its workers reach the coordinator as a new one's would.
-		var (
-			key    string
-			placed func()
-		)
-		if _, placed, err = c.connect(ctx, cand.driver, m); err == nil {
+		_, placed, err := c.connect(ctx, cand.driver, m)
+		defer placed()
+		var key string
+		if err == nil {
 			key, err = memberKey(cand.driver, m)
 		}
-		defer placed()
 		if prob, ok := errors.AsType[*problem.Problem](err); ok {
 			return 0, c.attemptSetupFailed(ctx, a.ID, prob)
 		}

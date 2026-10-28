@@ -148,8 +148,12 @@ func (l *countedListener) Close() error {
 // between one job and the next keeps it; that a placement on the member
 // holds it again, which an attempt that hasn't ended keeps however long;
 // and that it lets go of every listener as it stops.
-func TestServeMembersLetsGo(t *testing.T) {
-	parallel(t)
+// serveMembers returns a coordinator whose group local has one member,
+// m1, of a listeningDriver, which it returns too, whose workers never end,
+// once its ServeMembers runs; and what stops ServeMembers, and returns
+// what it did.
+func serveMembers(t *testing.T) (*Coordinator, *listeningDriver, func() error) {
+	t.Helper()
 	// A Unix socket's path is short: the test's own temporary directory
 	// can be too long for one.
 	dir, err := os.MkdirTemp("", "meridian-fw-")
@@ -163,15 +167,36 @@ func TestServeMembersLetsGo(t *testing.T) {
 	c := open(t, Options{Groups: g, Drivers: map[string]backend.Driver{testBackend: d}})
 	d.c, d.ctx = c, t.Context()
 	t.Cleanup(d.workers.Wait)
-	ctx, stop := context.WithCancel(context.WithoutCancel(t.Context()))
-	defer stop()
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	served := make(chan error, 1)
 	go func() { served <- c.ServeMembers(ctx, &runlogtest.Logs{}) }()
+	stop := sync.OnceValue(func() error {
+		cancel()
+		return <-served
+	})
+	t.Cleanup(func() { _ = stop() })
 	waitFor(t, func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		return c.forwarding != nil
 	})
+	return c, d, stop
+}
+
+// endAttempt ends the attempt id, as lost.
+func endAttempt(t *testing.T, c *Coordinator, id string) {
+	t.Helper()
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.EndAttempt(id, store.AttemptEnd{Kind: store.EndLost, Outcome: plan.OutcomeFailure, Reason: plan.ReasonWorkerLost})
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServeMembersLetsGo(t *testing.T) {
+	parallel(t)
+	c, d, stop := serveMembers(t)
+	ctx := t.Context()
 	const key = "ssh-test-member"
 	place := func() *store.Attempt {
 		t.Helper()
@@ -223,11 +248,7 @@ func TestServeMembersLetsGo(t *testing.T) {
 	if e := endpoint(); !e.GraceFrom.Equal(e.TakenAt) || !graceFrom().Equal(e.TakenAt) {
 		t.Errorf("the lease taken first is %+v, and the store's grace is from %v", e, graceFrom())
 	}
-	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
-		return tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndLost, Outcome: plan.OutcomeFailure, Reason: plan.ReasonWorkerLost})
-	}); err != nil {
-		t.Fatal(err)
-	}
+	endAttempt(t, c, a.ID)
 	l := lookups{}
 	// A member between one job and the next keeps its listener.
 	if err := c.forwardAll(ctx, l, time.Now().Add(forwardIdle-time.Minute)); err != nil || !c.holding(key) || d.closed.Load() != 0 {
@@ -247,7 +268,7 @@ func TestServeMembersLetsGo(t *testing.T) {
 	// It takes the lease again as idle, starting no grace, so that the
 	// leases of the store's other attempts, on any member, lapse as they
 	// would, however often members come and go.
-	if e := endpoint(); e.GraceFrom.UnixMicro() != 0 || !graceFrom().Equal(graceBefore) {
+	if e := endpoint(); !e.GraceFrom.IsZero() || !graceFrom().Equal(graceBefore) {
 		t.Errorf("the lease taken again is %+v, and the store's grace is from %v, was %v", e, graceFrom(), graceBefore)
 	}
 	if _, graceEnds, err := c.leaseClock(t.Context()); err != nil || graceEnds.After(time.Now()) {
@@ -259,11 +280,7 @@ func TestServeMembersLetsGo(t *testing.T) {
 	}
 	// Its member is kept for forwardIdle from the last look that found
 	// the attempt, not from its placement.
-	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
-		return tx.EndAttempt(b.ID, store.AttemptEnd{Kind: store.EndLost, Outcome: plan.OutcomeFailure, Reason: plan.ReasonWorkerLost})
-	}); err != nil {
-		t.Fatal(err)
-	}
+	endAttempt(t, c, b.ID)
 	if err := c.forwardAll(ctx, l, later.Add(forwardIdle-time.Minute)); err != nil || !c.holding(key) || d.closed.Load() != 1 {
 		t.Fatalf("within forwardIdle of the last look that found the attempt, held %t, with %d closed, %v", c.holding(key), d.closed.Load(), err)
 	}
@@ -285,11 +302,48 @@ func TestServeMembersLetsGo(t *testing.T) {
 	// As ServeMembers stops, it lets go of every listener.
 	place()
 	waitFor(t, func() bool { return d.forwards.Load() == 3 && held() })
-	stop()
-	if err := <-served; err != nil {
+	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
 	if n := d.closed.Load(); n != 3 || held() || d.forwards.Load() != 3 {
 		t.Errorf("once ServeMembers stopped, %d of %d listeners are closed, and the lease is held: %t", n, d.forwards.Load(), held())
 	}
+}
+
+// TestResumePlaceLetsGo checks that a placement that a supervisor resumes,
+// as one that ended before it recorded it, needs its member's listener
+// only until it is recorded: forwardIdle after the attempt ends, it is let
+// go.
+func TestResumePlaceLetsGo(t *testing.T) {
+	parallel(t)
+	c, d, _ := serveMembers(t)
+	const key = "ssh-test-member"
+	id, _ := create(t, c, oneJob, nil, nil)
+	if _, err := c.startRun(t.Context(), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	var a *store.Attempt
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		var err error
+		if a, _, err = tx.NewAttempt(c.newAttempt(id, "main", false)); err != nil {
+			return err
+		}
+		return tx.ChoosePlace(a.ID, store.Place{Group: "local", Member: "m1", Backend: testBackend})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.placements[a.ID] = backend.Placement{ID: "test-resumed", WorkerDigest: testDigest}
+	d.mu.Unlock()
+	if _, err := c.resumePlace(t.Context(), storedRun(t, c, id), storedJob(t, c, id, "main"), a); err != nil {
+		t.Fatal(err)
+	}
+	if got := latestAttempt(t, c, id, "main"); got.Placement.ID != "test-resumed" || got.Placement.MemberKey != key || !c.holding(key) {
+		t.Fatalf("the resumed attempt is %+v, and its member is held: %t", got, c.holding(key))
+	}
+	endAttempt(t, c, a.ID)
+	if err := c.forwardAll(t.Context(), lookups{}, time.Now().Add(forwardIdle)); err != nil || c.holding(key) {
+		t.Fatalf("forwardIdle after the resumed attempt ended, its member is still held: %t, %v", c.holding(key), err)
+	}
+	waitFor(t, func() bool { return d.closed.Load() == d.forwards.Load() })
 }

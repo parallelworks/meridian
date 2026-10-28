@@ -50,7 +50,11 @@ type forwarding struct {
 	// waits to, by their keys; and idle the keys of those it let go of
 	// as no attempt needed them (releaseIdle), and hasn't held again,
 	// whose leases it takes again as idle (store.HoldIdleEndpoint). The
-	// coordinator's mu guards both.
+	// coordinator's mu guards both. A key leaves idle only as its member
+	// is held again, never as the member leaves its group: idle holds one
+	// key for each member ServeMembers ever let go of, as a meridian run
+	// serves one tree's few, and needs pruning before a coordinator that
+	// serves for long, as meridian serve would.
 	holders map[string]*holder
 	idle    map[string]bool
 	// lookups are when to look again for the members of the attempts
