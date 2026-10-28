@@ -842,6 +842,43 @@ func TestSessionUnanswered(t *testing.T) {
 	}
 }
 
+// TestSessionAbandoned checks a session given up on before the host
+// answered: once the host answers, the session is closed, and only then
+// is its place on the connection given back, so that a connection of one
+// place opens the next only once the first is closed, and no session is
+// left open.
+func TestSessionAbandoned(t *testing.T) {
+	h := newHome(t)
+	s := h.server(sshtest.Options{})
+	h.knownHosts(s.KnownHosts(""))
+	d := h.dialer()
+	d.Sessions = 1
+	d.KeepAlive, d.KeepAliveTimeout = time.Hour, time.Hour
+	c := dial(t, d, sshconn.Target{Host: s.Addr()})
+	s.Stall()
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := c.NewSession(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a session the host doesn't answer gave %v", err)
+	}
+	s.Resume()
+	next, err := c.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := s.OpenSessions(); n != 1 {
+		t.Errorf("with the next session open, the host has %d open", n)
+	}
+	_ = next.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for s.OpenSessions() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d sessions are left open", s.OpenSessions())
+		}
+		time.Sleep(10 * time.Millisecond) //nolint:forbidigo // the server's count, which nothing signals
+	}
+}
+
 // TestListenUnix checks that a host forwards a Unix socket's connections
 // over the connection.
 func TestListenUnix(t *testing.T) {

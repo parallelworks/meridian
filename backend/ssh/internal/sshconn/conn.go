@@ -163,12 +163,13 @@ func (c *Conn) NewSession(ctx context.Context) (*Session, error) {
 	release := sync.OnceFunc(func() { <-c.sessions })
 	wait := refusedFirst
 	for {
-		s, err := c.open(ctx)
+		s, err := c.open(ctx, release)
 		if err == nil {
 			return &Session{Session: s, release: release}, nil
 		}
 		if errors.Is(err, errOpenAbandoned) {
-			release()
+			// The place is given back once the open the host may still
+			// answer has ended (open).
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -199,17 +200,35 @@ var errOpenAbandoned = errors.New("sshconn: stopped waiting for the host to open
 
 // open asks the host for a session, as x/crypto/ssh's Client.NewSession
 // does, but waits for it only until ctx is done, or the connection closes:
-// then it is errOpenAbandoned, and a session the host opens after is
-// closed.
-func (c *Conn) open(ctx context.Context) (*ssh.Session, error) {
+// then it is errOpenAbandoned, and the call that asks closes a session the
+// host opens after, and only then calls release, which gives the
+// session's place on the connection back, so that the connection never
+// has more open than its limit. Where the connection has closed, the
+// place is given back at once: nothing opens on it again, and the call
+// can wait for ever, as x/crypto/ssh's can on a connection that closed as
+// it asked.
+func (c *Conn) open(ctx context.Context, release func()) (*ssh.Session, error) {
 	type opened struct {
 		s   *ssh.Session
 		err error
 	}
+	var (
+		mu        sync.Mutex
+		abandoned bool
+	)
 	ch := make(chan opened, 1)
 	go func() {
 		s, err := c.client.NewSession()
-		ch <- opened{s, err}
+		mu.Lock()
+		defer mu.Unlock()
+		if !abandoned {
+			ch <- opened{s, err}
+			return
+		}
+		if s != nil {
+			_ = s.Close()
+		}
+		release()
 	}()
 	select {
 	case o := <-ch:
@@ -217,11 +236,18 @@ func (c *Conn) open(ctx context.Context) (*ssh.Session, error) {
 	case <-ctx.Done():
 	case <-c.done:
 	}
-	go func() {
-		if o := <-ch; o.s != nil {
-			_ = o.s.Close()
-		}
-	}()
+	mu.Lock()
+	defer mu.Unlock()
+	select {
+	case o := <-ch:
+		// Answered as it was given up on.
+		return o.s, o.err
+	default:
+	}
+	abandoned = true
+	if c.Err() != nil {
+		release()
+	}
 	return nil, errOpenAbandoned
 }
 
