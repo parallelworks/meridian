@@ -128,7 +128,9 @@ func (c *Coordinator) createChild(ctx context.Context, a *store.Attempt, p *plan
 	if err != nil || created == nil {
 		return "", diags, err
 	}
-	id, err := c.storeChild(ctx, step, created, group, dir, &link)
+	id, err := c.storeChild(ctx, step, &link, func(tx *store.Tx, id string) error {
+		return c.insertRun(ctx, tx, id, created, sharedQueue, group, dir, &link)
+	})
 	if err != nil {
 		return "", nil, err
 	}
@@ -249,14 +251,13 @@ func (c *Coordinator) compileChild(ctx context.Context, p, rootPlan *plan.Plan, 
 	})
 }
 
-// storeChild stores created, in one transaction, as the child run that
-// link links to a try of step, in the group group and the directory dir,
-// with its Start in the queue every coordinator works, and returns its ID:
-// or the ID of the child another ask stored meanwhile. It reads the
+// storeChild stores, in one transaction, the child run that link links to
+// a try of step, with insert, which stores the run as id, and returns its
+// ID: or the ID of the child another ask stored meanwhile. It reads the
 // attempt, its run and its control again, as they may have changed since
-// createChild read them, and returns stepLives' error for a step that no
+// the ask read them, and returns stepLives' error for a step that no
 // longer lives.
-func (c *Coordinator) storeChild(ctx context.Context, step *plan.Step, created *compile.Created, group, dir string, link *store.Link) (string, error) {
+func (c *Coordinator) storeChild(ctx context.Context, step *plan.Step, link *store.Link, insert func(tx *store.Tx, id string) error) (string, error) {
 	if c.beforeChildStore != nil {
 		c.beforeChildStore()
 	}
@@ -288,7 +289,7 @@ func (c *Coordinator) storeChild(ctx context.Context, step *plan.Step, created *
 		if id, err = tx.NewRunID(); err != nil {
 			return err
 		}
-		return c.insertRun(ctx, tx, id, created, sharedQueue, group, dir, link)
+		return insert(tx, id)
 	})
 	return id, err
 }

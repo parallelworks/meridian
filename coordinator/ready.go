@@ -71,6 +71,9 @@ func (c *Coordinator) readyEarly(ctx context.Context, run *store.Run, key string
 
 // ready is readyJob, and readyEarly when early is set.
 func (c *Coordinator) ready(ctx context.Context, run *store.Run, key string, early bool) (*readied, error) {
+	if run.StepRun {
+		return c.readyStepRun(ctx, run, early)
+	}
 	// Before anything is pinned or failed: readyInput checks it too.
 	if run.StartState == nil {
 		return nil, fmt.Errorf("coordinator: run %s hasn't started", run.ID)

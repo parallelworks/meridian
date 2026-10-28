@@ -224,6 +224,11 @@ var goldens = []golden{
 			Env:    map[string]string{"REGION": "east", "TOKEN": "t0k3n"},
 			Masked: []string{"t0k3n", "hunter2"},
 		}
+		r.StepRun = &plan.StepRun{
+			SSH:     &plan.Inline{Name: "ssh", Backend: "ssh", Isolation: "host", SSH: plan.DataOf(map[string]any{"remoteHost": "farm"})},
+			Private: true,
+			State:   plan.DataOf(map[string]any{"steps": []any{}}),
+		}
 		return [][]byte{encoded(t, plan.EncodeRecord, r)}
 	}},
 	{"jobresult.json", reflect.TypeFor[plan.JobResult](), "plan/schema/2/jobresult.schema.json", func(t testing.TB) [][]byte {

@@ -832,6 +832,10 @@
         "inherited": {
           "description": "What a child run has of the step that calls it that its plan doesn't hold. Version 2.",
           "$ref": "#/$defs/Inherited"
+        },
+        "stepRun": {
+          "description": "What a step run holds of the step's try it runs. Version 2.",
+          "$ref": "#/$defs/StepRun"
         }
       },
       "required": ["version"],
@@ -1067,6 +1071,25 @@
       "items": {
         "type": "string"
       }
+    },
+    "StepRun": {
+      "description": "What a step run's secret record holds of the try of the step it runs on another host than its job's.",
+      "type": "object",
+      "properties": {
+        "ssh": {
+          "description": "The step's ssh:, as the try evaluated it, which names the host the step runs on; absent for one that is null, or gives no remoteHost, in a job on a host.",
+          "$ref": "#/$defs/Inline"
+        },
+        "private": {
+          "description": "Whether evaluating the step's ssh: read a variable or a password.",
+          "type": "boolean"
+        },
+        "state": {
+          "description": "The state of the caller's job at the try, a mapping, as its worker gave it.",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
     },
     "Strings": {
       "description": "A mapping of strings.",

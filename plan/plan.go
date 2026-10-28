@@ -483,6 +483,16 @@ type JobRetry struct {
 	Interval   Value    `json:"interval,omitzero"`
 }
 
+// StepElsewhere reports whether the job's step s can run as a step run, a
+// run of its own on another host than the job's (docs/design.md, Steps on
+// another host), as the plan says it without evaluating it: s doesn't call
+// a workflow, and has an ssh: of its own, null among them, in a job with
+// none, or with one, which names a host, as a job's ssh: can't be null.
+// Whether a try of s runs so is what its ssh: gives the try.
+func (j *Job) StepElsewhere(s *Step) bool {
+	return s.Source == nil && !s.SSH.IsZero()
+}
+
 // RetriesFor reports whether the job's retry: lists reason: whether an
 // attempt of the job that ended for it can be followed by another, as its
 // max-retries allows, which Ready evaluates (ReadyJobRetry). Its reasons
