@@ -208,6 +208,19 @@ cases:
     value: t
   - expr: vars.missing
     value: ""
+  # vars.* and org.* read every variable of their context, in the order of
+  # their names, as .* reads a mapping. Format 1 read a variable named *
+  # before, and gave "".
+  - expr: vars.*
+    value: [t, us-east]
+  - expr: var.*
+    value: [t, us-east]
+  - expr: "vars['*']"
+    value: [t, us-east]
+  - expr: org.*
+    value: [h, orgValue]
+  - expr: "join(org.*, ',')"
+    value: h,orgValue
   - expr: remote.branch
     value: main
   - expr: remote.missing
