@@ -1329,17 +1329,18 @@
     ]
   },
   "cluster_unknown": {
-    "why": "A compute-clusters input's value names a cluster, and the run sees the cluster's details, such as its ip and its schedulerType. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, whatever the input's include-workspace, provider and csp say, which only choose what a form lists.",
+    "why": "A compute-clusters or compute-resources input's value names a cluster, and the run sees the cluster's details, such as its ip and its schedulerType. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, whatever the input's include-workspace, provider and csp say, which only choose what a form lists.",
     "fix": [
       "Choose one of the clusters the message lists, or the workspace.",
-      "Or define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it."
+      "Or define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it.",
+      "A Kubernetes cluster, which a compute-resources input can name on a platform, can't be chosen here: run on its own, Meridian knows only the clusters of clusters.yaml and the workspace. Run such a workflow on a platform that provides it."
     ]
   },
   "clusters_none": {
-    "why": "A compute-clusters input's value names a cluster. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, and there is no clusters.yaml, or it defines no cluster.",
+    "why": "A compute-clusters or compute-resources input's value names a cluster. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, and there is no clusters.yaml, or it defines no cluster.",
     "fix": [
       "Define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it.",
-      "Or run the workflow on a platform that provides the input's clusters."
+      "Or run the workflow on a platform that provides the input's clusters: run on its own, Meridian knows only the clusters of clusters.yaml and the workspace, so a Kubernetes cluster, which a compute-resources input can name on a platform, isn't available here."
     ]
   },
   "bucket_uri_invalid": {
