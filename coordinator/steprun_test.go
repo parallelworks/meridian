@@ -19,9 +19,13 @@ import (
 // steps on the host farm: a checkout, a command, a step that calls a
 // workflow, which can't run so, a command whose host a variable names, a
 // command whose ssh: is null, which runs in its job, an action the
-// coordinator performs, whose ssh: places nothing, and a command whose
-// host only the job's worker knows; whose job hosted runs on farm, with a
-// step whose ssh: is null; and whose matrix job fan has a step on farm.
+// coordinator performs, whose ssh: places nothing, a command whose host
+// only the job's worker knows, commands whose host their retry counter
+// names, a command on farm that outlives its job's cancel, and one on
+// farm with a retry: and a cleanup:; whose job hosted runs on farm, with
+// a step whose ssh: is null; whose job failover, on farm, runs again once
+// its worker is lost, and has a step whose host its retry counter names;
+// and whose matrix job fan has a step on farm.
 const stepRunRoot = `jobs:
   build:
     steps:
@@ -31,6 +35,7 @@ const stepRunRoot = `jobs:
         with: {repo: https://example.com/app.git, branch: main}
       - run: echo there
         ssh: {remoteHost: farm}
+        cleanup: echo tidy
       - uses: github/t/grand@main
         ssh: {remoteHost: farm}
         with: {$yaml: w.yaml}
@@ -48,6 +53,13 @@ const stepRunRoot = `jobs:
         ssh: {remoteHost: "farm${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}"}
       - run: echo once
         ssh: {remoteHost: "farm${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY }}"}
+      - if: ${{ always() }}
+        run: echo always
+        ssh: {remoteHost: farm}
+      - run: echo again
+        retry: {max-retries: 1}
+        ssh: {remoteHost: farm}
+        cleanup: echo tidy again
   blank:
     ssh: {remoteHost: ""}
     steps:
@@ -60,6 +72,7 @@ const stepRunRoot = `jobs:
         ssh: null
   failover:
     ssh: {remoteHost: farm}
+    retry: {reasons: [worker-lost], max-retries: 1}
     steps:
       - run: echo failover
         retry: {max-retries: 1}
@@ -87,12 +100,24 @@ type stepRunRig struct {
 
 func newStepRunRig(t *testing.T) *stepRunRig {
 	t.Helper()
+	return newStepRunRigWith(t, nil)
+}
+
+// newStepRunRigWith is newStepRunRig, whose step runs' workers end as
+// stepRuns says, where it isn't nil, rather than hold their places.
+func newStepRunRigWith(t *testing.T, stepRuns func(backend.PlaceRequest) testEnd) *stepRunRig {
+	t.Helper()
 	vars := conformancetest.Variables{"vars.FARM": {Value: "farm"}}
 	d := newTestDriver()
 	d.runDir = "/home/alice/.local/state/meridian/runs/1-store"
 	hold := make(chan struct{})
 	t.Cleanup(func() { close(hold) })
-	d.worker = func(backend.PlaceRequest) testEnd {
+	d.worker = func(req backend.PlaceRequest) testEnd {
+		// A step run's job is placed in its root's tree; the root's
+		// jobs aren't.
+		if req.Root != "" && stepRuns != nil {
+			return stepRuns(req)
+		}
 		return testEnd{wait: hold, result: plan.JobResult{Outcome: plan.OutcomeSuccess}}
 	}
 	c := open(t, Options{Variables: vars, Drivers: map[string]backend.Driver{testBackend: d, "ssh": d}})

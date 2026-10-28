@@ -304,7 +304,9 @@ func (c *Coordinator) workerLost(ctx context.Context, run *store.Run, job *store
 	retry := r.result.Job.Retry
 	again, retried := retriesAgain(retry, a.End.Reason, job.AttemptsStarted)
 	switch {
-	case retry == nil || !slices.Contains(retry.Reasons, plan.ReasonWorkerLost):
+	case retry == nil || run.StepRun || !slices.Contains(retry.Reasons, plan.ReasonWorkerLost):
+		// A step run is one try of a step, which its caller's step's
+		// retry: tries again, not its job's.
 		return 0, failed(problems.WorkerLost, problems.Params{})
 	case !again:
 		return 0, failed(problems.WorkerLostAgain, problems.Params{"retries": retried})

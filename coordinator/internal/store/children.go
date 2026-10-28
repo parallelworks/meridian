@@ -21,6 +21,10 @@ type Link struct {
 	// called, and Depth how far below it the run is, from 1.
 	Root  string
 	Depth int
+	// Cleanup is set for a run of the step's cleanup:, a step run, whose
+	// Try is 0, which the step's tries' own runs, of the same step and
+	// try, aren't.
+	Cleanup bool
 }
 
 // check returns an error for a link that names no step's try.
@@ -37,9 +41,16 @@ func (l *Link) check() error {
 // Child returns the ID of the child run of the try try of the step step
 // that the attempt attempt ran: ErrNotFound if it has none.
 func (tx *Tx) Child(attempt string, step, try int) (string, error) {
+	return tx.ChildOf(attempt, step, try, false)
+}
+
+// ChildOf returns the ID of the child run of the try try of the step step
+// that the attempt attempt ran, or, where cleanup is set, of the step's
+// cleanup (Link.Cleanup): ErrNotFound if it has none.
+func (tx *Tx) ChildOf(attempt string, step, try int, cleanup bool) (string, error) {
 	var n int64
-	err := tx.queryRow(`SELECT id FROM meridian_runs WHERE parent_attempt = ? AND parent_step = ? AND parent_try = ?`,
-		attempt, step, try).Scan(&n)
+	err := tx.queryRow(`SELECT id FROM meridian_runs WHERE parent_attempt = ? AND parent_step = ? AND parent_try = ? AND parent_cleanup = ?`,
+		attempt, step, try, cleanup).Scan(&n)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotFound
 	}
@@ -53,9 +64,11 @@ func (tx *Tx) Child(attempt string, step, try int) (string, error) {
 // attempt's job (Tx.LiveChildren).
 type LiveChild struct {
 	// ID is the run's ID, Attempt the ID of the attempt that ran the
-	// step, Step the step's index in its job, and Try its try.
+	// step, Step the step's index in its job, and Try its try; and Cleanup
+	// is set for a run of the step's cleanup.
 	ID, Attempt string
 	Step, Try   int
+	Cleanup     bool
 }
 
 // LiveChildren returns the children of the steps' tries of the attempts
@@ -63,7 +76,7 @@ type LiveChild struct {
 func (tx *Tx) LiveChildren(ids ...string) ([]LiveChild, error) {
 	var out []LiveChild
 	for _, attempt := range ids {
-		rows, err := tx.query(`SELECT id, parent_step, parent_try FROM meridian_runs WHERE parent_attempt = ? AND state <> ? ORDER BY id`,
+		rows, err := tx.query(`SELECT id, parent_step, parent_try, parent_cleanup FROM meridian_runs WHERE parent_attempt = ? AND state <> ? ORDER BY id`,
 			attempt, RunEnded)
 		if err != nil {
 			return nil, err
@@ -71,7 +84,7 @@ func (tx *Tx) LiveChildren(ids ...string) ([]LiveChild, error) {
 		for rows.Next() {
 			var n int64
 			c := LiveChild{Attempt: attempt}
-			if err := rows.Scan(&n, &c.Step, &c.Try); err != nil {
+			if err := rows.Scan(&n, &c.Step, &c.Try, &c.Cleanup); err != nil {
 				rows.Close()
 				return nil, err
 			}

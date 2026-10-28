@@ -2634,9 +2634,14 @@ built yet: such a step fails (`step_ssh_not_supported`), as one whose
   neither backend queues a job. The coordinator stops it in the
   transaction that ends the caller's attempt, however that ends, and in
   the one that stops its run, or its job, as for a workflow a step
-  calls, but for a cleanup's, which its job's cancel doesn't stop. Its
-  paths are version 3's of the worker API; an attempt of an older
-  version fails such a step, as now.
+  calls, but for one of a step that outlives that stop, as its `if:`
+  says, and a cleanup's, which no stop of its job or its run stops; the
+  end of the caller's attempt stops them all. A stop that reaches a step
+  run, as these, its step's own, its step's timeout or a person's
+  cancel, reaches its worker in the same transaction, whatever its
+  step's `if:` says, and a step run stopped before it was placed is
+  never placed. Its paths are version 3's of the worker API; an attempt
+  of an older version fails such a step, as now.
 
 Where format 1 does otherwise, none of it in the known workflows:
 

@@ -17,6 +17,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // A stepRunRequest is a step's try's ask for a step run, a run of its own
@@ -31,9 +32,12 @@ import (
 // the step run's worker masks too.
 type stepRunRequest struct {
 	Step, Try int
-	SSH       *plan.Inline
-	State     plan.Data
-	Masked    []string
+	// Cleanup is set for the step's cleanup:, whose Try is 0, which runs
+	// however the job ended, and its run with it.
+	Cleanup bool
+	SSH     *plan.Inline
+	State   plan.Data
+	Masked  []string
 }
 
 // errNotStepRun is what createStepRun returns for a step that can't run as
@@ -91,7 +95,10 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	if _, ok := req.State.Get().(map[string]any); !ok && !req.State.IsZero() {
 		return "", nil, fmt.Errorf("%w: the job's state isn't a mapping", errNotStepRun)
 	}
-	cl, existing, err := c.readCaller(ctx, a.ID, req.Step, req.Try)
+	if req.Cleanup && (req.Try != 0 || step.Cleanup.IsZero()) {
+		return "", nil, fmt.Errorf("%w: a cleanup of a step without one, or of a try", errNotStepRun)
+	}
+	cl, existing, err := c.readCaller(ctx, a.ID, req.Step, req.Try, req.Cleanup)
 	switch {
 	case err != nil:
 		return "", nil, err
@@ -100,7 +107,7 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	case cl.run.StepRun:
 		return "", nil, fmt.Errorf("%w: step run %s's own step", errNotStepRun, cl.run.ID)
 	}
-	if err := stepLives(cl.attempt, cl.run, step, cl.control); err != nil {
+	if err := stepLives(cl.attempt, cl.run, step, cl.control, req.Cleanup); err != nil {
 		return "", nil, err
 	}
 	name, _, _ := strings.Cut(cl.attempt.Job, "#")
@@ -130,7 +137,7 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	if cl.run.Parent != nil {
 		depth = cl.run.Parent.Depth + 1
 	}
-	link := store.Link{Run: cl.run.ID, Job: cl.attempt.Job, Attempt: cl.attempt.ID, Step: req.Step, Try: req.Try, Root: cl.root.ID, Depth: depth}
+	link := store.Link{Run: cl.run.ID, Job: cl.attempt.Job, Attempt: cl.attempt.ID, Step: req.Step, Try: req.Try, Root: cl.root.ID, Depth: depth, Cleanup: req.Cleanup}
 	record := plan.Record{
 		Version: plan.Version, PlanDigest: callers.PlanDigest, Inherited: callers.Inherited,
 		StepRun: &plan.StepRun{SSH: target, Private: private, State: req.State, Masked: req.Masked},
@@ -361,4 +368,91 @@ func (c *Coordinator) stepRunJob(ctx context.Context, run *store.Run, rj *plan.R
 		j.PrivateFields = append(slices.Clone(j.PrivateFields), "target")
 	}
 	return &j, nil
+}
+
+// A stepRunEnd is how a step run ended, which is how the try of the step
+// it runs ended (docs/design.md, Steps on another host), or Ended unset
+// for one that hasn't: its run's outcome and why; the exit status of its
+// step's command, or its cleanup's, for a cleanup's step run, as its
+// worker reported it finished, or -1 for none; what its step wrote to $OUTPUTS, for one that succeeded, which
+// the caller's worker appends to the file the step would have written,
+// with which of them are private and which hold a secret; and its job's
+// problems.
+type stepRunEnd struct {
+	Ended            bool
+	Outcome          plan.Outcome
+	Reason           plan.Reason
+	ExitCode         int
+	Outputs          map[string]string
+	Private, Secrets []string
+	Diagnostics      problems.Diagnostics
+}
+
+// stepRunEnd returns how the step run id ended. What its step wrote to
+// $OUTPUTS is its job's result's outputs, as the step run's worker reports
+// them, joined with its secret record's part of them, and only for a step
+// run that succeeded: format 1 copies the file back from the host only
+// after a try that succeeded.
+func (c *Coordinator) stepRunEnd(ctx context.Context, id string) (*stepRunEnd, error) {
+	var (
+		run    *store.Run
+		job    *store.Job
+		events []workerapi.Event
+		stored *store.Record
+		parts  map[string]store.JobRecord
+	)
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		if run, err = tx.Run(id); err != nil || run.State != store.RunEnded {
+			return err
+		}
+		if !run.StepRun {
+			return fmt.Errorf("coordinator: run %s isn't a step run", id)
+		}
+		name, _, _ := strings.Cut(run.Parent.Job, "#")
+		if job, err = tx.Job(id, name); err != nil {
+			return err
+		}
+		if job.Outcome == plan.OutcomeSuccess && job.Result != nil {
+			// What of its outputs is private is its job's part of its
+			// secret record, which its caller's end deletes.
+			if stored, err = tx.Record(id); err != nil {
+				return err
+			}
+			if parts, err = tx.JobRecords(id, []string{job.Key}); err != nil {
+				return err
+			}
+		}
+		a, err := tx.LatestAttempt(id, name)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		events, err = tx.Events(a.ID)
+		return err
+	})
+	switch {
+	case err != nil:
+		return nil, err
+	case run.State != store.RunEnded:
+		return &stepRunEnd{}, nil
+	}
+	end := &stepRunEnd{Ended: true, Outcome: run.Outcome, Reason: run.Reason, ExitCode: -1, Diagnostics: job.Diagnostics}
+	for _, e := range events {
+		if e.Finished && e.Cleanup == run.Parent.Cleanup && e.Step == run.Parent.Step {
+			end.ExitCode = e.ExitCode
+		}
+	}
+	if run.Outcome != plan.OutcomeSuccess || stored == nil {
+		return end, nil
+	}
+	jobs, err := c.openJobRecords(ctx, id, stored.WrappedKey, parts)
+	if err != nil {
+		return nil, err
+	}
+	result := plan.JoinJobResult(jobs[job.Key], *job.Result)
+	end.Outputs, end.Private, end.Secrets = result.Outputs, result.Private, result.Secrets
+	return end, nil
 }

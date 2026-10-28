@@ -163,6 +163,7 @@ func (tx *Tx) InsertRun(r NewRun) error {
 		job, attmpt sql.NullString
 		step, try   sql.NullInt64
 		depth       int
+		cleanup     bool
 	}
 	if l := r.Parent; l != nil {
 		if err := l.check(); err != nil {
@@ -177,6 +178,7 @@ func (tx *Tx) InsertRun(r NewRun) error {
 		link.job, link.attmpt = sql.NullString{String: l.Job, Valid: true}, sql.NullString{String: l.Attempt, Valid: true}
 		link.step, link.try = sql.NullInt64{Int64: int64(l.Step), Valid: true}, sql.NullInt64{Int64: int64(l.Try), Valid: true}
 		link.depth = l.Depth
+		link.cleanup = l.Cleanup
 	}
 	encoded, err := plan.Encode(r.Plan)
 	if err != nil {
@@ -203,12 +205,12 @@ func (tx *Tx) InsertRun(r NewRun) error {
 	}
 	res, err := tx.exec(`INSERT INTO meridian_runs (id, created_at, plan_version, plan_digest, plan,
   name, location, release, default_group, run_dir, workflow_id, state, finisher_id,
-  parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth, step_run)
-SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth, step_run, parent_cleanup)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 WHERE ? <= (SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = 'last_run')`,
 		n, now, r.Plan.Version, digest, encoded,
 		r.Plan.Run.Name, r.Plan.Run.Source.Location, r.Plan.Run.Release, r.DefaultGroup, r.RunDir, r.WorkflowID, RunCreated, finisher,
-		link.run, link.job, link.attmpt, link.step, link.try, link.root, link.depth, r.StepRun, n)
+		link.run, link.job, link.attmpt, link.step, link.try, link.root, link.depth, r.StepRun, link.cleanup, n)
 	if err != nil {
 		return err
 	}
@@ -226,7 +228,7 @@ const runColumns = `id, created_at, plan, plan_version, plan_digest, name, locat
   default_group, run_dir, workflow_id, record_gen, state, outcome, reason, started_at, ended_at,
   start_state, start_tries, diagnostics, any_job_failed_at, stopped_at, stop_reason,
   finisher_id, waited_at, parent_run, parent_job, parent_attempt, parent_step, parent_try, root_run, depth,
-  step_run`
+  step_run, parent_cleanup`
 
 // Run returns the run with the ID id.
 func (tx *Tx) Run(id string) (*Run, error) {
@@ -247,6 +249,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		startState      []byte
 		diags           []byte
 		waited          sql.NullInt64
+		cleanup         bool
 		parentRun, root sql.NullInt64
 		job, attempt    sql.NullString
 		step, try       sql.NullInt64
@@ -256,7 +259,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 		&number, &created, &r.Plan, &r.PlanVersion, &r.PlanDigest, &r.Name, &r.Location, &r.Release,
 		&r.DefaultGroup, &r.RunDir, &r.WorkflowID, &r.RecordGeneration, &state, &outcome, &reason, &started, &ended,
 		&startState, &r.StartTries, &diags, &jobFailed, &stopped, &stopReason,
-		&r.FinisherID, &waited, &parentRun, &job, &attempt, &step, &try, &root, &depth, &r.StepRun)
+		&r.FinisherID, &waited, &parentRun, &job, &attempt, &step, &try, &root, &depth, &r.StepRun, &cleanup)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -271,7 +274,7 @@ func (tx *Tx) Run(id string) (*Run, error) {
 	if parentRun.Valid {
 		r.Parent = &Link{
 			Run: runID(parentRun.Int64), Job: job.String, Attempt: attempt.String,
-			Step: int(step.Int64), Try: int(try.Int64), Root: runID(root.Int64), Depth: depth,
+			Step: int(step.Int64), Try: int(try.Int64), Root: runID(root.Int64), Depth: depth, Cleanup: cleanup,
 		}
 	}
 	if r.StepRun {
@@ -454,11 +457,12 @@ func (tx *Tx) StartRun(id string, state *compile.StartState, diags problems.Diag
 
 // EndRun records how the run ended, and deletes its secret record, its
 // jobs' parts of it too (PutJobRecord), which nothing needs once the run
-// has ended. The record is erased: overwritten
-// with zeros as it is deleted, and, once the transaction commits, gone
-// from the write-ahead log too, which the store checkpoints and
-// truncates. A run that has ended already, or that has an attempt that
-// hasn't, is ErrState.
+// has ended; but a step run's, whose caller reads its end from it, goes
+// once both have ended, with whichever ends last (deleteRecords). The
+// record is erased: overwritten with zeros as it is deleted, and, once the
+// transaction commits, gone from the write-ahead log too, which the store
+// checkpoints and truncates. A run that has ended already, or that has an
+// attempt that hasn't, is ErrState.
 func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error {
 	switch outcome {
 	case plan.OutcomeSuccess, plan.OutcomeFailure, plan.OutcomeCancelled:
@@ -495,16 +499,41 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 		return err
 	}
 	tx.ended = append(tx.ended, id)
-	if _, err := tx.exec("DELETE FROM meridian_records WHERE run_id = ?", n); err != nil {
-		return err
-	}
-	if _, err := tx.exec("DELETE FROM meridian_job_records WHERE run_id = ?", n); err != nil {
+	if err := tx.deleteRecords(n); err != nil {
 		return err
 	}
 	if err := tx.eraseDigests(); err != nil {
 		return err
 	}
 	tx.erased = true
+	return nil
+}
+
+// deleteRecords deletes the secret record and the job records of the run
+// numbered n, which has ended, but a step run's, which its caller reads
+// once it has ended: those go once both have ended, with whichever ends
+// last, the caller's with those of its step runs that have ended, and a
+// step run's with it, once its caller has.
+func (tx *Tx) deleteRecords(n int64) error {
+	var (
+		stepRun bool
+		caller  sql.NullString
+	)
+	if err := tx.queryRow("SELECT r.step_run, p.state FROM meridian_runs r LEFT JOIN meridian_runs p ON p.id = r.parent_run WHERE r.id = ?", n).Scan(&stepRun, &caller); err != nil {
+		return err
+	}
+	for _, table := range []string{"meridian_records", "meridian_job_records"} {
+		if !stepRun || caller.String == string(RunEnded) {
+			if _, err := tx.exec("DELETE FROM "+table+" WHERE run_id = ?", n); err != nil {
+				return err
+			}
+		}
+		if !stepRun {
+			if _, err := tx.exec("DELETE FROM "+table+" WHERE run_id IN (SELECT id FROM meridian_runs WHERE parent_run = ? AND step_run = 1 AND state = ?)", n, RunEnded); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
