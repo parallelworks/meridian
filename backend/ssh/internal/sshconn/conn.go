@@ -299,6 +299,9 @@ type Pool struct {
 	// dialed, which a test sets, is called once a dial has ended, and
 	// what it made, or how it failed, is recorded.
 	dialed func()
+	// now, which a test sets, is the pool's clock, by which it backs off
+	// from a target it failed to reach: time.Now for nil.
+	now func() time.Time
 }
 
 // An entry is a pool's connection to a target, or how it last failed to
@@ -375,7 +378,7 @@ func (p *Pool) Get(ctx context.Context, t Target) (*Conn, error) {
 		p.mu.Unlock()
 		return e.conn, nil
 	}
-	if e.dialing != nil || time.Now().Before(e.retryAt) {
+	if e.dialing != nil || p.clock().Before(e.retryAt) {
 		err := e.lastErr
 		if err == nil {
 			err = ErrDialing
@@ -446,8 +449,16 @@ func (p *Pool) dial(ctx context.Context, e *entry, t Target) {
 		e.failures++
 		e.failed++
 		e.lastErr = err
-		e.retryAt = time.Now().Add(redialAfter(e.failures))
+		e.retryAt = p.clock().Add(redialAfter(e.failures))
 	}
+}
+
+// clock returns the time by the pool's clock (Pool.now).
+func (p *Pool) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 // redialAfter is how long to wait before dialing again after failures

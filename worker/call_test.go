@@ -337,16 +337,20 @@ func TestCallEndUnread(t *testing.T) {
 // soon as it is made.
 func TestCallTimedFromItsStart(t *testing.T) {
 	t.Parallel()
+	// Counted from the child's making, the timeout would stop it
+	// callTimeout after; counted from the try's start, as it is, at once.
+	// The bound between them, half of it, leaves as much room each way.
+	const callTimeout = 3 * time.Second
 	step := calling(nil)
-	step.Timeout = plan.Literal("1s")
+	step.Timeout = plan.Literal(callTimeout.String())
 	f := workerapitest.NewFake(t, newJob(step))
 	var (
 		mu            sync.Mutex
 		made, stopped time.Time
 	)
 	f.Child = func(workerapi.ChildRequest) *workerapi.Child {
-		// The coordinator takes a while to make it.
-		<-time.After(1500 * time.Millisecond)
+		// The coordinator takes a while to make it, past the timeout.
+		<-time.After(callTimeout + 500*time.Millisecond)
 		mu.Lock()
 		made = time.Now()
 		mu.Unlock()
@@ -363,7 +367,7 @@ func TestCallTimedFromItsStart(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if stopped.IsZero() || stopped.Sub(made) > 700*time.Millisecond {
+	if stopped.IsZero() || stopped.Sub(made) > callTimeout/2 {
 		t.Errorf("the child was made at %v, and stopped %v after", made, stopped.Sub(made))
 	}
 }
