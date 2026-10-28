@@ -152,7 +152,12 @@ func (q *eventQueue) wait(seq int64, stop <-chan struct{}) error {
 
 // send sends the queue's events as they come, until ctx is done or the
 // coordinator refuses them, which it reports to stop. An event the worker
-// can't encode, as err says, it sends as notEncoded makes it.
+// can't encode, as err says, it sends as notEncoded makes it. A request
+// that fails for a while is tried again with the events the queue holds
+// by then, never as it was, as a log's upload is (spool.send): the
+// coordinator skips those it has stored (store.Tx.AppendEvents), so once
+// it is back, one request sends what the worker has, up to a batch's
+// bounds.
 func (q *eventQueue) send(ctx context.Context, c *client, stop func(error), notEncoded func(e workerapi.Event, err error) workerapi.Event) {
 	stalls := 0
 	for {
@@ -169,9 +174,17 @@ func (q *eventQueue) send(ctx context.Context, c *client, stop func(error), notE
 		var (
 			order *outOfOrderError
 			enc   *encodeError
+			temp  *temporaryError
 		)
 		switch {
 		case err == nil:
+		case errors.As(err, &temp):
+			c.log.Debug("reporting events failed; trying again", "error", err)
+			if sleep(ctx, c.timing.backoff(stalls)) != nil {
+				return
+			}
+			stalls++
+			continue
 		case errors.As(err, &enc):
 			// The worker's own bug, not the attempt's end: stopping would
 			// leave the coordinator a lost worker. What doesn't encode is
