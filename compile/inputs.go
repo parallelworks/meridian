@@ -35,7 +35,8 @@ type InputResolver interface {
 	// *problem.Problem: one of the problems package's kinds of error,
 	// foundation's shared rules among them, but not the command's, is
 	// reported as that kind, with its params and the input's name as input,
-	// and any other, as one of a warning's kind, is input_rejected with the
+	// which the resolver leaves out (problems.Kind.InputProblem), and any
+	// other, as one of a warning's kind, is input_rejected with the
 	// problem's text as its reason, as is input_rejected with a reason, for
 	// a refusal that has no kind of its own. What a refusal shows is masked
 	// where the value can be private. Any other error says it couldn't

@@ -189,7 +189,7 @@ func isolationProblem(m *backend.Member) *problem.Problem {
 	if m.Isolation == "host" {
 		return nil
 	}
-	return problems.IsolationNotBuilt.Problem(problems.Params{"member": m.Name, "isolation": m.Isolation, "has_isolation": m.Isolation != ""})
+	return problems.IsolationNotBuilt.Problem(problems.Params{"member": m.Name, "isolation": m.Isolation, "has_isolation": strconv.FormatBool(m.Isolation != "")})
 }
 
 // Probe says whether m can run a job that asks for demand: what it offers

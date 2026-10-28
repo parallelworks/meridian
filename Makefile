@@ -14,6 +14,10 @@ FIPS := GOFIPS140=certified
 # Every binary is a pure-Go static build, and cgo is not allowed. Only
 # test-race turns it on, because the race detector needs it on Linux.
 export CGO_ENABLED := 0
+# The tests are built with the paramcheck tag, which no binary is: a
+# problem built without a param its kind declares, which foundation would
+# send as invalid, then panics where it is built (problems/paramcheck.go).
+TESTTAGS := -tags paramcheck
 
 .PHONY: help
 help: ## Show this help
@@ -64,7 +68,7 @@ vet-cross: ## Compile and vet the code for macOS, the BSDs and Windows, tests in
 
 .PHONY: test
 test: ## Run tests
-	$(FIPS) go test -shuffle=on -cover ./...
+	$(FIPS) go test $(TESTTAGS) -shuffle=on -cover ./...
 
 # test-386 first builds and runs a small test binary for 32-bit x86, which
 # x86-64 Linux runs natively unless its kernel was built or booted without
@@ -79,8 +83,8 @@ test-386: ## Run tests on 32-bit x86, where an int is 32 bits, if this machine r
 		if [ -n "$$CI" ]; then exit 1; fi; \
 		echo "test-386: skipped"; exit 0; \
 	fi && \
-	echo '$(FIPS) GOARCH=386 go test -shuffle=on ./...' && \
-	$(FIPS) GOARCH=386 go test -shuffle=on ./...
+	echo '$(FIPS) GOARCH=386 go test $(TESTTAGS) -shuffle=on ./...' && \
+	$(FIPS) GOARCH=386 go test $(TESTTAGS) -shuffle=on ./...
 
 # test-openssh runs the tests that check the ssh backend against OpenSSH's
 # sshd, which SSHD names by its absolute path, as well as against the SSH
@@ -98,8 +102,8 @@ test-openssh: ## Run the ssh backend's tests against OpenSSH's sshd, which SSHD 
 		if [ -n "$$CI" ]; then exit 1; fi; \
 		echo "test-openssh: skipped"; exit 0; \
 	fi && \
-	echo "$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test -count=1 -run '$(OPENSSH_TESTS)' ./internal/sshdtest ./backend/ssh/... ./cmd/meridian" && \
-	$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test -count=1 -run '$(OPENSSH_TESTS)' ./internal/sshdtest ./backend/ssh/... ./cmd/meridian
+	echo "$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test $(TESTTAGS) -count=1 -run '$(OPENSSH_TESTS)' ./internal/sshdtest ./backend/ssh/... ./cmd/meridian" && \
+	$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test $(TESTTAGS) -count=1 -run '$(OPENSSH_TESTS)' ./internal/sshdtest ./backend/ssh/... ./cmd/meridian
 
 .PHONY: bench
 bench: ## Run each benchmark once, to check that it still runs
@@ -119,7 +123,7 @@ bench: ## Run each benchmark once, to check that it still runs
 # exits. The caller's GORACE comes after, so it can set the sleep again.
 .PHONY: test-race
 test-race: ## Run tests with the race detector (needs cgo and a C compiler on Linux)
-	$(FIPS) CGO_ENABLED=1 GORACE="atexit_sleep_ms=0 $${GORACE:-}" go test -race -shuffle=on -timeout=15m ./...
+	$(FIPS) CGO_ENABLED=1 GORACE="atexit_sleep_ms=0 $${GORACE:-}" go test $(TESTTAGS) -race -shuffle=on -timeout=15m ./...
 
 .PHONY: build
 build: ## Build static binaries

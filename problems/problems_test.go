@@ -645,7 +645,7 @@ func TestKindProblem(t *testing.T) {
 	if p.Params[ParamLine] != 4 || p.Params[ParamFile] != "groups.yaml" {
 		t.Errorf("Params = %v", p.Params)
 	}
-	if p := ExecutionGroupUnknown.Problem(Params{"value": "cpu", "groups": `"local"`}); p.Type != "/problems/workflow/execution_group_unknown" {
+	if p := ExecutionGroupUnknown.Problem(Params{"input": "cluster", "value": "cpu", "groups": `"local"`}); p.Type != "/problems/workflow/execution_group_unknown" {
 		t.Errorf("a workflow kind's problem has type %s", p.Type)
 	}
 }

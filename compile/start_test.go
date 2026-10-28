@@ -579,7 +579,7 @@ func TestStartChecksWhatItEvaluated(t *testing.T) {
 type rejecting struct{}
 
 func (rejecting) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
-	return nil, problems.InputRejected.Problem(problems.Params{"reason": "no such cluster"})
+	return nil, problems.InputRejected.InputProblem(problems.Params{"reason": "no such cluster"})
 }
 
 // Start makes the run's sessions only once everything else has passed,

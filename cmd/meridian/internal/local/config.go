@@ -536,7 +536,7 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, _ map[string]any,
 	}
 	name, ok := value.(string)
 	if _, known := c.groups[name]; !ok || !known {
-		return nil, problems.ExecutionGroupUnknown.Problem(problems.Params{"value": problems.Show(value), "groups": problems.QuoteAll(c.GroupNames())})
+		return nil, problems.ExecutionGroupUnknown.InputProblem(problems.Params{"value": problems.Show(value), "groups": problems.QuoteAll(c.GroupNames())})
 	}
 	return name, nil
 }

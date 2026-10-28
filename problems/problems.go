@@ -430,12 +430,46 @@ func (k *Kind) Message(params Params) string {
 	return string(k.typ.Code)
 }
 
+// mustHaveDeclared panics, in a build with the paramcheck tag
+// (checkDeclared), as the tests are built, if params lacks a param the
+// kind declares, but filled, if it isn't "", which its caller fills:
+// foundation sends a problem that lacks one as its invalid, with no
+// params, so whoever reads it never learns what was wrong. Every other
+// build checks nothing.
+func (k *Kind) mustHaveDeclared(params Params, filled string) {
+	if !checkDeclared {
+		return
+	}
+	for _, name := range k.typ.Params {
+		if _, ok := params[name]; !ok && name != filled {
+			//nolint:forbidigo // a broken invariant, checked in the tests alone: the call site that left the param out is the bug, and its stack says where it is
+			panic(fmt.Sprintf("problems: a %s problem built without its param %q, which foundation would send as invalid", k.typ.Code, name))
+		}
+	}
+}
+
 // Problem returns a problem of the kind with params, whose detail is its
 // message in English, for a resolver to return for what is wrong: its
 // caller reports it with its code and params, which each reader sees in
 // their own language. Params may hold where it is, as ParamFile and
 // ParamLine, besides the kind's own.
 func (k *Kind) Problem(params Params) *problem.Problem {
+	k.mustHaveDeclared(params, "")
+	return k.problem(params)
+}
+
+// InputProblem returns a problem of the kind with params, as Problem does,
+// for an Inputs resolver to return for an input's value, which doesn't
+// know the input's name: its params leave out input, which the compiler
+// fills with the input's name as it reports the problem
+// (compile.InputResolver).
+func (k *Kind) InputProblem(params Params) *problem.Problem {
+	k.mustHaveDeclared(params, "input")
+	return k.problem(params)
+}
+
+// problem is Problem, without its check.
+func (k *Kind) problem(params Params) *problem.Problem {
 	p := k.typ.New("")
 	p.Params = make(Params, len(params))
 	for name, v := range params {
@@ -574,6 +608,7 @@ func EscapeControl(s string) string {
 // At returns a diagnostic of the kind about the value at pointer, a JSON
 // Pointer (RFC 6901), in file, at pos. Its detail is its message in English.
 func (k *Kind) At(file string, pos Position, pointer string, params Params) Diagnostic {
+	k.mustHaveDeclared(params, "")
 	fe := k.typ.At(fragment(pointer), "")
 	fe.Params = make(Params, len(params)+3)
 	for name, v := range params {

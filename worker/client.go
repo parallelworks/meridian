@@ -378,13 +378,13 @@ func answerInvalid(path string, status int, err error) error {
 	if at, ok := decodedAt(err); ok {
 		return answerInvalidAt(path, status, at)
 	}
-	return problems.CoordinatorAnswerInvalid.Problem(problems.Params{"path": path, "status": status, "has_at": false, "at": ""})
+	return problems.CoordinatorAnswerInvalid.Problem(problems.Params{"path": path, "status": status, "has_at": "false", "at": ""})
 }
 
 // answerInvalidAt is answerInvalid's problem, at the value the JSON Pointer
 // at names.
 func answerInvalidAt(path string, status int, at string) error {
-	return problems.CoordinatorAnswerInvalid.Problem(problems.Params{"path": path, "status": status, "has_at": true, "at": at})
+	return problems.CoordinatorAnswerInvalid.Problem(problems.Params{"path": path, "status": status, "has_at": "true", "at": at})
 }
 
 // decodedAt returns the JSON Pointer of the value at which a decoder's
