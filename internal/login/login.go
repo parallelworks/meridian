@@ -30,9 +30,9 @@ func Name() (string, error) {
 
 // ForPath returns name as a session's path holds it, as it is: workflows
 // build the path from PW_USER, which is the name as it is, so the path
-// can't escape it. A URL's path holds a name as it is only where its
-// characters are POSIX's portable filename characters, letters, digits,
-// ., _ and -, and isn't . or ..: any other name is
+// can't escape it. A URL's path holds a name as it is where it is a
+// segment of letters, digits, ., _, -, @ and ~, as user@domain, which
+// SSSD gives, and isn't . or .. (PathSafe): any other name is
 // problems.SessionUserUnsupported, rather than one escaped, which the
 // path a workflow builds wouldn't match.
 func ForPath(name string) (string, error) {
@@ -43,15 +43,17 @@ func ForPath(name string) (string, error) {
 }
 
 // PathSafe reports whether s is a segment that a URL's path holds as it
-// is: one of POSIX's portable filename characters, letters, digits, ., _
-// and -, and not . or .., which a path's dot segments would remove.
+// is, which neither a browser nor Go escapes there: of POSIX's portable
+// filename characters, letters, digits, ., _ and -, and @ and ~, and not
+// . or .., which a path's dot segments would remove. A backslash, which a
+// browser reads as a slash, is none.
 func PathSafe(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false
 	}
 	for i := range len(s) {
 		switch b := s[i]; {
-		case 'a' <= b && b <= 'z', 'A' <= b && b <= 'Z', '0' <= b && b <= '9', b == '.', b == '_', b == '-':
+		case 'a' <= b && b <= 'z', 'A' <= b && b <= 'Z', '0' <= b && b <= '9', b == '.', b == '_', b == '-', b == '@', b == '~':
 		default:
 			return false
 		}

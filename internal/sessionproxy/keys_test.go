@@ -9,8 +9,9 @@ import (
 // TestKeyring checks what a session's credentials are made of: a secret
 // that the same store, session and salt always give, and that another of
 // any of them changes, however their bytes are split between the fields;
-// a code of 128 random bits, whose keyed hash isn't a secret's of the same
-// bytes; and keys and salts of their lengths alone.
+// a code of 128 random bits, whose keyed hash is the session's own, and
+// isn't a secret's of the same bytes; a label of 128 random bits, which is
+// a DNS label; and keys and salts of their lengths alone.
 func TestKeyring(t *testing.T) {
 	k, err := NewKeyring(bytes.Repeat([]byte{7}, KeyLen))
 	if err != nil {
@@ -41,8 +42,11 @@ func TestKeyring(t *testing.T) {
 			t.Errorf("%s gives the same secret", name)
 		}
 	}
-	if bytes.Equal(k.CodeMAC("store"), secret("store", "", salt)) {
+	if bytes.Equal(k.CodeMAC("store", "s1"), k.mac("secret", []byte("store"), []byte("s1"))) {
 		t.Error("a code's hash is a secret's")
+	}
+	if bytes.Equal(k.CodeMAC("s1", "code"), k.CodeMAC("s2", "code")) || bytes.Equal(k.CodeMAC("s1", "code"), k.CodeMAC("s1c", "ode")) {
+		t.Error("a code hashes alike for two sessions")
 	}
 	other, _ := NewKeyring(bytes.Repeat([]byte{8}, KeyLen))
 	if s, _ := other.Secret("store", "s1", salt); bytes.Equal(s, base) {
@@ -51,11 +55,15 @@ func TestKeyring(t *testing.T) {
 
 	seen := map[string]bool{}
 	for range 100 {
-		code, mac := k.NewCode()
-		if !regexp.MustCompile(`^[a-z2-7]{26}$`).MatchString(code) || seen[code] || !bytes.Equal(mac, k.CodeMAC(code)) {
+		code, mac := k.NewCode("s1")
+		label := NewLabel()
+		if !regexp.MustCompile(`^[a-z2-7]{26}$`).MatchString(code) || seen[code] || !bytes.Equal(mac, k.CodeMAC("s1", code)) {
 			t.Fatalf("NewCode gave %q, %x", code, mac)
 		}
-		seen[code] = true
+		if !ValidLabel(label) || !regexp.MustCompile(`^[a-z2-7]{26}$`).MatchString(label) || seen[label] {
+			t.Fatalf("NewLabel gave %q", label)
+		}
+		seen[code], seen[label] = true, true
 	}
 
 	if _, err := NewKeyring(make([]byte, KeyLen-1)); err == nil {

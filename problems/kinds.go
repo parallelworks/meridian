@@ -836,9 +836,12 @@ var (
 // session's name; run and key the run's ID and the session's key in its
 // sessions:, with which meridian session url makes a link to it; path
 // the path the port serves the session at, as /me/session/<user>/<name>/;
-// and host the host the request asked for, as its Host header gives it.
+// host the host the request asked for, as its Host header gives it; and
+// limit how many connections to its service a session has open or
+// opening at once, at most.
 var (
 	SessionUnreachable  = defineCommand("session_unreachable", "Session's service not answering", "name")
+	SessionBusy         = defineCommand("session_busy", "Session with as many connections to its service as it may have", "name", "limit")
 	SessionUnauthorized = defineCommand("session_unauthorized", "Session asked for without a link of Meridian's", "run", "key")
 	SessionCrossOrigin  = defineCommand("session_cross_origin", "Request to a session from another page")
 	SessionNotHere      = defineCommand("session_not_here", "No session at this path", "path")

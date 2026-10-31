@@ -827,9 +827,9 @@
   },
   "session_user_unsupported": {
     "title": "Nombre de inicio de sesión que la ruta de una sesión no puede contener",
-    "why": "Meridian sirve una sesión en esta máquina en /me/session/<usuario>/<nombre>/, como hace la plataforma del formato 1, y los flujos de trabajo construyen esa ruta a partir de PW_USER, el nombre de inicio de sesión de quien ejecuta Meridian, para dar a una aplicación su ruta base o mostrar su dirección. Así que la ruta contiene el nombre tal cual, byte a byte: escapado, no sería la ruta que se dio a la aplicación. Un nombre de letras, dígitos, ., _ y - no necesita escaparse; cualquier otro no se puede servir.",
+    "why": "Meridian sirve una sesión en esta máquina en /me/session/<usuario>/<nombre>/, como hace la plataforma del formato 1, y los flujos de trabajo construyen esa ruta a partir de PW_USER, el nombre de inicio de sesión de quien ejecuta Meridian, para dar a una aplicación su ruta base o mostrar su dirección. Así que la ruta contiene el nombre tal cual, byte a byte: escapado, no sería la ruta que se dio a la aplicación. Un nombre de letras, dígitos, ., _, -, @ y ~, como usuario@dominio, no necesita escaparse, salvo . y .., que los segmentos de punto de una ruta quitan; cualquier otro no se puede servir.",
     "fix": [
-      "Ejecuta el flujo de trabajo como un usuario cuyo nombre de inicio de sesión solo tenga letras, dígitos, ., _ y -."
+      "Ejecuta el flujo de trabajo como un usuario cuyo nombre de inicio de sesión solo tenga letras, dígitos, ., _, -, @ y ~."
     ]
   },
   "session_local_port_taken": {
@@ -2403,9 +2403,17 @@
       "Revisa la ejecución, con meridian status y meridian logs."
     ]
   },
+  "session_busy": {
+    "title": "Sesión con tantas conexiones a su servicio como puede tener",
+    "why": "Una sesión tiene a la vez como mucho tantas conexiones con su servicio abiertas, o abriéndose, una cuarta parte de las que Meridian abre por su conexión con el host del servicio, para que las páginas de una sesión, o un navegador que reintenta un servicio que no responde, no tomen lo que necesitan las demás sesiones del host. Una petición espera diez segundos como mucho por una. Cada página de la sesión que mantiene una conexión abierta, como un WebSocket, ocupa una mientras está abierta.",
+    "fix": [
+      "Cierra las páginas de la sesión que no usas, y vuelve a cargar la página.",
+      "Comprueba que el servicio de la sesión responde, con meridian status y meridian logs: las conexiones a uno que no responde ocupan su sitio hasta que desisten."
+    ]
+  },
   "session_unauthorized": {
     "title": "Sesión pedida sin un enlace de Meridian",
-    "why": "Cualquiera en esta máquina puede conectar con su dirección de bucle local, así que Meridian sirve una sesión solo a un navegador que abrió un enlace que hizo para ti. El enlace lleva un código que funciona una vez, en diez minutos, y que da al navegador una cookie de la sesión, que funciona hasta que termina la ejecución, o hasta meridian session reset. Este navegador no tiene esa cookie: su enlace ya se usó, o caducó, o no abrió ninguno.",
+    "why": "Cualquiera en esta máquina puede conectar con su dirección de bucle local, así que Meridian sirve una sesión solo a un navegador que abrió un enlace que hizo para ti. El enlace lleva un código que funciona una vez, dentro de diez minutos, y que da al navegador una cookie de la sesión, que funciona hasta que termina la ejecución, o hasta meridian session reset. Este navegador no tiene esa cookie: su enlace ya se usó, o caducó, o no abrió ninguno.",
     "fix": [
       "Ejecuta meridian session url con la ejecución y la clave de la sesión, tal como las da el mensaje, y abre el enlace que muestra, en el navegador con el que usas la sesión."
     ]
@@ -2426,9 +2434,9 @@
   },
   "session_host_refused": {
     "title": "Sesión pedida en otro nombre de host",
-    "why": "El puerto de una sesión escucha en la dirección de bucle local de esta máquina, y Meridian solo responde a peticiones dirigidas a ella por uno de sus nombres, para que una página web cuyo nombre de host se hizo resolver a 127.0.0.1 no pueda llegar a la sesión (DNS rebinding).",
+    "why": "Cada sesión se sirve en un nombre de host propio, <etiqueta>.localhost, cuya etiqueta son 128 bits aleatorios, que un navegador resuelve a la dirección de bucle local de esta máquina. Un navegador envía una cookie solo a su host, sea cual sea el puerto, así que ningún otro servidor de esta máquina, en 127.0.0.1 o localhost, ni otra sesión, recibe la cookie de la sesión, y el almacenamiento de sus páginas es solo de la sesión. Meridian solo responde a peticiones dirigidas a ese nombre: rechaza una a 127.0.0.1, a localhost, o a un nombre que se hizo resolver a 127.0.0.1 (DNS rebinding). Chrome y Firefox resuelven por sí mismos cualquier nombre bajo localhost a esta máquina, y también curl y el resolvedor de systemd; un navegador que no lo hace no puede abrir la sesión, y Meridian no la sirve en 127.0.0.1 en su lugar.",
     "fix": [
-      "Abre la sesión en 127.0.0.1, localhost o [::1], como la muestra meridian session url, o a través de ssh -L a una de ellas."
+      "Abre la sesión en la dirección que muestra meridian session url, en un navegador que resuelva los nombres bajo localhost, como Chrome y Firefox, o a través de ssh -L hacia ella."
     ]
   },
   "source_server_unknown": {

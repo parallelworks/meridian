@@ -36,13 +36,14 @@ func withoutCode(rawQuery string) string {
 }
 
 // withoutOwnCookies returns a Cookie header's value without the proxy's
-// cookies, any whose name starts with CookiePrefix, another session's as
-// well as its own, and the rest of it as it is, in its order.
+// cookies, any whose name starts with meridian-, case aside (ownCookie),
+// another session's as well as its own, nor any without a name, and the
+// rest of it as it is, in its order.
 func withoutOwnCookies(header string) string {
 	var kept []string
 	for part := range strings.SplitSeq(header, ";") {
 		name, _, _ := strings.Cut(strings.TrimSpace(part), "=")
-		if name == "" || strings.HasPrefix(name, CookiePrefix) {
+		if name == "" || ownCookie(name) {
 			continue
 		}
 		kept = append(kept, strings.TrimSpace(part))
@@ -50,15 +51,21 @@ func withoutOwnCookies(header string) string {
 	return strings.Join(kept, "; ")
 }
 
+// ownCookie reports whether a cookie's name is one of the proxy's, which
+// start with meridian-, case aside.
+func ownCookie(name string) bool { return strings.HasPrefix(strings.ToLower(name), "meridian-") }
+
 // setCookie returns a Set-Cookie header's value of the service's as the
 // browser gets it, and whether it does at all: held to the session's
 // path, without a Domain, which could widen it, and none whose name is
-// one of the proxy's, case aside, which the service can't set. Its other
-// attributes are kept as they are.
+// one of the proxy's, case aside, which the service can't set, nor any
+// without a name, whose value a browser sends as a name and a value of
+// its own, as =meridian-session-x=v does. Its other attributes are kept
+// as they are.
 func (p *Proxy) setCookie(value string) (string, bool) {
 	parts := strings.Split(value, ";")
-	name, _, _ := strings.Cut(strings.TrimSpace(parts[0]), "=")
-	if strings.HasPrefix(strings.ToLower(name), "meridian-") {
+	name, _, named := strings.Cut(strings.TrimSpace(parts[0]), "=")
+	if !named || strings.TrimSpace(name) == "" || ownCookie(strings.TrimSpace(name)) {
 		return "", false
 	}
 	kept := []string{strings.TrimSpace(parts[0])}
@@ -75,10 +82,11 @@ func (p *Proxy) setCookie(value string) (string, bool) {
 
 // location returns a Location of the service's as the browser gets it: a
 // path, which the service gives as though it were served at /, under the
-// session's path, unless it is there already; one at the service's own
-// host, under the session's path, at the proxy's; and anything else, a
-// relative path, which the browser reads against the session's path, or
-// another site, as it is.
+// session's path, unless it is there already; one at the host the service
+// was asked for, localhost, without a port, under the session's path, at
+// the proxy's; and anything else, a relative path, which the browser reads
+// against the session's path, or another site, another port of
+// localhost's among them, as it is.
 func (p *Proxy) location(loc string) string {
 	u, err := url.Parse(loc)
 	if err != nil {
@@ -86,7 +94,7 @@ func (p *Proxy) location(loc string) string {
 	}
 	switch {
 	case u.Scheme == "" && u.Host == "" && strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//"):
-	case (u.Scheme == "http" || u.Scheme == "https") && strings.EqualFold(u.Hostname(), upstreamHost):
+	case (u.Scheme == "http" || u.Scheme == "https") && strings.EqualFold(u.Host, upstreamHost):
 		u.Scheme, u.Host, u.User = "", "", nil
 	default:
 		return loc

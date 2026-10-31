@@ -108,7 +108,7 @@ type memCodes struct {
 func (m *memCodes) add(k *Keyring, session string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	code, mac := k.NewCode()
+	code, mac := k.NewCode(session)
 	if m.codes == nil {
 		m.codes = map[string]time.Time{}
 	}
@@ -132,14 +132,17 @@ func (m *memCodes) clock() time.Time {
 	return time.Now()
 }
 
-// A rig is a proxy that serves a session on 127.0.0.1, whose service the
-// rig's dial reaches, counting its dials.
+// A rig is a proxy that serves a session on 127.0.0.1, at addr, whose
+// service the rig's dial reaches, counting its dials, and whose requests
+// name the session's own host, host, with addr's port, as a browser sends
+// them to it.
 type rig struct {
 	t       *testing.T
 	p       *Proxy
 	keys    *Keyring
 	codes   *memCodes
 	addr    string
+	host    string
 	dials   atomic.Int32
 	client  *http.Client
 	service string
@@ -159,7 +162,7 @@ func newRig(t *testing.T, h http.Handler, with ...func(*Config)) *rig {
 		t.Fatal(err)
 	}
 	cfg := Config{
-		User: testUser, Name: testName, Run: "7", Key: "desktop", Session: "s1",
+		User: testUser, Name: testName, Label: NewLabel(), Run: "7", Key: "desktop", Session: "s1",
 		Secret: secret, Keyring: keys, Codes: r.codes,
 		Dial: func(ctx context.Context) (net.Conn, error) {
 			r.dials.Add(1)
@@ -177,6 +180,8 @@ func newRig(t *testing.T, h http.Handler, with ...func(*Config)) *rig {
 		t.Fatal(err)
 	}
 	r.addr = l.Addr().String()
+	_, port, _ := net.SplitHostPort(r.addr)
+	r.host = net.JoinHostPort(r.p.Host(), port)
 	served := make(chan error, 1)
 	go func() { served <- r.p.Serve(l) }()
 	t.Cleanup(func() {
@@ -211,6 +216,7 @@ func (r *rig) do(method, path string, header http.Header) (answer, string) {
 	if err != nil {
 		r.t.Fatal(err)
 	}
+	req.Host = r.host
 	for k, vs := range header {
 		for _, v := range vs {
 			if k == "Host" {
@@ -238,7 +244,7 @@ func (r *rig) login() string {
 	r.t.Helper()
 	resp, _ := r.do("GET", prefix+"/?"+CodeParam+"="+r.codes.add(r.keys, "s1"), nil)
 	cookies := resp.Cookies()
-	if resp.StatusCode != http.StatusSeeOther || len(cookies) != 1 {
+	if resp.StatusCode != http.StatusOK || len(cookies) != 1 {
 		r.t.Fatalf("redeeming a code gave %s, cookies %v", resp.Status, cookies)
 	}
 	return cookies[0].Name + "=" + cookies[0].Value
@@ -257,10 +263,11 @@ func wantPage(t *testing.T, resp answer, body string, status int, k *problems.Ki
 }
 
 // TestCodeAndCookie checks the session's credentials: a link's one-time
-// code gives the browser the session's cookie, which holds its secret, is
-// held to the session's path, is HttpOnly and SameSite=Strict, and is all
-// it needs after; it sends it on to the same URL without the code, which
-// no cache keeps, with no referrer. A code works once, and only until it
+// code gives the browser the session's cookie, which holds its secret, goes
+// only to the session's host, is held to the session's path, is HttpOnly
+// and SameSite=Strict, and is all it needs after; a page sends it on to
+// the same URL without the code, from the session's own origin, which no
+// cache keeps, with no referrer. A code works once, and only until it
 // expires; a request without the cookie, with another session's, or with
 // one whose secret was replaced, as reset does, is refused, and told how
 // to get a link.
@@ -269,14 +276,15 @@ func TestCodeAndCookie(t *testing.T) {
 	r := newRig(t, nil)
 	r.codes.now = func() time.Time { return now }
 	code := r.codes.add(r.keys, "s1")
-	resp, _ := r.do("GET", prefix+"/x?a=1&"+CodeParam+"="+code+"&b=2", nil)
+	resp, body := r.do("GET", prefix+"/x?a=1&"+CodeParam+"="+code+"&b=2", nil)
 	cookies := resp.Cookies()
 	h := resp.Header
 	switch {
-	case resp.StatusCode != http.StatusSeeOther || h.Get("Location") != prefix+"/x?a=1&b=2":
-		t.Errorf("redeeming a code gave %s to %q", resp.Status, h.Get("Location"))
-	case h.Get("Cache-Control") != "no-store" || h.Get("Referrer-Policy") != "no-referrer":
-		t.Errorf("the redirect's headers are %v", h)
+	case resp.StatusCode != http.StatusOK || !strings.Contains(body, `<meta http-equiv="refresh" content="0;url=`+prefix+`/x?a=1&amp;b=2">`):
+		t.Errorf("redeeming a code gave %s %q", resp.Status, body)
+	case h.Get("Cache-Control") != "no-store" || h.Get("Referrer-Policy") != "no-referrer" ||
+		h.Get("Content-Security-Policy") != "default-src 'none'" || h.Get("X-Content-Type-Options") != "nosniff":
+		t.Errorf("the page's headers are %v", h)
 	case len(cookies) != 1:
 		t.Fatalf("the cookies set are %v", cookies)
 	}
@@ -292,11 +300,11 @@ func TestCodeAndCookie(t *testing.T) {
 
 	// A code works once: a browser that holds the cookie is sent on
 	// without the code, with the cookie it has, and any other refused.
-	resp, _ = r.do("GET", prefix+"/x?"+CodeParam+"="+code, http.Header{"Cookie": {c.Name + "=" + c.Value}})
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != prefix+"/x" || len(resp.Cookies()) != 0 {
-		t.Errorf("a used code, with the cookie, gave %s to %q, cookies %v", resp.Status, resp.Header.Get("Location"), resp.Cookies())
+	resp, body = r.do("GET", prefix+"/x?"+CodeParam+"="+code, http.Header{"Cookie": {c.Name + "=" + c.Value}})
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `content="0;url=`+prefix+`/x"`) || len(resp.Cookies()) != 0 {
+		t.Errorf("a used code, with the cookie, gave %s %q, cookies %v", resp.Status, body, resp.Cookies())
 	}
-	resp, body := r.do("GET", prefix+"/?"+CodeParam+"="+code, nil)
+	resp, body = r.do("GET", prefix+"/?"+CodeParam+"="+code, nil)
 	wantPage(t, resp, body, http.StatusUnauthorized, problems.SessionUnauthorized)
 	if !strings.Contains(body, "meridian session url 7 desktop") || len(resp.Cookies()) != 0 {
 		t.Errorf("a used code gave %q, cookies %v", body, resp.Cookies())
@@ -354,6 +362,12 @@ func TestNoRootForm(t *testing.T) {
 			t.Errorf("%s: %s to %q, want %q", path, resp.Status, resp.Header.Get("Location"), want)
 		}
 	}
+	// A code there goes on to the session's path, which no cache keeps,
+	// nor any referrer says.
+	resp, _ := r.do("GET", "/?"+CodeParam+"=abc", nil)
+	if resp.Header.Get("Location") != prefix+"/?"+CodeParam+"=abc" || resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Errorf("a code at / gave %s %v", resp.Status, resp.Header)
+	}
 	for _, path := range []string{"/x", "/me/session/" + testUser + "/other/", prefix + "x/", "/me/session/bob/" + testName + "/"} {
 		resp, body := r.do("GET", path, http.Header{"Cookie": {cookie}})
 		wantPage(t, resp, body, http.StatusNotFound, problems.SessionNotHere)
@@ -361,27 +375,34 @@ func TestNoRootForm(t *testing.T) {
 			t.Errorf("%s: %q doesn't say where the session is", path, body)
 		}
 	}
-	resp, _ := r.do("GET", prefix+"/cookies?c=app%3D1%3B+Path%3D%2F", http.Header{"Cookie": {cookie}})
+	resp, _ = r.do("GET", prefix+"/cookies?c=app%3D1%3B+Path%3D%2F", http.Header{"Cookie": {cookie}})
 	if got := resp.Header.Values("Set-Cookie"); len(got) != 1 || got[0] != "app=1; Path="+prefix+"/" {
 		t.Errorf("a cookie at / is set as %q", got)
 	}
 }
 
-// TestHost checks that only a request addressed to 127.0.0.1, localhost
-// or [::1], at any port, as ssh -L to another one gives it, is served: one
-// whose host name a page made resolve to 127.0.0.1 (DNS rebinding) is
-// refused, with the session's cookie too, before anything connects to
-// the service.
+// TestHost checks that only a request addressed to the session's own host
+// name, <label>.localhost, case aside, at any port, as ssh -L to another
+// one gives it, is served: one to 127.0.0.1, localhost or [::1], which
+// any server on this machine has too, to another session's label, or to a
+// host name a page made resolve to 127.0.0.1 (DNS rebinding), is refused,
+// with the session's cookie too, before anything connects to the service.
 func TestHost(t *testing.T) {
 	r := newRig(t, nil)
 	cookie := r.login()
-	for _, host := range []string{"127.0.0.1:9999", "localhost:1234", "LOCALHOST", "[::1]:5", "[::1]", "127.0.0.1"} {
+	own := r.p.Host()
+	for _, host := range []string{own + ":9999", strings.ToUpper(own) + ":1", own} {
 		if resp, _ := r.do("GET", prefix+"/x", http.Header{"Host": {host}, "Cookie": {cookie}}); resp.StatusCode != http.StatusOK {
 			t.Errorf("%s: %s", host, resp.Status)
 		}
 	}
 	dials := r.dials.Load()
-	for _, host := range []string{"evil.example:" + strings.Split(r.addr, ":")[1], "evil.example", "127.0.0.2:80", "localhost.evil.example", "0.0.0.0"} {
+	port := strings.Split(r.addr, ":")[1]
+	for _, host := range []string{
+		"127.0.0.1:" + port, "localhost:" + port, "[::1]:" + port, "127.0.0.1", "localhost",
+		HostOf(NewLabel()) + ":" + port, "x." + own, own + ".evil.example",
+		"evil.example:" + port, "evil.example", "127.0.0.2:80", "0.0.0.0",
+	} {
 		resp, body := r.do("GET", prefix+"/x", http.Header{"Host": {host}, "Cookie": {cookie}})
 		wantPage(t, resp, body, http.StatusMisdirectedRequest, problems.SessionHostRefused)
 	}
@@ -400,26 +421,27 @@ func TestHost(t *testing.T) {
 func TestOrigin(t *testing.T) {
 	r := newRig(t, nil)
 	cookie := r.login()
-	own := "http://" + r.addr
-	tunnel := "127.0.0.1:9999"
+	own := "http://" + r.host
+	tunnel := r.p.Host() + ":9999"
 	for name, tc := range map[string]struct {
 		method string
 		header http.Header
 		status int
 	}{
-		"own origin":                 {"POST", http.Header{"Origin": {own}}, http.StatusOK},
-		"no origin":                  {"POST", nil, http.StatusOK},
-		"same-origin":                {"DELETE", http.Header{"Sec-Fetch-Site": {"same-origin"}}, http.StatusOK},
-		"none":                       {"PUT", http.Header{"Sec-Fetch-Site": {"none"}}, http.StatusOK},
-		"through ssh -L":             {"POST", http.Header{"Host": {tunnel}, "Origin": {"http://" + tunnel}}, http.StatusOK},
-		"another port":               {"POST", http.Header{"Origin": {"http://127.0.0.1:9999"}}, http.StatusForbidden},
-		"another port, as localhost": {"POST", http.Header{"Origin": {"http://localhost:" + strings.Split(r.addr, ":")[1]}}, http.StatusForbidden},
-		"https":                      {"POST", http.Header{"Origin": {"https://" + r.addr}}, http.StatusForbidden},
-		"null":                       {"POST", http.Header{"Origin": {"null"}}, http.StatusForbidden},
-		"two origins":                {"POST", http.Header{"Origin": {own, own}}, http.StatusForbidden},
-		"same-site":                  {"POST", http.Header{"Origin": {own}, "Sec-Fetch-Site": {"same-site"}}, http.StatusForbidden},
-		"cross-site":                 {"PATCH", http.Header{"Sec-Fetch-Site": {"cross-site"}}, http.StatusForbidden},
-		"a GET from another port":    {"GET", http.Header{"Origin": {"http://127.0.0.1:9999"}, "Sec-Fetch-Site": {"same-site"}}, http.StatusOK},
+		"own origin":                     {"POST", http.Header{"Origin": {own}}, http.StatusOK},
+		"no origin":                      {"POST", nil, http.StatusOK},
+		"same-origin":                    {"DELETE", http.Header{"Sec-Fetch-Site": {"same-origin"}}, http.StatusOK},
+		"none":                           {"PUT", http.Header{"Sec-Fetch-Site": {"none"}}, http.StatusOK},
+		"through ssh -L":                 {"POST", http.Header{"Host": {tunnel}, "Origin": {"http://" + tunnel}}, http.StatusOK},
+		"another port":                   {"POST", http.Header{"Origin": {"http://127.0.0.1:9999"}}, http.StatusForbidden},
+		"127.0.0.1, at the port":         {"POST", http.Header{"Origin": {"http://" + r.addr}}, http.StatusForbidden},
+		"another session's":              {"POST", http.Header{"Origin": {"http://" + HostOf(NewLabel()) + ":" + strings.Split(r.addr, ":")[1]}}, http.StatusForbidden},
+		"https":                          {"POST", http.Header{"Origin": {"https://" + r.host}}, http.StatusForbidden},
+		"null":                           {"POST", http.Header{"Origin": {"null"}}, http.StatusForbidden},
+		"two origins":                    {"POST", http.Header{"Origin": {own, own}}, http.StatusForbidden},
+		"same-site":                      {"POST", http.Header{"Origin": {own}, "Sec-Fetch-Site": {"same-site"}}, http.StatusForbidden},
+		"cross-site":                     {"PATCH", http.Header{"Sec-Fetch-Site": {"cross-site"}}, http.StatusForbidden},
+		"a navigation from another site": {"GET", http.Header{"Origin": {"http://127.0.0.1:9999"}, "Sec-Fetch-Site": {"cross-site"}, "Sec-Fetch-Mode": {"navigate"}, "Sec-Fetch-Dest": {"document"}}, http.StatusOK},
 	} {
 		dials := r.dials.Load()
 		header := http.Header{"Cookie": {cookie}}
@@ -463,7 +485,7 @@ func (r *rig) upgrade(origin, cookie string) (net.Conn, int) {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	fmt.Fprintf(conn, "GET %s/ws HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nOrigin: %s\r\nCookie: %s\r\n\r\n", prefix, r.addr, origin, cookie)
+	fmt.Fprintf(conn, "GET %s/ws HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nOrigin: %s\r\nCookie: %s\r\n\r\n", prefix, r.host, origin, cookie)
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
@@ -510,7 +532,7 @@ func TestNothingBeforeAuthentication(t *testing.T) {
 		}
 	}
 	r.do("GET", prefix+"/?"+CodeParam+"=nottherightcode", nil)
-	if _, status := r.upgrade("http://"+r.addr, ""); status != http.StatusUnauthorized {
+	if _, status := r.upgrade("http://"+r.host, ""); status != http.StatusUnauthorized {
 		t.Errorf("a WebSocket without the cookie gave %d", status)
 	}
 	if n := r.dials.Load(); n != 0 {
@@ -529,7 +551,7 @@ func TestForwarding(t *testing.T) {
 	r := newRig(t, nil)
 	cookie := r.login()
 	header := http.Header{
-		"Cookie":             {"app=1; " + cookie + "; " + CookiePrefix + "0011223344556677=other; theme=dark"},
+		"Cookie":             {"app=1; " + cookie + "; " + CookiePrefix + "0011223344556677=other; Meridian-Session-AA=x; =nameless; theme=dark"},
 		"Authorization":      {"Bearer service-token"},
 		"X-Forwarded-For":    {"203.0.113.9"},
 		"X-Forwarded-Host":   {"evil.example"},
@@ -557,7 +579,7 @@ func TestForwarding(t *testing.T) {
 		t.Errorf("the service's cookies are %q", h.Values("Cookie"))
 	case h.Get("Authorization") != "Bearer service-token":
 		t.Errorf("the service's Authorization is %q", h.Get("Authorization"))
-	case h.Get("X-Forwarded-Prefix") != prefix || h.Get("X-Forwarded-Host") != r.addr || h.Get("X-Forwarded-Proto") != "http" || h.Get("X-Forwarded-For") != "127.0.0.1":
+	case h.Get("X-Forwarded-Prefix") != prefix || h.Get("X-Forwarded-Host") != r.host || h.Get("X-Forwarded-Proto") != "http" || h.Get("X-Forwarded-For") != "127.0.0.1":
 		t.Errorf("the service's X-Forwarded headers are %v", h)
 	}
 }
@@ -573,6 +595,8 @@ func TestResponse(t *testing.T) {
 	query := "c=a%3D1%3B+Path%3D%2F%3B+Domain%3Dlocalhost%3B+HttpOnly" +
 		"&c=" + CookiePrefix + "0011%3Devil%3B+Path%3D%2F" +
 		"&c=Meridian-Code%3Devil" +
+		"&c=%3Dmeridian-session-x%3Dv" +
+		"&c=meridian-session-y" +
 		"&c=b%3D2%3B+SameSite%3DLax%3B+Path%3D%2Fdeep"
 	resp, _ := r.do("GET", prefix+"/cookies?"+query, header)
 	want := []string{"a=1; HttpOnly; Path=" + prefix + "/", "b=2; SameSite=Lax; Path=" + prefix + "/"}
@@ -584,7 +608,8 @@ func TestResponse(t *testing.T) {
 	}
 	for to, want := range map[string]string{
 		"/login?next=%2F":                 prefix + "/login?next=%2F",
-		"http://localhost:8080/a?b=1":     prefix + "/a?b=1",
+		"http://localhost/a?b=1":          prefix + "/a?b=1",
+		"http://localhost:8080/a?b=1":     "http://localhost:8080/a?b=1",
 		prefix + "/already":               prefix + "/already",
 		"relative/path":                   "relative/path",
 		"https://example.com/elsewhere":   "https://example.com/elsewhere",
@@ -661,17 +686,29 @@ func TestLimits(t *testing.T) {
 		}
 	})
 	cookie := r.login()
-	var wg sync.WaitGroup
+	var (
+		wg              sync.WaitGroup
+		unreached, busy atomic.Int32
+	)
 	start := time.Now()
 	for range 5 {
 		wg.Go(func() {
-			resp, body := r.do("GET", prefix+"/x", http.Header{"Cookie": {cookie}})
-			if resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "session_unreachable") {
-				t.Errorf("a request to a service whose dials hang: %s", resp.Status)
+			// The two that dial find the service doesn't answer; the
+			// rest, that the session has as many connections as it may.
+			switch resp, body := r.do("GET", prefix+"/x", http.Header{"Cookie": {cookie}}); {
+			case resp.StatusCode == http.StatusBadGateway && strings.Contains(body, "(session_unreachable)"):
+				unreached.Add(1)
+			case resp.StatusCode == http.StatusServiceUnavailable && strings.Contains(body, "(session_busy)") && strings.Contains(body, " 2 "):
+				busy.Add(1)
+			default:
+				t.Errorf("a request to a service whose dials hang: %s %q", resp.Status, body)
 			}
 		})
 	}
 	wg.Wait()
+	if unreached.Load() != 2 || busy.Load() != 3 {
+		t.Errorf("%d requests found the service didn't answer, and %d the session busy; want 2 and 3", unreached.Load(), busy.Load())
+	}
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("the requests took %v, more than the bounded wait", took)
 	}
@@ -709,7 +746,7 @@ func TestTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer slow.Close()
-	_, _ = io.WriteString(slow, "GET "+prefix+"/x HTTP/1.1\r\nHost: "+r.addr+"\r\n")
+	_, _ = io.WriteString(slow, "GET "+prefix+"/x HTTP/1.1\r\nHost: "+r.host+"\r\n")
 	closedWithin(t, slow, 5*time.Second, "a request whose headers don't end")
 
 	idle, err := (&net.Dialer{}).DialContext(t.Context(), "tcp4", r.addr)
@@ -717,7 +754,7 @@ func TestTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer idle.Close()
-	fmt.Fprintf(idle, "GET %s/x HTTP/1.1\r\nHost: %s\r\nCookie: %s\r\n\r\n", prefix, r.addr, cookie)
+	fmt.Fprintf(idle, "GET %s/x HTTP/1.1\r\nHost: %s\r\nCookie: %s\r\n\r\n", prefix, r.host, cookie)
 	br := bufio.NewReader(idle)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil || resp.StatusCode != http.StatusOK {
@@ -745,7 +782,7 @@ func closedWithin(t *testing.T, conn net.Conn, d time.Duration, what string) {
 func TestRepointAndClose(t *testing.T) {
 	r := newRig(t, nil)
 	cookie := r.login()
-	conn, status := r.upgrade("http://"+r.addr, cookie)
+	conn, status := r.upgrade("http://"+r.host, cookie)
 	if status != http.StatusSwitchingProtocols {
 		t.Fatalf("the WebSocket gave %d", status)
 	}
@@ -759,6 +796,7 @@ func TestRepointAndClose(t *testing.T) {
 	for range 2 {
 		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+r.addr+prefix+"/x", nil)
 		req.Header.Set("Cookie", cookie)
+		req.Host = r.host
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -784,7 +822,7 @@ func TestRepointAndClose(t *testing.T) {
 func TestNew(t *testing.T) {
 	keys, _ := NewKeyring(make([]byte, KeyLen))
 	ok := Config{
-		User: testUser, Name: testName, Secret: []byte("s"), Keyring: keys, Codes: &memCodes{},
+		User: testUser, Name: testName, Label: NewLabel(), Secret: []byte("s"), Keyring: keys, Codes: &memCodes{},
 		Dial: func(context.Context) (net.Conn, error) { return nil, errors.New("no") },
 	}
 	for _, user := range []string{"al ice", "alice/x", "ålice", "..", "", "alice%2F"} {
@@ -800,6 +838,13 @@ func TestNew(t *testing.T) {
 		cfg.Name = name
 		if _, err := New(t.Context(), cfg); err == nil {
 			t.Errorf("name %q was taken", name)
+		}
+	}
+	for _, label := range []string{"", "short", strings.ToUpper(NewLabel()), NewLabel() + "a", "0" + NewLabel()[1:]} {
+		cfg := ok
+		cfg.Label = label
+		if _, err := New(t.Context(), cfg); err == nil {
+			t.Errorf("label %q was taken", label)
 		}
 	}
 	for _, missing := range []func(*Config){
@@ -848,7 +893,7 @@ func TestListen(t *testing.T) {
 
 	keys, _ := NewKeyring(make([]byte, KeyLen))
 	p, err := New(t.Context(), Config{
-		User: testUser, Name: testName, Secret: []byte("s"), Keyring: keys, Codes: &memCodes{},
+		User: testUser, Name: testName, Label: NewLabel(), Secret: []byte("s"), Keyring: keys, Codes: &memCodes{},
 		Dial: func(context.Context) (net.Conn, error) { return nil, errors.New("no") },
 	})
 	if err != nil {
@@ -864,3 +909,191 @@ func TestListen(t *testing.T) {
 type anyAddress struct{ net.Listener }
 
 func (anyAddress) Addr() net.Addr { return &net.TCPAddr{IP: net.IPv4zero, Port: 8080} }
+
+// TestFetchMetadata checks that a request a browser says came from another
+// site, as another port's page is, is served only as a navigation of the
+// browser's to a page: a frame, or a resource of the other page's, which
+// would carry the session's cookie into it, is refused, with the cookie
+// too, before anything connects to the service, and a code it carries
+// isn't used. A request from the session's own pages, or that the user
+// made, or without the metadata, is served as ever, with the cookie.
+func TestFetchMetadata(t *testing.T) {
+	r := newRig(t, nil)
+	cookie := r.login()
+	meta := func(site, mode, dest string) http.Header {
+		return http.Header{"Cookie": {cookie}, "Sec-Fetch-Site": {site}, "Sec-Fetch-Mode": {mode}, "Sec-Fetch-Dest": {dest}}
+	}
+	for name, tc := range map[string]struct {
+		header http.Header
+		status int
+	}{
+		"an image of another site's":        {meta("cross-site", "no-cors", "image"), http.StatusForbidden},
+		"a script of another port's":        {meta("same-site", "no-cors", "script"), http.StatusForbidden},
+		"a frame on another port's page":    {meta("same-site", "navigate", "iframe"), http.StatusForbidden},
+		"a fetch of another site's":         {meta("cross-site", "cors", "empty"), http.StatusForbidden},
+		"a navigation from another site":    {meta("cross-site", "navigate", "document"), http.StatusOK},
+		"a navigation from another port":    {meta("same-site", "navigate", "document"), http.StatusOK},
+		"a resource of the session's pages": {meta("same-origin", "no-cors", "image"), http.StatusOK},
+		"what the user typed":               {meta("none", "navigate", "document"), http.StatusOK},
+		"no metadata":                       {http.Header{"Cookie": {cookie}}, http.StatusOK},
+	} {
+		dials := r.dials.Load()
+		resp, body := r.do("GET", prefix+"/x", tc.header)
+		switch {
+		case tc.status == http.StatusForbidden:
+			wantPage(t, resp, body, http.StatusForbidden, problems.SessionCrossOrigin)
+			if r.dials.Load() != dials {
+				t.Errorf("%s connected to the service", name)
+			}
+		case resp.StatusCode != tc.status:
+			t.Errorf("%s: %s", name, resp.Status)
+		}
+	}
+	if resp, body := r.do("GET", prefix+"/x", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("no metadata, and no cookie: %s %q", resp.Status, body)
+	}
+	code := r.codes.add(r.keys, "s1")
+	header := meta("cross-site", "no-cors", "image")
+	header.Del("Cookie")
+	resp, body := r.do("GET", prefix+"/?"+CodeParam+"="+code, header)
+	wantPage(t, resp, body, http.StatusForbidden, problems.SessionCrossOrigin)
+	if resp, _ := r.do("GET", prefix+"/x?"+CodeParam+"="+code, nil); resp.StatusCode != http.StatusOK || len(resp.Cookies()) != 1 {
+		t.Errorf("an image of another site's used the code: a navigation then gave %s", resp.Status)
+	}
+}
+
+// TestRedeemByGetAlone checks that a code is used by a GET alone: a HEAD,
+// as a link checker sends, is answered as a request without the cookie
+// is, and leaves the code to the GET after it.
+func TestRedeemByGetAlone(t *testing.T) {
+	r := newRig(t, nil)
+	code := r.codes.add(r.keys, "s1")
+	resp, _ := r.do("HEAD", prefix+"/x?"+CodeParam+"="+code, nil)
+	if resp.StatusCode != http.StatusUnauthorized || len(resp.Cookies()) != 0 {
+		t.Errorf("a HEAD with a code gave %s, cookies %v", resp.Status, resp.Cookies())
+	}
+	if resp, _ := r.do("GET", prefix+"/x?"+CodeParam+"="+code, nil); resp.StatusCode != http.StatusOK || len(resp.Cookies()) != 1 {
+		t.Errorf("the GET after the HEAD gave %s, cookies %v", resp.Status, resp.Cookies())
+	}
+}
+
+// TestRedeemPageEscapes checks that the page that sends a browser on from
+// a code holds the URL it sends it to escaped, as HTML, whatever its query
+// holds.
+func TestRedeemPageEscapes(t *testing.T) {
+	r := newRig(t, nil)
+	code := r.codes.add(r.keys, "s1")
+	resp, body := r.do("GET", prefix+`/x?a="><script>alert(1)</script>&`+CodeParam+"="+code, nil)
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, "<script>") || !strings.Contains(body, "&#34;&gt;&lt;script&gt;") {
+		t.Errorf("the page is %q", body)
+	}
+}
+
+// TestRepointInFlight checks that a request going on as the session is
+// pointed elsewhere ends at the service it started at, and that every
+// request after it goes to the new one, over connections of its own: none
+// that the request going on used, which the old service's transport keeps.
+func TestRepointInFlight(t *testing.T) {
+	release := make(chan struct{})
+	var oldHits atomic.Int32
+	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		oldHits.Add(1)
+		if r.URL.Path == "/slow" {
+			<-release
+		}
+		_, _ = io.WriteString(w, "old")
+	})
+	r := newRig(t, old)
+	cookie := r.login()
+	client := &http.Client{Transport: &http.Transport{}}
+	defer client.CloseIdleConnections()
+	get := func(path string) string {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+r.addr+prefix+path, nil)
+		req.Host = r.host
+		req.Header.Set("Cookie", cookie)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Error(err)
+			return ""
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return string(body)
+	}
+	// A connection to the old service, idle, and one serving a request.
+	if got := get("/warm"); got != "old" {
+		t.Fatalf("before Repoint, the proxy answered %q", got)
+	}
+	slow := make(chan string, 1)
+	go func() { slow <- get("/slow") }()
+	deadline := time.Now().Add(5 * time.Second)
+	for oldHits.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the slow request didn't reach the old service")
+		}
+		time.Sleep(5 * time.Millisecond) //nolint:forbidigo // the request reaching the service, which nothing signals
+	}
+
+	newer := service(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "new") }))
+	r.p.Repoint(func(ctx context.Context) (net.Conn, error) { return (&net.Dialer{}).DialContext(ctx, "tcp4", newer) })
+	close(release)
+	if got := <-slow; got != "old" {
+		t.Errorf("the request going on as the session was pointed elsewhere answered %q", got)
+	}
+	for i := range 10 {
+		if got := get(fmt.Sprintf("/after/%d", i)); got != "new" {
+			t.Errorf("request %d after Repoint answered %q", i, got)
+		}
+	}
+}
+
+// TestOriginNull checks that a change whose Origin is null, as a form of
+// the session's own pages sends where the page's referrer policy is
+// no-referrer, is served where the browser says it came from the session's
+// own origin, and refused otherwise, as from a sandboxed frame.
+func TestOriginNull(t *testing.T) {
+	r := newRig(t, nil)
+	cookie := r.login()
+	for site, status := range map[string]int{"same-origin": http.StatusOK, "cross-site": http.StatusForbidden, "same-site": http.StatusForbidden, "": http.StatusForbidden} {
+		header := http.Header{"Cookie": {cookie}, "Origin": {"null"}}
+		if site != "" {
+			header.Set("Sec-Fetch-Site", site)
+		}
+		if resp, body := r.do("POST", prefix+"/form", header); resp.StatusCode != status {
+			t.Errorf("Origin null, Sec-Fetch-Site %q: %s %q", site, resp.Status, body)
+		}
+	}
+}
+
+// TestIdentityHeaders checks that none of the headers with which format
+// 1's platform tells a service who asks reaches the service as a browser
+// sent it, as a service might trust it; and that Meridian sets none of
+// them, which it signs none of.
+func TestIdentityHeaders(t *testing.T) {
+	r := newRig(t, nil)
+	header := http.Header{"Cookie": {r.login()}}
+	for _, h := range identityHeaders {
+		header.Set(h, "forged")
+	}
+	resp, body := r.do("GET", prefix+"/x", header)
+	var s seen
+	if err := json.Unmarshal([]byte(body), &s); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status, err)
+	}
+	for _, h := range identityHeaders {
+		if v := s.Header.Values(h); len(v) != 0 {
+			t.Errorf("the service got %s: %q", h, v)
+		}
+	}
+}
+
+// TestUnauthorizedScheme checks that a request without the session's
+// cookie is answered with WWW-Authenticate, whose scheme is Meridian's own,
+// which no browser answers itself.
+func TestUnauthorizedScheme(t *testing.T) {
+	r := newRig(t, nil)
+	resp, _ := r.do("GET", prefix+"/x", nil)
+	if got := resp.Header.Get("WWW-Authenticate"); resp.StatusCode != http.StatusUnauthorized || got != `Meridian-Link realm="`+prefix+`/"` {
+		t.Errorf("%s, WWW-Authenticate %q", resp.Status, got)
+	}
+}

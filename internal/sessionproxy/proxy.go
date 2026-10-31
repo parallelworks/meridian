@@ -7,13 +7,19 @@
 // Anyone on this machine can connect to its loopback address, and, to a
 // browser, every port of it is one site, so a session is served only:
 //
-//   - to a request addressed to 127.0.0.1, localhost or [::1], which a page
-//     whose host name was made to resolve to 127.0.0.1 isn't;
+//   - to a request addressed to the session's own host name,
+//     <label>.localhost, whose label is 128 random bits, and which no
+//     other session, nor any other server on this machine, has: a cookie
+//     goes to its host alone, whatever its port, and a browser keeps a
+//     host's storage apart from another's;
 //   - to a browser that holds the session's cookie, which a one-time code
 //     gives it, that a link Meridian printed holds, and only once, within
 //     ten minutes; the cookie holds the session's secret, which works until
 //     the session's salt is replaced or the run ends, and goes only to the
-//     session's path;
+//     session's host and path;
+//   - for a request from another site, only a navigation of the browser's
+//     to a page, by its Sec-Fetch-Site, -Mode and -Dest, and never a frame
+//     or a resource of another page's;
 //   - for a WebSocket, or a request other than GET, HEAD or OPTIONS, from
 //     the session's own pages, as its Origin and Sec-Fetch-Site say.
 //
@@ -31,6 +37,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"log/slog"
@@ -41,6 +48,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
@@ -107,6 +115,9 @@ type Config struct {
 	// as they are: User as login.ForPath allows it, which a step sees as
 	// PW_USER, and Name, of POSIX's portable filename characters.
 	User, Name string
+	// Label is the session's, under which it is served, at
+	// <label>.localhost (NewLabel), the same each time it is served.
+	Label string
 	// Run and Key are the run's ID and the session's key in its
 	// sessions:, which the page that answers a browser without the
 	// session's cookie names, for meridian session url.
@@ -141,14 +152,35 @@ type Proxy struct {
 
 	mu     sync.Mutex
 	secret []byte
-	dial   DialFunc
+	// target is where the session points now, whose transport new
+	// requests go through.
+	target *target
 	// conns are the connections to the service open, which Close closes.
 	conns map[*placedConn]bool
 
-	transport *http.Transport
-	reverse   *httputil.ReverseProxy
-	server    *http.Server
+	reverse *httputil.ReverseProxy
+	server  *http.Server
 }
+
+// A target is where a session points, with a transport of its own, which
+// keeps the connections to it: a request goes to where the session points
+// as it starts, and a connection it used goes back to its target's
+// transport, which no request uses again once the session points
+// elsewhere (Repoint). inflight counts the requests going on through it,
+// a WebSocket's among them, until they end, and retired is set once the
+// session points elsewhere: then the target's idle connections close, and
+// those of the requests that go on close as they end.
+type target struct {
+	transport *http.Transport
+	inflight  atomic.Int64
+	retired   atomic.Bool
+}
+
+// retireAfter is how long after the last request through a retired
+// target ends its idle connections are closed again: the transport puts a
+// connection back as idle a moment after its request ends, which nothing
+// signals.
+const retireAfter = 100 * time.Millisecond
 
 // New returns a Proxy of cfg, which lives until Close, or until ctx is
 // done, which closes its connections to the service, as Close does, but
@@ -161,6 +193,8 @@ func New(ctx context.Context, cfg Config) (*Proxy, error) {
 	switch {
 	case !login.PathSafe(cfg.Name):
 		return nil, fmt.Errorf("sessionproxy: the session's name %q isn't one a URL's path holds as it is", cfg.Name)
+	case !ValidLabel(cfg.Label):
+		return nil, fmt.Errorf("sessionproxy: %q isn't a session's label", cfg.Label)
 	case len(cfg.Secret) == 0 || cfg.Keyring == nil || cfg.Codes == nil || cfg.Dial == nil:
 		return nil, errors.New("sessionproxy: a session needs its secret, a keyring, its codes and a dial")
 	}
@@ -170,7 +204,7 @@ func New(ctx context.Context, cfg Config) (*Proxy, error) {
 	p := &Proxy{
 		cfg: cfg, prefix: "/me/session/" + cfg.User + "/" + cfg.Name,
 		places: make(chan struct{}, cfg.MaxConns),
-		secret: append([]byte(nil), cfg.Secret...), dial: cfg.Dial, conns: map[*placedConn]bool{},
+		secret: append([]byte(nil), cfg.Secret...), conns: map[*placedConn]bool{},
 	}
 	sum := sha256.Sum256([]byte(p.prefix))
 	p.cookie = CookiePrefix + hex.EncodeToString(sum[:8])
@@ -179,14 +213,14 @@ func New(ctx context.Context, cfg Config) (*Proxy, error) {
 	if cfg.Log != nil {
 		errorLog = slog.NewLogLogger(cfg.Log.Handler(), slog.LevelWarn)
 	}
-	p.transport = &http.Transport{
-		DialContext:        func(ctx context.Context, _, _ string) (net.Conn, error) { return p.dialService(ctx) },
-		DisableCompression: true,
-		IdleConnTimeout:    idleTimeout,
-	}
+	p.target = p.newTarget(cfg.Dial)
 	p.reverse = &httputil.ReverseProxy{
-		Rewrite: p.rewrite, Transport: p.transport, ModifyResponse: p.modify, ErrorLog: errorLog,
+		Rewrite: p.rewrite, Transport: switching{p}, ModifyResponse: p.modify, ErrorLog: errorLog,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(err, errBusy) {
+				page(w, r, http.StatusServiceUnavailable, problems.SessionBusy, problems.Params{"name": cfg.Name, "limit": cfg.MaxConns})
+				return
+			}
 			if cfg.Log != nil && !errors.Is(err, context.Canceled) {
 				cfg.Log.Warn("sessionproxy: the session's service didn't answer", "session", cfg.Name, "err", err)
 			}
@@ -200,6 +234,15 @@ func New(ctx context.Context, cfg Config) (*Proxy, error) {
 // Path returns the path the proxy serves the session at, with a slash
 // after it: /me/session/<user>/<name>/.
 func (p *Proxy) Path() string { return p.prefix + "/" }
+
+// Host returns the host name the proxy serves the session at, at any port:
+// <label>.localhost, which a browser resolves to this machine's loopback
+// address, as Chrome and Firefox do themselves, and curl too.
+func (p *Proxy) Host() string { return HostOf(p.cfg.Label) }
+
+// HostOf returns the host name a session whose label is label is served
+// at: <label>.localhost.
+func HostOf(label string) string { return label + ".localhost" }
 
 // Serve serves the session on l, which must listen on 127.0.0.1 alone
 // (Listen), until Close.
@@ -220,7 +263,11 @@ func (p *Proxy) Serve(l net.Listener) error {
 func (p *Proxy) Close() error {
 	p.end()
 	err := p.server.Close()
-	p.transport.CloseIdleConnections()
+	p.mu.Lock()
+	t := p.target
+	p.mu.Unlock()
+	// Closing a connection takes the lock, to forget it.
+	t.transport.CloseIdleConnections()
 	p.mu.Lock()
 	conns := slices.Collect(maps.Keys(p.conns))
 	p.mu.Unlock()
@@ -231,13 +278,89 @@ func (p *Proxy) Close() error {
 }
 
 // Repoint has the proxy connect to the service with dial from now on, as
-// a session that a step points again: idle connections to where it
-// pointed close, and those in use, as a WebSocket's, run until they end.
+// a session that a step points again: every request after goes there, and
+// no connection to where it pointed is used again. Those idle close at
+// once, and those of requests going on, as a WebSocket's, close as they
+// end, as format 1's platform keeps a transport for each target.
 func (p *Proxy) Repoint(dial DialFunc) {
 	p.mu.Lock()
-	p.dial = dial
+	old := p.target
+	p.target = p.newTarget(dial)
 	p.mu.Unlock()
-	p.transport.CloseIdleConnections()
+	old.retired.Store(true)
+	old.transport.CloseIdleConnections()
+	if old.inflight.Load() == 0 {
+		time.AfterFunc(retireAfter, old.transport.CloseIdleConnections)
+	}
+}
+
+// newTarget returns a target that dial connects to.
+func (p *Proxy) newTarget(dial DialFunc) *target {
+	return &target{transport: &http.Transport{
+		DialContext:        func(ctx context.Context, _, _ string) (net.Conn, error) { return p.dialService(ctx, dial) },
+		DisableCompression: true,
+		IdleConnTimeout:    idleTimeout,
+	}}
+}
+
+// switching is the proxy's RoundTripper: each request goes through the
+// transport of where the session points as it starts (Proxy.target), and
+// counts as going on there until its answer's body is closed.
+type switching struct{ p *Proxy }
+
+func (s switching) RoundTrip(r *http.Request) (*http.Response, error) {
+	s.p.mu.Lock()
+	t := s.p.target
+	s.p.mu.Unlock()
+	t.inflight.Add(1)
+	resp, err := t.transport.RoundTrip(r)
+	if err != nil {
+		t.ended()
+		return nil, err
+	}
+	ended := sync.OnceFunc(t.ended)
+	if rwc, ok := resp.Body.(io.ReadWriteCloser); ok {
+		// An upgrade's, as a WebSocket's, which the reverse proxy writes
+		// to as well.
+		resp.Body = &endedReadWriteCloser{ReadWriteCloser: rwc, ended: ended}
+	} else {
+		resp.Body = &endedReadCloser{ReadCloser: resp.Body, ended: ended}
+	}
+	return resp, nil
+}
+
+// ended counts a request through t as ended, which, where t is retired
+// and it was the last, closes t's idle connections, the one it used among
+// them, once its transport has put it back.
+func (t *target) ended() {
+	if t.inflight.Add(-1) == 0 && t.retired.Load() {
+		t.transport.CloseIdleConnections()
+		time.AfterFunc(retireAfter, t.transport.CloseIdleConnections)
+	}
+}
+
+// An endedReadCloser, and an endedReadWriteCloser, is an answer's body
+// whose Close ends its request (target.ended).
+type endedReadCloser struct {
+	io.ReadCloser
+	ended func()
+}
+
+func (b *endedReadCloser) Close() error {
+	err := b.ReadCloser.Close()
+	b.ended()
+	return err
+}
+
+type endedReadWriteCloser struct {
+	io.ReadWriteCloser
+	ended func()
+}
+
+func (b *endedReadWriteCloser) Close() error {
+	err := b.ReadWriteCloser.Close()
+	b.ended()
+	return err
 }
 
 // SetSecret has the session's cookie hold secret from now on, as a
@@ -249,10 +372,10 @@ func (p *Proxy) SetSecret(secret []byte) {
 	p.secret = append([]byte(nil), secret...)
 }
 
-func (p *Proxy) current() ([]byte, DialFunc) {
+func (p *Proxy) current() []byte {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.secret, p.dial
+	return p.secret
 }
 
 // ServeHTTP answers a request: one addressed to another host than
@@ -262,15 +385,24 @@ func (p *Proxy) current() ([]byte, DialFunc) {
 // and the rest it passes on to the service, once it has checked where a
 // WebSocket, or a change, comes from, and the session's cookie.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !p.ownHost(r.Host) {
 		page(w, r, http.StatusMisdirectedRequest, problems.SessionHostRefused, problems.Params{"host": r.Host})
 		return
 	}
+	if !fromHere(r) || changes(r) && !sameOrigin(r) {
+		page(w, r, http.StatusForbidden, problems.SessionCrossOrigin, nil)
+		return
+	}
+	_, hasCode := codeOf(r.URL.RawQuery)
 	switch path := r.URL.Path; {
 	case path == "/" || path == p.prefix:
 		target := p.Path()
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
+		}
+		if hasCode {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Referrer-Policy", "no-referrer")
 		}
 		http.Redirect(w, r, target, http.StatusFound) //nolint:gosec // to the session's own path, which starts with /me/session/
 		return
@@ -278,31 +410,38 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		page(w, r, http.StatusNotFound, problems.SessionNotHere, problems.Params{"path": p.Path()})
 		return
 	}
-	if code, ok := codeOf(r.URL.RawQuery); ok && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+	// A code is redeemed by a GET, a browser's navigation, alone: a HEAD,
+	// as a link checker sends, would use it up, so it is answered as one
+	// without the cookie is.
+	switch code, ok := codeOf(r.URL.RawQuery); {
+	case ok && r.Method == http.MethodGet:
 		p.redeem(w, r, code)
 		return
-	}
-	if changes(r) && !sameOrigin(r) {
-		page(w, r, http.StatusForbidden, problems.SessionCrossOrigin, nil)
+	case ok && r.Method == http.MethodHead:
+		p.unauthorized(w, r)
 		return
 	}
 	if !p.authorized(r) {
-		page(w, r, http.StatusUnauthorized, problems.SessionUnauthorized, problems.Params{"run": p.cfg.Run, "key": p.cfg.Key})
+		p.unauthorized(w, r)
 		return
 	}
 	p.reverse.ServeHTTP(w, r)
 }
 
 // redeem uses the one-time code code: a code that works gives the browser
-// the session's cookie, and sends it to the same URL without the code,
-// which its history then keeps, and which no cache keeps the answer of.
-// A browser that holds the cookie already, as one that opens a link it
-// used before, is sent there too, with the cookie it has; any other is
-// refused, as a browser without the cookie is.
+// the session's cookie, with a page that sends it on to the same URL
+// without the code, which its history then keeps, and which no cache keeps
+// the answer of. The page sends it on itself, from the session's own
+// origin, rather than a redirect, which would carry on a navigation that
+// another site started, as a link clicked on another site's page does,
+// with which a browser sends no SameSite=Strict cookie. A browser that
+// holds the cookie already, as one that opens a link it used before, is
+// sent there too, with the cookie it has; any other is refused, as a
+// browser without the cookie is.
 func (p *Proxy) redeem(w http.ResponseWriter, r *http.Request, code string) {
 	switch {
-	case p.cfg.Codes.Redeem(r.Context(), p.cfg.Session, p.cfg.Keyring.CodeMAC(code)):
-		secret, _ := p.current()
+	case p.cfg.Codes.Redeem(r.Context(), p.cfg.Session, p.cfg.Keyring.CodeMAC(p.cfg.Session, code)):
+		secret := p.current()
 		// Not Secure: the session is served over HTTP, on this machine's
 		// loopback address, which not every browser sends a Secure cookie
 		// to.
@@ -311,22 +450,36 @@ func (p *Proxy) redeem(w http.ResponseWriter, r *http.Request, code string) {
 			HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		})
 	case !p.authorized(r):
-		page(w, r, http.StatusUnauthorized, problems.SessionUnauthorized, problems.Params{"run": p.cfg.Run, "key": p.cfg.Key})
+		p.unauthorized(w, r)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
 	target := r.URL.EscapedPath()
 	if q := withoutCode(r.URL.RawQuery); q != "" {
 		target += "?" + q
 	}
-	http.Redirect(w, r, target, http.StatusSeeOther) //nolint:gosec // to the path asked for, under the session's own, which ServeHTTP checked
+	h := w.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'")
+	escaped := html.EscapeString(target)
+	_, _ = io.WriteString(w, `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=`+escaped+ //nolint:gosec // the path asked for, under the session's own, escaped
+		`"><title>Meridian</title><a href="`+escaped+`">`+escaped+"</a>\n")
+}
+
+// unauthorized answers a request without the session's cookie: with a
+// page that says how to get a link, and WWW-Authenticate, whose scheme is
+// Meridian's own, Meridian-Link, which no browser answers itself.
+func (p *Proxy) unauthorized(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("WWW-Authenticate", `Meridian-Link realm="`+p.Path()+`"`)
+	page(w, r, http.StatusUnauthorized, problems.SessionUnauthorized, problems.Params{"run": p.cfg.Run, "key": p.cfg.Key})
 }
 
 // authorized reports whether r holds the session's cookie, with the
 // session's secret: another session's, or anything else, doesn't count.
 func (p *Proxy) authorized(r *http.Request) bool {
-	secret, _ := p.current()
+	secret := p.current()
 	for _, c := range r.CookiesNamed(p.cookie) {
 		if v, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil && hmac.Equal(v, secret) {
 			return true
@@ -335,15 +488,17 @@ func (p *Proxy) authorized(r *http.Request) bool {
 	return false
 }
 
-// dialService connects to the session's service, once the proxy has fewer
-// than MaxConns connections to it open or opening, waiting dialWait at
-// most for both, or until ctx is done. A dial it stops waiting for goes on,
-// with the place it took, until it ends, and closes what it made: so a
-// browser that retries a service that doesn't answer has no more dials
-// going on than MaxConns, which the host's other sessions don't wait
-// behind. A connection lives as long as the proxy, at most, whatever
-// request it was dialed for, as the transport keeps it for the next.
-func (p *Proxy) dialService(ctx context.Context) (net.Conn, error) {
+// dialService connects to the session's service with dial, once the proxy
+// has fewer than MaxConns connections to it open or opening, waiting
+// dialWait at most for both, or until ctx is done: errBusy where it waited
+// for a place in vain, and errNoAnswer for the dial. A dial it stops
+// waiting for goes on, with the place it took, until it ends, and closes
+// what it made: so a browser that retries a service that doesn't answer
+// has no more dials going on than MaxConns, which the host's other
+// sessions don't wait behind. A connection lives as long as the proxy, at
+// most, whatever request it was dialed for, as the transport keeps it for
+// the next.
+func (p *Proxy) dialService(ctx context.Context, dial DialFunc) (net.Conn, error) {
 	wait := time.NewTimer(dialWait)
 	defer wait.Stop()
 	select {
@@ -356,7 +511,6 @@ func (p *Proxy) dialService(ctx context.Context) (net.Conn, error) {
 		return nil, errClosed
 	}
 	release := sync.OnceFunc(func() { <-p.places })
-	_, dial := p.current()
 	type dialed struct {
 		conn net.Conn
 		err  error
@@ -403,12 +557,13 @@ func (p *Proxy) dialService(ctx context.Context) (net.Conn, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return nil, errBusy
+	return nil, errNoAnswer
 }
 
 var (
-	errBusy   = fmt.Errorf("sessionproxy: no connection to the service within %v", dialWait)
-	errClosed = errors.New("sessionproxy: closed")
+	errBusy     = errors.New("sessionproxy: the session has as many connections to its service as it may")
+	errNoAnswer = errors.New("sessionproxy: the service didn't answer in time")
+	errClosed   = errors.New("sessionproxy: closed")
 )
 
 // A placedConn is a connection to the service, which gives its place among
@@ -451,11 +606,17 @@ func (p *Proxy) placed(conn net.Conn, release func()) *placedConn {
 	return c
 }
 
+// identityHeaders are the headers with which format 1's platform tells a
+// session's service who asks: Meridian sets none of them, and passes on
+// none a browser sent, which a service might trust.
+var identityHeaders = []string{"X-PW-User", "X-PW-User-Token", "X-PW-Subject", "X-PW-Impersonated-By"}
+
 // rewrite makes what goes to the service of what the browser sent: its
 // path without the session's, as format 1's platform passes a tunnel's on,
 // which X-Forwarded-Prefix says; its query without a code; its cookies
-// without the proxy's; the service's host; and X-Forwarded-For, -Host and
-// -Proto as the proxy saw them, over any the browser sent.
+// without the proxy's; the service's host; X-Forwarded-For, -Host and
+// -Proto as the proxy saw them, over any the browser sent; and none of
+// the headers format 1's platform says who asks with (identityHeaders).
 func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 	in, out := pr.In, pr.Out
 	out.URL.Scheme, out.URL.Host, out.Host = "http", upstreamHost, upstreamHost
@@ -469,6 +630,9 @@ func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 		if kept := withoutOwnCookies(v); kept != "" {
 			out.Header.Add("Cookie", kept)
 		}
+	}
+	for _, h := range identityHeaders {
+		out.Header.Del(h)
 	}
 	pr.SetXForwarded()
 	out.Header.Set("X-Forwarded-Prefix", p.prefix)
@@ -496,15 +660,33 @@ func (p *Proxy) modify(resp *http.Response) error {
 	return nil
 }
 
-// loopbackHost reports whether a request's Host names this machine's
-// loopback address, as 127.0.0.1, localhost or [::1], with any port, as
-// ssh -L to another port gives it.
-func loopbackHost(hostport string) bool {
+// ownHost reports whether a request's Host is the session's own host
+// name, <label>.localhost, case aside, with any port, as ssh -L to another
+// port gives it: not 127.0.0.1, nor localhost, nor any other name, which
+// another server on this machine, or a page whose host name was made to
+// resolve to 127.0.0.1, has too.
+func (p *Proxy) ownHost(hostport string) bool {
 	host, _, err := net.SplitHostPort(hostport)
 	if err != nil {
-		host = strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]")
+		host = hostport
 	}
-	return host == "127.0.0.1" || host == "::1" || strings.EqualFold(host, "localhost")
+	return strings.EqualFold(host, p.Host())
+}
+
+// fromHere reports whether r is one the session serves by its fetch
+// metadata: any request that a browser didn't say came from another
+// site, as one from the session's own pages, or that the user made, or
+// one without the metadata, which still needs the cookie; and from
+// another site, as another port's page is, only a navigation of the
+// browser's to a page (Sec-Fetch-Mode navigate, Sec-Fetch-Dest
+// document), never a frame, nor a resource of the page's, which would
+// carry the session's cookie into the other site's page.
+func fromHere(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-site", "cross-site":
+		return r.Header.Get("Sec-Fetch-Mode") == "navigate" && r.Header.Get("Sec-Fetch-Dest") == "document"
+	}
+	return true
 }
 
 // changes reports whether r is one whose origin the proxy checks: a
@@ -537,6 +719,11 @@ func sameOrigin(r *http.Request) bool {
 	switch origins := r.Header.Values("Origin"); {
 	case len(origins) > 1:
 		return false
+	case len(origins) == 1 && origins[0] == "null":
+		// A page of the session's own whose referrer policy is
+		// no-referrer sends its forms so; a sandboxed frame, or another
+		// opaque origin, sends them as another site.
+		return r.Header.Get("Sec-Fetch-Site") == "same-origin"
 	case len(origins) == 1 && !strings.EqualFold(origins[0], "http://"+r.Host):
 		return false
 	}

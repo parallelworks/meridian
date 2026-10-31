@@ -56,17 +56,49 @@ func (k *Keyring) Secret(store, session string, salt []byte) ([]byte, error) {
 	return k.mac("secret", []byte(store), []byte(session), salt), nil
 }
 
-// CodeMAC returns the keyed hash of the one-time code code, which is all
-// that is kept of it.
-func (k *Keyring) CodeMAC(code string) []byte { return k.mac("code", []byte(code)) }
+// CodeMAC returns the keyed hash of the one-time code code of the session
+// session, which is all that is kept of it: a code of one session's hashes
+// as none of another's.
+func (k *Keyring) CodeMAC(session, code string) []byte {
+	return k.mac("code", []byte(session), []byte(code))
+}
 
-// NewCode returns a new one-time code, CodeBits random bits in lowercase
-// base32, which a link to a session holds, with its keyed hash (CodeMAC).
-func (k *Keyring) NewCode() (code string, mac []byte) {
-	b := make([]byte, CodeBits/8)
+// NewCode returns a new one-time code of the session session, CodeBits
+// random bits in lowercase base32, which a link to it holds, with its
+// keyed hash (CodeMAC).
+func (k *Keyring) NewCode(session string) (code string, mac []byte) {
+	code = random32(CodeBits)
+	return code, k.CodeMAC(session, code)
+}
+
+// LabelBits is how many random bits a session's label has.
+const LabelBits = 128
+
+// NewLabel returns a new label for a session: LabelBits random bits in
+// lowercase base32, 26 characters, which is a DNS label, under which the
+// session is served, at <label>.localhost, a host name of its own.
+func NewLabel() string { return random32(LabelBits) }
+
+// ValidLabel reports whether label is one NewLabel gives: 26 lowercase
+// base32 characters.
+func ValidLabel(label string) bool {
+	if len(label) != (LabelBits+4)/5 {
+		return false
+	}
+	for i := range len(label) {
+		if b := label[i]; (b < 'a' || b > 'z') && (b < '2' || b > '7') {
+			return false
+		}
+	}
+	return true
+}
+
+// random32 returns bits random bits, a multiple of 8, in lowercase base32,
+// without padding.
+func random32(bits int) string {
+	b := make([]byte, bits/8)
 	_, _ = rand.Read(b) // crypto/rand doesn't fail
-	code = strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b))
-	return code, k.CodeMAC(code)
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b))
 }
 
 // mac returns the HMAC-SHA256 of what, then each field, each led by its
