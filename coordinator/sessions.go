@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
@@ -181,11 +182,19 @@ func encodeCallPath(path []callLevel) (string, error) {
 	return string(b), err
 }
 
+// maxSessionName is the most bytes of a name sessionName gives: a
+// session's path holds its name, and its cookie is held to that path,
+// which a browser ignores past 1 KiB.
+const maxSessionName = 128
+
 // sessionName returns the name of the session key of the workflow that is
 // called at path in the tree whose root is the run root, of the workflow
 // named workflow, as format 1 names it: the workflow, the root, each call's
 // job and step, as step_<n>, and the key, joined with underscores, what of
-// each a session's path can't hold as it is made a hyphen.
+// each a session's path can't hold as it is made a hyphen. A name longer
+// than maxSessionName keeps its start, and ends with a hyphen and the
+// first 64 bits of the whole one's SHA-256, in hex, so that it is as
+// long, and the same each time.
 func sessionName(workflow, root string, path []callLevel, key string) string {
 	parts := []string{workflow, root}
 	for _, l := range path {
@@ -203,7 +212,12 @@ func sessionName(workflow, root string, path []callLevel, key string) string {
 			return '-'
 		}, part)
 	}
-	return strings.Join(parts, "_")
+	name := strings.Join(parts, "_")
+	if len(name) > maxSessionName {
+		sum := sha256.Sum256([]byte(name))
+		name = name[:maxSessionName-17] + "-" + hex.EncodeToString(sum[:8])
+	}
+	return name
 }
 
 // workflowName returns the name of the workflow at location, a run's own

@@ -87,6 +87,9 @@ type cli struct {
 	// standard input and error are a terminal.
 	signals     chan os.Signal
 	interactive *bool
+	// terminal is whether standard output is a person's terminal, which a
+	// test gives meridian run, nil for whether it is (stdoutTerminal).
+	terminal *bool
 	// stopped is what a test has meridian cancel do once it has stored
 	// the run's stop, before it reads the run back; nil for nothing.
 	stopped func()

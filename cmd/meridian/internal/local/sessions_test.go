@@ -468,6 +468,10 @@ func TestSessionHostLink(t *testing.T) {
 		"/lab/tree":    "http://" + host + ":8000/me/session/alice/web-1/lab/tree?" + sessionproxy.CodeParam + "=c",
 		"lab?token=x":  "http://" + host + ":8000/me/session/alice/web-1/lab?token=x&" + sessionproxy.CodeParam + "=c",
 		"vnc.html#top": "http://" + host + ":8000/me/session/alice/web-1/vnc.html?" + sessionproxy.CodeParam + "=c#top",
+		// A code of the slug's own the proxy would read first.
+		"lab?meridian-code=x&a=1": "http://" + host + ":8000/me/session/alice/web-1/lab?a=1&" + sessionproxy.CodeParam + "=c",
+		"lab?meridian%2Dcode=x":   "http://" + host + ":8000/me/session/alice/web-1/lab?" + sessionproxy.CodeParam + "=c",
+		"lab?a=1&&b":              "http://" + host + ":8000/me/session/alice/web-1/lab?a=1&b&" + sessionproxy.CodeParam + "=c",
 	} {
 		if got := SessionLink("alice", s, 8000, slug, "c"); got != want {
 			t.Errorf("SessionLink with the slug %q = %s, want %s", slug, got, want)
@@ -475,5 +479,86 @@ func TestSessionHostLink(t *testing.T) {
 	}
 	if got := SessionLink("alice", s, 8000, "", ""); strings.Contains(got, sessionproxy.CodeParam) {
 		t.Errorf("a link without a code is %s", got)
+	}
+}
+
+// listenOn listens at port of address, of network, or skips the test where
+// the system has no such address, as one without IPv6.
+func listenOn(t *testing.T, network, address string, port int) net.Listener {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), network, net.JoinHostPort(address, strconv.Itoa(port)))
+	if err != nil {
+		if strings.Contains(err.Error(), "cannot assign requested address") || strings.Contains(err.Error(), "address family not supported") {
+			t.Skipf("no %s here: %v", address, err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln
+}
+
+// serveText answers each request on ln with text.
+func serveText(t *testing.T, ln net.Listener, text string) {
+	t.Helper()
+	srv := &httptest.Server{Listener: ln, Config: &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, text)
+	})}}
+	srv.Start()
+	t.Cleanup(srv.Close)
+}
+
+// TestSessionDialer checks where a session's requests go: a service of
+// this machine's, at 127.0.0.1, even where another program listens at the
+// same port of [::1], which a resolver can give for localhost first; at
+// [::1] only for one that refuses at 127.0.0.1, as one that listens there
+// alone does; and a cluster's localhost, as a step names it, at
+// 127.0.0.1 too, by its host.
+func TestSessionDialer(t *testing.T) {
+	t.Parallel()
+	h, _, dials := newTestSessionHost(t)
+	service := listenOn(t, "tcp4", "127.0.0.1", 0)
+	port := service.Addr().(*net.TCPAddr).Port
+	serveText(t, service, "the service")
+	serveText(t, listenOn(t, "tcp6", "::1", port), "another program")
+	read := func(dial sessionproxy.DialFunc) string {
+		t.Helper()
+		conn, err := dial(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := io.WriteString(conn, "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n"); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := io.ReadAll(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, body, _ := strings.Cut(string(resp), "\r\n\r\n")
+		return body
+	}
+	if got := read(h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})); got != "the service" {
+		t.Errorf("a session of this machine's service reached %q", got)
+	}
+	free := listenOn(t, "tcp4", "127.0.0.1", 0)
+	alone := free.Addr().(*net.TCPAddr).Port
+	_ = free.Close()
+	serveText(t, listenOn(t, "tcp6", "::1", alone), "a service on [::1]")
+	if got := read(h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: alone})); got != "a service on [::1]" {
+		t.Errorf("a session of a service on [::1] alone reached %q", got)
+	}
+	for _, remote := range []string{"localhost", "", "LocalHost", "node-1"} {
+		conn, err := h.dialer(sessionPoint{Type: "tunnel", Cluster: "hpc", RemoteHost: remote, RemotePort: port})(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+	}
+	want := []string{
+		fmt.Sprintf("farm 127.0.0.1 %d", port), fmt.Sprintf("farm 127.0.0.1 %d", port),
+		fmt.Sprintf("farm 127.0.0.1 %d", port), fmt.Sprintf("farm node-1 %d", port),
+	}
+	if got := *dials; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("the cluster's host was asked for %q, want %q", got, want)
 	}
 }

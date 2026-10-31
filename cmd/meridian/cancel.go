@@ -86,7 +86,7 @@ func runCancel(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int
 	progress := local.NewProgress(c.stdout, c.stderr, c.json)
 	// Coordinating the run, it serves the store's sessions too, as
 	// meridian resume does, and says so.
-	sessions.AnnounceTo(progress, c.stdoutTerminal())
+	sessions.AnnounceTo(progress, c.showsSessionLinks())
 	err = coord.Cancel(ctx, id)
 	if err != nil && !errors.Is(err, coordinator.ErrRunEnded) {
 		return c.fail(runNotFound(id, err))

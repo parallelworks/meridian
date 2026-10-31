@@ -2596,7 +2596,10 @@ runs as any other; none of the known calls has an `ssh:` of its own.
   step, but not its try or its attempt. It names them as format 1 does,
   `<workflow>_<root>_<job>_step_<n>[_<job>_step_<n>…]_<key>`, where
   `<workflow>` is the root's file's name; `prompt-for-name` asks nothing
-  of a called workflow. Instances that point their shared session in turn
+  of a called workflow. A name longer than 128 bytes, as a deep tree's,
+  keeps its first 111, and ends with a hyphen and 64 bits of the whole
+  one's SHA-256, in hex: a session's path holds its name, and a browser
+  ignores a cookie's path past 1 KiB. Instances that point their shared session in turn
   leave it where the last pointed it, as in format 1: 2 of the 14 known
   workflows whose matrix job calls a workflow call one with a session.
 - **What people see.** A child is a run, with its own number, shown under
@@ -5550,10 +5553,12 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   be created (`session_name_needed`); or, without `prompt-for-name`, by
   its key, made fit for a path, a hyphen and 40 random bits. A workflow a
   step calls has its sessions named as format 1 names them
-  ([Workflows a step calls](#workflows-a-step-calls)). A session that
-  needs what only a platform has, as `detach: true`, which outlives its
-  run, `openAI: true` or `useCustomDomain: true`, can't be created
-  (`session_field_unsupported`); `meridian validate` says so too.
+  ([Workflows a step calls](#workflows-a-step-calls)). A name a workflow
+  chooses is used as it is: one that, with the login name, makes the
+  session's path longer than 1 KiB leaves a browser without its cookie.
+  A session that needs what only a platform has, as `detach: true`, which
+  outlives its run, `openAI: true` or `useCustomDomain: true`, can't be
+  created (`session_field_unsupported`); `meridian validate` says so too.
 - **Where a step points it**, as format 1 reads `update-session`'s
   `with:`. A link, `type: link`, is its `url`, an absolute http or https
   URL (`session_url_invalid`), which the run's output says, and nothing
@@ -5563,7 +5568,13 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   format 1 has it; a cluster of `clusters.yaml`, by its id, is reached
   over SSH through the cluster's host, as its jobs' workers are, where
   its host connects to `remoteHost`, `localhost` by default
-  (`session_target_unknown` for another). A port is a whole number from 1
+  (`session_target_unknown` for another). `localhost` is resolved as
+  127.0.0.1, where a service that listens on one loopback address alone
+  listens, and never by a resolver, which can give `[::1]` first, where
+  another user of the machine could listen at the same port and take the
+  session's requests: on this machine, a service that refuses at
+  127.0.0.1 is tried at `[::1]`, as one that listens there alone is, and
+  a cluster's host is asked for 127.0.0.1. A port is a whole number from 1
   to 65535, or text of one (`session_port_invalid`). The session is
   served at `localPort`, where the step gives one, or at the port it is
   served at already, or at one the system picks. What only a platform
@@ -5577,8 +5588,9 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   so: on a person's terminal, with a link that holds a one-time code;
   elsewhere, since a log keeps no link that works, with the command that
   makes one, `meridian session url <run> <key>`; and, as JSON, as a
-  `session.ready` line, with the `run`, the `key` and, on a terminal, the
-  `url`. A link session's `url` is said as it is. `meridian session url`
+  `session.ready` line, with the `run` and the `key`, and never a code,
+  even on a terminal, since a program reads it, and keeps it, as an
+  editor's task runner does. A link session's `url` is said as it is. `meridian session url`
   prints a new link, whose code works once, within ten minutes, from the
   run whose `sessions:` has the session, any run of its call among them;
   `meridian session reset` gives the session a new salt, which signs out

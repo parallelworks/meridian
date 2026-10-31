@@ -122,7 +122,7 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	progress := local.NewProgress(c.stdout, c.stderr, c.json)
 	// Each session the run's steps point, this process says it serves
 	// as it does: on a person's terminal, with a link.
-	sessions.AnnounceTo(progress, c.stdoutTerminal())
+	sessions.AnnounceTo(progress, c.showsSessionLinks())
 	if err := progress.Created(id, dir); err != nil {
 		return c.fail(err)
 	}

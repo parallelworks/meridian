@@ -2,7 +2,9 @@ package local
 
 import (
 	"bytes"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"io/fs"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/parallelworks/meridian/internal/kindtest"
+	"github.com/parallelworks/meridian/internal/sessionproxy"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -202,5 +205,16 @@ func TestKeysDerive(t *testing.T) {
 	}
 	if wrapped, err := NewKeys(dir).Wrap(t.Context(), "run-1", dataKey(t)); err != nil || len(wrapped) == 0 {
 		t.Errorf("the key file Derive made doesn't wrap: %v", err)
+	}
+	// A purpose's info is "meridian " and the purpose, once: sessions'
+	// tokens' key's is meridian session tokens v1.
+	k := NewKeys(dir)
+	tokens, err := k.Derive(sessionproxy.KeyLabel, sessionproxy.KeyLen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := hkdf.Key(sha256.New, k.key, nil, "meridian session tokens v1", sessionproxy.KeyLen)
+	if err != nil || !bytes.Equal(tokens, want) {
+		t.Errorf("the sessions' tokens' key isn't derived with the info meridian session tokens v1: %v", err)
 	}
 }

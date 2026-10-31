@@ -2,12 +2,15 @@ package coordinator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -1107,5 +1110,19 @@ func TestSessionNames(t *testing.T) {
 	path := []callLevel{{Job: "build", Step: 2}, {Job: "main job", Step: 0, Cleanup: true}}
 	if got := sessionName("my flow", "12", path, "desk/top"); got != "my-flow_12_build_step_2_main-job_step_0_cleanup_desk-top" {
 		t.Errorf("sessionName = %q", got)
+	}
+	// A deep tree's, too long for a cookie's path, is made short, the same
+	// each time, and another call's another.
+	deep := slices.Repeat([]callLevel{{Job: strings.Repeat("j", 30), Step: 1}}, 5)
+	long, again := sessionName("w", "1", deep, "desktop"), sessionName("w", "1", deep, "desktop")
+	other := sessionName("w", "1", deep, "notes")
+	if len(long) != maxSessionName || long != again || other == long || !strings.HasPrefix(long, "w_1_"+strings.Repeat("j", 30)+"_step_1_") ||
+		!regexp.MustCompile(`-[0-9a-f]{16}$`).MatchString(long) {
+		t.Errorf("a deep tree's session is named %q, and %q, and another %q", long, again, other)
+	}
+	full := "w_1_" + strings.Repeat(strings.Repeat("j", 30)+"_step_1_", 5) + "desktop"
+	sum := sha256.Sum256([]byte(full))
+	if want := full[:maxSessionName-17] + "-" + hex.EncodeToString(sum[:8]); long != want {
+		t.Errorf("a deep tree's session is named %q, want %q", long, want)
 	}
 }

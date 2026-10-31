@@ -193,10 +193,18 @@ func lockWriters(c *cli) {
 	c.stdout, c.stderr = &lockedWriter{mu: &mu, w: c.stdout}, &lockedWriter{mu: &mu, w: c.stderr}
 }
 
-// stdoutTerminal reports whether c's standard output, under its lock
-// (lockWriters), is a person's terminal, where a session's link, with its
-// one-time code, is shown, as no log keeps it.
-func (c *cli) stdoutTerminal() bool {
+// showsSessionLinks reports whether c's run's output shows a session's
+// link, with its one-time code: only as text, to a person's terminal,
+// under its lock (lockWriters), as no log keeps it; never as JSON, which
+// a program reads, and keeps, even on a terminal, as an editor's task
+// runner does.
+func (c *cli) showsSessionLinks() bool {
+	if c.json {
+		return false
+	}
+	if c.terminal != nil {
+		return *c.terminal
+	}
 	var w any = c.stdout
 	if l, ok := w.(*lockedWriter); ok {
 		w = l.w

@@ -143,17 +143,7 @@ func checkSessionServed(t *testing.T, env map[string]string, setUp func(*cli), a
 		t.Fatal(err)
 	}
 	cmd := startCommand(t, env, setUp, append([]string{"run", "--input", "bin=" + self}, args...)...)
-	ready := "session web of run 1 is ready: meridian session url 1 web\n"
-	for deadline := time.Now().Add(3 * time.Minute); !strings.Contains(cmd.stdout.String(), ready); {
-		select {
-		case r := <-cmd.done:
-			t.Fatalf("meridian run ended before its session was served: %+v", r)
-		case <-time.After(20 * time.Millisecond):
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the session isn't served:\n%s%s", cmd.stdout.String(), cmd.stderr.String())
-		}
-	}
+	untilSaid(t, cmd, "session web of run 1 is ready: meridian session url 1 web\n")
 	session := func(args ...string) result {
 		t.Helper()
 		return <-startCommand(t, env, setUp, append([]string{"session"}, args...)...).done
@@ -221,6 +211,73 @@ func checkSessionServed(t *testing.T, env map[string]string, setUp func(*cli), a
 	}
 	if r := session("url", "1", "web"); r.code != exitError || !strings.Contains(r.stderr, "session_key_unknown") {
 		t.Errorf("meridian session url of an ended session = %+v", r)
+	}
+}
+
+// untilSaid waits for meridian run's output to say said, and fails the test
+// if it ends first, or doesn't within a while.
+func untilSaid(t *testing.T, cmd *commandRun, said string) {
+	t.Helper()
+	for deadline := time.Now().Add(3 * time.Minute); !strings.Contains(cmd.stdout.String(), said); {
+		select {
+		case r := <-cmd.done:
+			t.Fatalf("meridian run ended before it said %q: %+v", said, r)
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("meridian run hasn't said %q:\n%s%s", said, cmd.stdout.String(), cmd.stderr.String())
+		}
+	}
+}
+
+// TestSessionLinks checks how meridian run says its session is served on
+// a person's terminal: as text, with a link whose one-time code opens it;
+// and as JSON, which a program reads and keeps, as an editor's task runner
+// does, with no link, so that it holds no code, but with what makes one.
+func TestSessionLinks(t *testing.T) {
+	parallel(t)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	yes := true
+	onTerminal := func(c *cli) { c.terminal = &yes }
+	for _, json := range []bool{false, true} {
+		env := runEnv(t)
+		args := []string{"run", "--input", "bin=" + self}
+		if json {
+			args = append(args, "--format", "json")
+		}
+		cmd := startCommand(t, env, onTerminal, append(args, writeFile(t, "w.yaml", sessionWorkflow(false)))...)
+		var link string
+		if json {
+			untilSaid(t, cmd, `"kind":"session.ready"`)
+			for line := range strings.SplitSeq(cmd.stdout.String(), "\n") {
+				if strings.Contains(line, `"kind":"session.ready"`) && line != `{"version":1,"kind":"session.ready","run":"1","key":"web"}` {
+					t.Errorf("as JSON on a terminal, the session is said as %s", line)
+				}
+			}
+			r := <-startCommand(t, env, onTerminal, "session", "url", "1", "web").done
+			link = strings.TrimSpace(r.stdout)
+		} else {
+			untilSaid(t, cmd, "session web of run 1: http://")
+			_, rest, _ := strings.Cut(cmd.stdout.String(), "session web of run 1: ")
+			link, _, _ = strings.Cut(rest, "\n")
+		}
+		u, err := url.Parse(link)
+		if err != nil || u.Query().Get("meridian-code") == "" {
+			t.Fatalf("the link is %q", link)
+		}
+		client := sessionHTTP(t)
+		if code, _ := sessionGet(t, client, link); code != http.StatusOK {
+			t.Fatalf("the link answers %d", code)
+		}
+		if code, _ := sessionGet(t, client, u.Scheme+"://"+u.Host+u.Path+"quit"); code != http.StatusOK {
+			t.Errorf("the service, asked to end, answers %d", code)
+		}
+		if r := endedWithin(t, cmd); r.code != exitOK {
+			t.Errorf("meridian run = %+v", r)
+		}
 	}
 }
 

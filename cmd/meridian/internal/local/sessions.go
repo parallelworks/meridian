@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
@@ -450,16 +451,33 @@ func (r redeemer) Redeem(ctx context.Context, session string, mac []byte) bool {
 
 // dialer returns what connects to where p points: over SSH through a
 // cluster's host, or to this machine's loopback address.
+//
+// localhost, as a step names the machine its service runs on, is
+// 127.0.0.1, where a service that listens on one loopback address alone,
+// as most do, listens: never a name that a resolver can turn into [::1]
+// first, where another user of the machine could listen at the same port
+// and take the session's requests, its cookies and passwords with them.
+// On this machine, a service that refuses on 127.0.0.1 is tried on [::1],
+// as one that listens there alone does; nothing else is.
 func (h *SessionHost) dialer(p sessionPoint) sessionproxy.DialFunc {
+	port := strconv.Itoa(p.RemotePort)
 	if p.Cluster == "" {
-		address := net.JoinHostPort("localhost", strconv.Itoa(p.RemotePort))
 		return func(ctx context.Context) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "tcp", address)
+			var d net.Dialer
+			conn, err := d.DialContext(ctx, "tcp4", net.JoinHostPort("127.0.0.1", port))
+			if errors.Is(err, syscall.ECONNREFUSED) {
+				return d.DialContext(ctx, "tcp6", net.JoinHostPort("::1", port))
+			}
+			return conn, err
 		}
 	}
 	clusterHost, _ := h.cfg.ClusterHost(p.Cluster)
+	host := p.RemoteHost
+	if host == "" || strings.EqualFold(host, "localhost") {
+		host = "127.0.0.1"
+	}
 	return func(ctx context.Context) (net.Conn, error) {
-		return h.dialCluster(ctx, clusterHost, p.RemoteHost, p.RemotePort)
+		return h.dialCluster(ctx, clusterHost, host, p.RemotePort)
 	}
 }
 
@@ -617,10 +635,17 @@ func NewSessionLink(ctx context.Context, codes SessionStore, keys *sessionproxy.
 
 // SessionLink returns a link to the session s, served at port, at its host
 // name and its path, which the login name user holds, with what slug says
-// after it, and, unless it is "", the one-time code code.
+// after it, and, unless it is "", the one-time code code. A code the slug
+// holds, which the session's proxy would read rather than the link's, it
+// leaves out.
 func SessionLink(user string, s coordinator.Session, port int, slug, code string) string {
 	path, fragment, _ := strings.Cut(slug, "#")
 	path, query, _ := strings.Cut(path, "?")
+	query = strings.Join(slices.DeleteFunc(strings.Split(query, "&"), func(part string) bool {
+		key, _, _ := strings.Cut(part, "=")
+		key, err := url.QueryUnescape(key)
+		return part == "" || err == nil && key == sessionproxy.CodeParam
+	}), "&")
 	u := url.URL{
 		Scheme: "http", Host: net.JoinHostPort(sessionproxy.HostOf(s.Label), strconv.Itoa(port)),
 		Path:     "/me/session/" + user + "/" + s.Name + "/" + strings.TrimPrefix(path, "/"),
