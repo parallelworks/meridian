@@ -889,7 +889,7 @@ func TestListen(t *testing.T) {
 		}
 	}
 	_, err = Listen(t.Context(), a.Port)
-	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionLocalPortTaken.Code() || p.Params["port"] != strconv.Itoa(a.Port) {
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionLocalPortTaken.Code() || p.Params["port"] != strconv.Itoa(a.Port) || p.Params["picked"] != "false" {
 		t.Errorf("a port in use gave %v", err)
 	}
 	if privileged, err := Listen(t.Context(), 1); err == nil {
@@ -960,8 +960,10 @@ func TestListenIPv6(t *testing.T) {
 
 // TestListenPicksBoth checks how Listen picks a port: one the system picks
 // on 127.0.0.1 that another program holds on [::1] is let go, and another
-// picked, until one is free on both; and where the system has no IPv6
-// loopback, which no program can listen on either, 127.0.0.1 alone does.
+// picked, until one is free on both, or it has tried as often as it may,
+// which is a port in use that the system picked; and where the system has
+// no IPv6 loopback, which no program can listen on either, 127.0.0.1 alone
+// does. A port the system refuses to pick is one it picked too.
 func TestListenPicksBoth(t *testing.T) {
 	defer func(f func(context.Context, string, string) (net.Listener, error)) { listen = f }(listen)
 	real := listen
@@ -986,6 +988,14 @@ func TestListenPicksBoth(t *testing.T) {
 	}
 	_ = l.Close()
 
+	// Every port the system picks another program's on [::1]: one in use,
+	// which the system picked.
+	refuse, v6Tries = syscall.EADDRINUSE, -portTries
+	_, err = Listen(t.Context(), 0)
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionLocalPortTaken.Code() || p.Params["picked"] != "true" {
+		t.Errorf("no port free on both in %d tries gave %v", portTries, err)
+	}
+
 	refuse = syscall.EADDRNOTAVAIL
 	l, err = Listen(t.Context(), 0)
 	if err != nil {
@@ -995,6 +1005,14 @@ func TestListenPicksBoth(t *testing.T) {
 		t.Error("without IPv6 loopback, Listen listens on [::1]")
 	}
 	_ = l.Close()
+
+	listen = func(context.Context, string, string) (net.Listener, error) {
+		return nil, &net.OpError{Op: "listen", Net: "tcp4", Err: syscall.EACCES}
+	}
+	_, err = Listen(t.Context(), 0)
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionLocalPortRefused.Code() || p.Params["picked"] != "true" {
+		t.Errorf("a port the system won't pick gave %v", err)
+	}
 }
 
 // anyAddress is a listener that says it listens on every address, which

@@ -5583,18 +5583,21 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   listens, and never by a resolver, which can give `[::1]` first, where
   another user of the machine could listen at the same port and take the
   session's requests: on this machine, a service that refuses at 127.0.0.1
-  is tried at `[::1]`, as one that listens there alone is, until it has
-  answered at one of them, which it is asked at alone from then, and a
-  cluster's host is asked for 127.0.0.1. `remotePort` is a whole number
-  from 1 to 65535, or text of one (`session_port_invalid`). The session is
-  served at the port it is served at already, or at one the system picks:
-  `localPort`, format 1 ignores, and so does Meridian, though a step whose
-  `localPort` isn't a whole number, or text of one, fails, as in format 1
-  (`session_port_invalid`). What only a platform does is refused, failing
-  the step (`session_update_unsupported`): `targetInfo`'s Kubernetes
-  resource, `openAI` and `apiKey`; and so is a tunnel to the workspace of
-  a session whose `useTLS` is true, which Meridian can't yet reach over
-  TLS that it checks, and doesn't reach over plain HTTP instead
+  is tried at `[::1]`, for that connection alone, as for a service that
+  listens there alone, until the service has answered at 127.0.0.1, which
+  it is asked at alone from then: an answer at `[::1]` is never kept,
+  since another program that listened there first, as while the service
+  started, would hold the session once the service is up. A cluster's host
+  is asked for 127.0.0.1. `remotePort` is a whole number from 1 to 65535,
+  or text of one (`session_port_invalid`). The session is served at the
+  port it is served at already, or at one the system picks: `localPort`,
+  format 1 ignores, and so does Meridian, though a step whose `localPort`
+  isn't a number, which format 1 truncates, or text of a whole one, fails,
+  as in format 1 (`session_port_invalid`). What only a platform does is
+  refused, failing the step (`session_update_unsupported`): `targetInfo`'s
+  Kubernetes resource, `openAI` and `apiKey`; and so is a tunnel to the
+  workspace of a session whose `useTLS` is true, which Meridian can't yet
+  reach over TLS that it checks, and doesn't reach over plain HTTP instead
   (`session_tls_unsupported`). A tunnel to a cluster ignores `useTLS`, as
   format 1 does.
 - **Saying so.** As a process serves a session, its run's output says

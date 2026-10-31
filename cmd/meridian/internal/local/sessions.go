@@ -314,8 +314,8 @@ func newSessionName(key string) string {
 //     remotePort is a whole number from 1 to 65535, or text of one
 //     (session_port_invalid). localPort, format 1 ignores, and so does
 //     Point, which serves a session at a port of the system's choosing,
-//     once it is a whole number, or text of one, as format 1 reads it
-//     (session_port_invalid too).
+//     once it is a number, which format 1 truncates, or text of a whole
+//     one, as format 1 reads it (session_port_invalid too).
 //
 // What a platform alone does, targetInfo's Kubernetes resource, openAI and
 // apiKey, is session_update_unsupported; a tunnel to the workspace whose
@@ -351,7 +351,7 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 	if !ok {
 		return coordinator.SessionPoint{}, problems.SessionPortInvalid.Problem(problems.Params{"key": "remotePort", "value": problems.Show(w["remotePort"])})
 	}
-	if v, ok := w["localPort"]; ok && v != nil && !wholeNumber(v) {
+	if v, ok := w["localPort"]; ok && v != nil && !readsAsPort(v) {
 		return coordinator.SessionPoint{}, problems.SessionPortInvalid.Problem(problems.Params{"key": "localPort", "value": problems.Show(v)})
 	}
 	p := sessionPoint{Type: "tunnel", RemoteHost: expr.Text(w["remoteHost"]), RemotePort: remotePort, Slug: expr.Text(w["slug"])}
@@ -387,13 +387,12 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 	return coordinator.SessionPoint{Point: data, Port: served}, nil
 }
 
-// wholeNumber reports whether v is a whole number, as JSON gives one, or
-// text of one, as format 1 reads localPort, which it ignores then.
-func wholeNumber(v any) bool {
+// readsAsPort reports whether format 1 reads v as a port, as it reads
+// localPort, which it ignores then: any number, which it truncates, or
+// text of a whole one.
+func readsAsPort(v any) bool {
 	switch v := v.(type) {
-	case float64:
-		return v == math.Trunc(v) && !math.IsInf(v, 0)
-	case int64, int:
+	case float64, int64, int:
 		return true
 	case string:
 		_, err := strconv.Atoi(v)
@@ -499,35 +498,30 @@ func (r redeemer) Redeem(ctx context.Context, session string, mac []byte) bool {
 // as most do, listens: never a name that a resolver can turn into [::1]
 // first, where another user of the machine could listen at the same port
 // and take the session's requests, its cookies and passwords with them.
-// On this machine, a service that refuses on 127.0.0.1 is tried on [::1],
-// as one that listens there alone does, until it has answered at one of
-// them, which its connections go to alone from then: so a refusal of a
-// service that answered at 127.0.0.1 before, as a host whose full listen
-// queue refuses connections does, sends nothing to [::1].
+// On this machine, each connection tries 127.0.0.1 first, and [::1], for
+// that connection alone, where 127.0.0.1 refuses, as for a service that
+// listens on [::1] alone; until the service has answered at 127.0.0.1,
+// after which a refusal there, as a host whose full listen queue refuses
+// connections gives, sends nothing to [::1]. An answer at [::1] is never
+// kept: one from another program that listened there first, as while the
+// service started, would hold the session after the service came up.
 func (h *SessionHost) dialer(p sessionPoint) sessionproxy.DialFunc {
 	port := strconv.Itoa(p.RemotePort)
 	if p.Cluster == "" {
 		v4, v6 := net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("::1", port)
-		// family is where the service answered first: 4, 6, or 0 before
-		// it has.
-		var family atomic.Int32
+		// answered is set once the service has answered at 127.0.0.1.
+		var answered atomic.Bool
 		return func(ctx context.Context) (net.Conn, error) {
 			var d net.Dialer
-			if family.Load() == 6 {
-				return d.DialContext(ctx, "tcp6", v6)
-			}
 			conn, err := d.DialContext(ctx, "tcp4", v4)
 			switch {
 			case err == nil:
-				family.CompareAndSwap(0, 4)
+				answered.Store(true)
 				return conn, nil
-			case family.Load() != 0 || !errors.Is(err, syscall.ECONNREFUSED):
+			case answered.Load() || !errors.Is(err, syscall.ECONNREFUSED):
 				return nil, err
 			}
-			if conn, err = d.DialContext(ctx, "tcp6", v6); err == nil {
-				family.CompareAndSwap(0, 6)
-			}
-			return conn, err
+			return d.DialContext(ctx, "tcp6", v6)
 		}
 	}
 	clusterHost, _ := h.cfg.ClusterHost(p.Cluster)

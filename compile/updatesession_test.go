@@ -134,6 +134,18 @@ func TestUpdateSessionFoldsKeys(t *testing.T) {
 	}
 }
 
+// TestUpdateSessionLoginUnknown checks that a provider that can't serve a
+// session for want of a login name fails the step, which no try again
+// would change, rather than having its worker ask again for ever.
+func TestUpdateSessionLoginUnknown(t *testing.T) {
+	t.Parallel()
+	s := &testSessions{updateErr: problems.LoginNameUnknown.Problem(problems.Params{"reason": "no such user"})}
+	diags, err := compile.UpdateSession(t.Context(), s, compile.SessionUpdate{Run: "r1", Root: "r1"}, "/jobs/main/steps/0", map[string]any{"name": "desktop-1", "remotePort": float64(1)})
+	if err != nil || len(diags) != 1 || diags[0].Code != problems.LoginNameUnknown.Code() || !diags.HasErrors() {
+		t.Errorf("UpdateSession without a login name = %v, %v", diags, err)
+	}
+}
+
 // TestSessionKeyNamed checks how format 1 tells a step that names one of
 // its workflow's sessions by its key: a with: whose name, under that key
 // exactly, is ${{ sessions.<key> }} and nothing else, spaces in the braces

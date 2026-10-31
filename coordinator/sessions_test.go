@@ -68,7 +68,7 @@ func (h *testHost) Check(_ context.Context, sessions map[string]any, called bool
 
 func (h *testHost) Point(_ context.Context, s Session, u compile.SessionUpdate, serve bool) (SessionPoint, error) {
 	if u.With["remoteHost"] == "refuse" {
-		return SessionPoint{}, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "1"})
+		return SessionPoint{}, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "1", "picked": "false"})
 	}
 	data, err := json.Marshal(u.With, json.Deterministic(true))
 	if err != nil {
@@ -828,7 +828,7 @@ func TestSessionServed(t *testing.T) {
 	if s := shown(); s.Port != 31000 || s.Problem != nil {
 		t.Errorf("served at another port, the session shows %+v", s)
 	}
-	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "31000"})
+	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "31000", "picked": "false"})
 	if err := c.SessionServed(t.Context(), id, 0, taken); err != nil {
 		t.Fatal(err)
 	}

@@ -903,8 +903,8 @@
     ]
   },
   "session_port_invalid": {
-    "title": "不是 1 到 65535 之间端口的值",
-    "why": "remotePort（服务的端口）按格式 1 的读法，是 1 到 65535 之间的整数或其文本，隧道需要它；格式 1 接受更多形式，如 -1 或 +80，Meridian 会拒绝。localPort 被格式 1 忽略，Meridian 也忽略它，并在系统选择的端口上提供会话；但格式 1 仍会让 localPort 既不是整数也不是整数文本的步骤失败，Meridian 也是如此。",
+    "title": "update-session 无法读取的端口",
+    "why": "remotePort（服务的端口）按格式 1 的读法，是 1 到 65535 之间的整数或其文本，隧道需要它；格式 1 接受更多形式，如 -1 或 +80，Meridian 会拒绝。localPort 被格式 1 忽略，Meridian 也忽略它，并在系统选择的端口上提供会话；但格式 1 仍会让 localPort 既不是数字也不是整数文本的步骤失败，Meridian 也是如此。",
     "fix": [
       "以 1 到 65535 之间的数字给出 remotePort，例如 remotePort: 8888，并去掉 localPort。"
     ]

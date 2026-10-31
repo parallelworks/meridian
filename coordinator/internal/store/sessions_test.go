@@ -245,7 +245,7 @@ func TestSessionsEndWithRoot(t *testing.T) {
 		if err := tx.PointSession("a", nil, []byte("sealed"), 1, 9000); err != nil {
 			return err
 		}
-		if err := tx.SessionServed("a", 0, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "9000"})); err != nil {
+		if err := tx.SessionServed("a", 0, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "9000", "picked": "false"})); err != nil {
 			return err
 		}
 		return tx.AddSessionCode("a", []byte("code"), time.Hour)
@@ -411,7 +411,7 @@ func TestSessionServed(t *testing.T) {
 	t.Parallel()
 	s := open(t)
 	root := createRun(t, s)
-	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "7000"})
+	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "7000", "picked": "false"})
 	inTx(t, s, func(tx *Tx) error {
 		for _, id := range []string{"a", "b"} {
 			if _, err := tx.MakeSession(testSession(id, root, root, id, id+"-1")); err != nil {

@@ -903,8 +903,8 @@
     ]
   },
   "session_port_invalid": {
-    "title": "Puerto que no es uno de 1 a 65535",
-    "why": "remotePort, el puerto del servicio, es un número entero de 1 a 65535, o el texto de uno, como lo lee el formato 1, y un túnel lo necesita; el formato 1 acepta más, como -1 o +80, que Meridian rechaza. localPort, el formato 1 lo ignora, y también Meridian, que sirve una sesión en un puerto que elige el sistema; pero el formato 1 aún hace fallar un paso cuyo localPort no es un número entero, o el texto de uno, y también Meridian.",
+    "title": "Puerto que update-session no puede leer",
+    "why": "remotePort, el puerto del servicio, es un número entero de 1 a 65535, o el texto de uno, como lo lee el formato 1, y un túnel lo necesita; el formato 1 acepta más, como -1 o +80, que Meridian rechaza. localPort, el formato 1 lo ignora, y también Meridian, que sirve una sesión en un puerto que elige el sistema; pero el formato 1 aún hace fallar un paso cuyo localPort no es un número, o el texto de un número entero, y también Meridian.",
     "fix": [
       "Da remotePort como un número de 1 a 65535, como remotePort: 8888, y quita localPort."
     ]

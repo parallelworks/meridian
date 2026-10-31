@@ -776,7 +776,7 @@
     ]
   },
   "session_port_invalid": {
-    "why": "remotePort, the service's port, is a whole number from 1 to 65535, or text of one, as format 1 reads it, and a tunnel needs it; format 1 takes more, as -1 or +80, which Meridian refuses. localPort, format 1 ignores, and so does Meridian, which serves a session at a port the system picks; but format 1 still fails a step whose localPort isn't a whole number, or text of one, and so does Meridian.",
+    "why": "remotePort, the service's port, is a whole number from 1 to 65535, or text of one, as format 1 reads it, and a tunnel needs it; format 1 takes more, as -1 or +80, which Meridian refuses. localPort, format 1 ignores, and so does Meridian, which serves a session at a port the system picks; but format 1 still fails a step whose localPort isn't a number, or text of a whole number, and so does Meridian.",
     "fix": [
       "Give remotePort as a number from 1 to 65535, as remotePort: 8888, and leave localPort out."
     ]

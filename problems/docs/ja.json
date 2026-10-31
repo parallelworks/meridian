@@ -903,8 +903,8 @@
     ]
   },
   "session_port_invalid": {
-    "title": "1 から 65535 までのポートではない値",
-    "why": "サービスのポートである remotePort は、形式 1 が読むとおり 1 から 65535 までの整数かその文字列で、トンネルに必要です。形式 1 は -1 や +80 などそれ以上を受け付けますが、Meridian は拒否します。localPort は形式 1 も Meridian も無視し、Meridian はシステムが選ぶポートでセッションを提供します。ただし形式 1 は localPort が整数でもその文字列でもないステップを失敗させるので、Meridian も同じです。",
+    "title": "update-session が読めないポート",
+    "why": "サービスのポートである remotePort は、形式 1 が読むとおり 1 から 65535 までの整数かその文字列で、トンネルに必要です。形式 1 は -1 や +80 などそれ以上を受け付けますが、Meridian は拒否します。localPort は形式 1 も Meridian も無視し、Meridian はシステムが選ぶポートでセッションを提供します。ただし形式 1 は localPort が数でも整数の文字列でもないステップを失敗させるので、Meridian も同じです。",
     "fix": [
       "remotePort: 8888 のように remotePort を 1 から 65535 までの数で与え、localPort は外してください。"
     ]

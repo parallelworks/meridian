@@ -3,7 +3,6 @@ package sessionproxy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"strconv"
 	"syscall"
@@ -66,13 +65,16 @@ var listen = func(ctx context.Context, network, address string) (net.Listener, e
 // [::1] too; and never on any other address: a session is this machine's
 // user's, whom another machine reaches only through ssh -L.
 //
-// A port in use, on either address, is problems.SessionLocalPortTaken, and
-// one the system won't let the process listen on, as a privileged port,
-// problems.SessionLocalPortRefused, each of which a session's step
-// reports; Meridian doesn't take another, since the workflow can tell the
-// user to open that one. [::1] is left out only where the system has no
-// IPv6 loopback, as it says by refusing it as an address it doesn't have,
-// or a family it doesn't support: then no program can listen on it.
+// A port in use, on either address, is problems.SessionLocalPortTaken, as
+// one a session was served at before, which another program took, and one
+// the system won't let the process listen on, as a privileged port,
+// problems.SessionLocalPortRefused; for 0, each says the system picked it,
+// and so does SessionLocalPortTaken where every port the system picked, in
+// portTries tries, was another program's on [::1]. Its caller, which
+// serves a session, takes another, or says why it can't. [::1] is left out
+// only where the system has no IPv6 loopback, as it says by refusing it
+// as an address it doesn't have, or a family it doesn't support: then no
+// program can listen on it.
 func Listen(ctx context.Context, port int) (*Listener, error) {
 	for try := 1; ; try++ {
 		v4, err := listen(ctx, "tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -92,19 +94,21 @@ func Listen(ctx context.Context, port int) (*Listener, error) {
 			return nil, portProblem(got.Port, err)
 		}
 		if try == portTries {
-			return nil, fmt.Errorf("sessionproxy: no port free on both 127.0.0.1 and [::1] in %d tries: %w", portTries, err)
+			return nil, portProblem(0, err)
 		}
 	}
 }
 
 // portProblem returns err, an error listening on port, as the problem it
-// is: one in use, or one the system won't let the process listen on.
+// is: one in use, or one the system won't let the process listen on; for
+// 0, one the system picked.
 func portProblem(port int, err error) error {
+	params := problems.Params{"port": strconv.Itoa(port), "picked": strconv.FormatBool(port == 0)}
 	switch {
 	case errors.Is(err, syscall.EADDRINUSE):
-		return problems.SessionLocalPortTaken.Problem(problems.Params{"port": strconv.Itoa(port)})
+		return problems.SessionLocalPortTaken.Problem(params)
 	case errors.Is(err, syscall.EACCES):
-		return problems.SessionLocalPortRefused.Problem(problems.Params{"port": strconv.Itoa(port)})
+		return problems.SessionLocalPortRefused.Problem(params)
 	}
 	return err
 }

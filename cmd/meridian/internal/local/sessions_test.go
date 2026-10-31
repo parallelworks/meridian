@@ -230,6 +230,7 @@ func TestSessionPoint(t *testing.T) {
 		{map[string]any{"remotePort": "8888", "target": "localhost", "localPort": "9000"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
 		{map[string]any{"remotePort": "8888", "localPort": float64(0)}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
 		{map[string]any{"remotePort": "8888", "localPort": "-5"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
+		{map[string]any{"remotePort": "8888", "localPort": float64(8080.5)}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
 		{map[string]any{"remotePort": "8888", "localPort": nil}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
 		{map[string]any{"remotePort": float64(80), "target": "hpc", "remoteHost": "node-1", "slug": "lab?x=1"}, `{"type":"tunnel","cluster":"hpc","remoteHost":"node-1","remotePort":80,"slug":"lab?x=1"}`, 4321},
 		{map[string]any{"remotePort": float64(80), "target": "hpc"}, `{"type":"tunnel","cluster":"hpc","remoteHost":"localhost","remotePort":80}`, 4321},
@@ -252,10 +253,10 @@ func TestSessionPoint(t *testing.T) {
 		{map[string]any{"remotePort": float64(65536)}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": float64(1.5)}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": "+80"}, nil, problems.SessionPortInvalid},
-		// localPort, which format 1 ignores, it still reads as a whole
-		// number.
+		// localPort, which format 1 ignores, it still reads as a number,
+		// or text of a whole one.
 		{map[string]any{"remotePort": float64(1), "localPort": "nonsense"}, nil, problems.SessionPortInvalid},
-		{map[string]any{"remotePort": float64(1), "localPort": float64(1.5)}, nil, problems.SessionPortInvalid},
+		{map[string]any{"remotePort": float64(1), "localPort": "1.5"}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": float64(1), "localPort": true}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": "-1"}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": float64(1), "target": "nowhere"}, nil, problems.SessionTargetUnknown},
@@ -529,7 +530,7 @@ func TestSessionHostLink(t *testing.T) {
 		t.Errorf("a link to a session served at no port yet = %v", err)
 	}
 	s.Port = 8000
-	s.Problem = problems.SessionLocalPortRefused.Problem(problems.Params{"port": "8000"})
+	s.Problem = problems.SessionLocalPortRefused.Problem(problems.Params{"port": "8000", "picked": "false"})
 	if _, err := h.Link(t.Context(), s); !isKind(err, problems.SessionLocalPortRefused) {
 		t.Errorf("a link to a session its process can't serve = %v", err)
 	}
@@ -664,7 +665,7 @@ func TestSessionDialer(t *testing.T) {
 func TestSessionHostCantServe(t *testing.T) {
 	t.Parallel()
 	h, store, _ := newTestSessionHost(t)
-	refused := problems.SessionLocalPortRefused.Problem(problems.Params{"port": "0"})
+	refused := problems.SessionLocalPortRefused.Problem(problems.Params{"port": "0", "picked": "true"})
 	h.mu.Lock()
 	h.listen = func(context.Context, int) (*sessionproxy.Listener, error) { return nil, refused }
 	h.mu.Unlock()
@@ -715,48 +716,53 @@ func TestSessionHostCantServe(t *testing.T) {
 	}
 }
 
-// TestSessionDialerPinned checks that a session's service, once it has
-// answered at one loopback address, is asked at that one alone: one that
-// answered at 127.0.0.1, and then refuses there, as a full listen queue
-// can, is never asked at [::1], where another program can listen; and one
-// that answered at [::1] alone is asked there, whatever listens at
-// 127.0.0.1 since.
-func TestSessionDialerPinned(t *testing.T) {
-	t.Parallel()
-	h, _, _ := newTestSessionHost(t)
-	service := listenOn(t, "tcp4", "127.0.0.1", 0)
-	port := service.Addr().(*net.TCPAddr).Port
-	serveText(t, service, "the service")
-	serveText(t, listenOn(t, "tcp6", "::1", port), "another program")
-	dial := h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})
+// answerOf returns the body of what dial's connection answers a GET with.
+func answerOf(t *testing.T, dial sessionproxy.DialFunc) string {
+	t.Helper()
 	conn, err := dial(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn.Close()
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, _ := strings.Cut(string(resp), "\r\n\r\n")
+	return body
+}
+
+// TestSessionDialerPinned checks that a session's service is asked at
+// 127.0.0.1 first, each time, and at [::1] only for a connection that
+// 127.0.0.1 refuses, until it has answered at 127.0.0.1, and never at
+// [::1] from then: so another program that listened at [::1] first, as
+// while the service started, has the session only until the service is
+// up, and none of it once the service, having answered, refuses, as a
+// full listen queue can.
+func TestSessionDialerPinned(t *testing.T) {
+	t.Parallel()
+	h, _, _ := newTestSessionHost(t)
+	free := listenOn(t, "tcp4", "127.0.0.1", 0)
+	port := free.Addr().(*net.TCPAddr).Port
+	_ = free.Close()
+	serveText(t, listenOn(t, "tcp6", "::1", port), "another program")
+	dial := h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})
+	for range 2 {
+		if got := answerOf(t, dial); got != "another program" {
+			t.Fatalf("before the service is up, a session reached %q", got)
+		}
+	}
+	service := listenOn(t, "tcp4", "127.0.0.1", port)
+	serveText(t, service, "the service")
+	if got := answerOf(t, dial); got != "the service" {
+		t.Errorf("once the service is up, a session reached %q", got)
+	}
 	_ = service.Close()
 	if conn, err := dial(t.Context()); err == nil {
 		conn.Close()
 		t.Error("a service that answered at 127.0.0.1, and then refused, was asked at [::1]")
-	}
-
-	free := listenOn(t, "tcp4", "127.0.0.1", 0)
-	alone := free.Addr().(*net.TCPAddr).Port
-	_ = free.Close()
-	serveText(t, listenOn(t, "tcp6", "::1", alone), "a service on [::1]")
-	dial = h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: alone})
-	conn, err = dial(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn.Close()
-	serveText(t, listenOn(t, "tcp4", "127.0.0.1", alone), "another program")
-	conn, err = dial(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if a, _ := conn.RemoteAddr().(*net.TCPAddr); a == nil || a.IP.To4() != nil {
-		t.Errorf("a service that answered at [::1] alone was asked at %v", conn.RemoteAddr())
 	}
 }

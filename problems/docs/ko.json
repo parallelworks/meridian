@@ -903,8 +903,8 @@
     ]
   },
   "session_port_invalid": {
-    "title": "1부터 65535까지의 포트가 아닌 값",
-    "why": "서비스의 포트인 remotePort는 형식 1이 읽는 대로 1부터 65535까지의 정수이거나 그 문자열이며, 터널에 필요합니다. 형식 1은 -1이나 +80처럼 그 이상을 받지만 Meridian은 거부합니다. localPort는 형식 1도 Meridian도 무시하며, Meridian은 시스템이 고르는 포트에서 세션을 제공합니다. 다만 형식 1은 localPort가 정수도 그 문자열도 아닌 단계를 실패시키므로, Meridian도 그렇게 합니다.",
+    "title": "update-session이 읽을 수 없는 포트",
+    "why": "서비스의 포트인 remotePort는 형식 1이 읽는 대로 1부터 65535까지의 정수이거나 그 문자열이며, 터널에 필요합니다. 형식 1은 -1이나 +80처럼 그 이상을 받지만 Meridian은 거부합니다. localPort는 형식 1도 Meridian도 무시하며, Meridian은 시스템이 고르는 포트에서 세션을 제공합니다. 다만 형식 1은 localPort가 수도 정수의 문자열도 아닌 단계를 실패시키므로, Meridian도 그렇게 합니다.",
     "fix": [
       "remotePort: 8888처럼 remotePort를 1부터 65535까지의 수로 주고, localPort는 빼세요."
     ]
