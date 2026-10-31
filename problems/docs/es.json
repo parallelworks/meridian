@@ -874,6 +874,48 @@
       "Apunta una sesión que creó el propio árbol de la ejecución, como la da ${{ sessions.<clave> }}, o da al flujo de trabajo de arriba del árbol permissions: ['*'], si ha de actuar como tú."
     ]
   },
+  "session_field_unsupported": {
+    "title": "Sesión que meridian run no puede servir",
+    "why": "meridian run sirve una sesión en esta máquina, mientras dura su ejecución, en un puerto propio. detach: true pide una sesión que sobrevive a su ejecución, lo que necesita un coordinador que sobreviva al comando, como será meridian serve. openAI: true pide a una plataforma registrar la sesión como el punto de acceso de un modelo, y useCustomDomain: true servirla en un dominio propio: ninguna de las dos está aquí.",
+    "fix": [
+      "Quita el campo, o ponlo a false, para ejecutar el flujo de trabajo con meridian run."
+    ]
+  },
+  "session_name_needed": {
+    "title": "Sesión que pide un nombre",
+    "why": "El formulario del formato 1 pide a quien ejecuta un flujo de trabajo el nombre de una sesión cuyo prompt-for-name no da valor por defecto. meridian run no pregunta a nadie: nombra la sesión por su valor por defecto, que debe ser un nombre que la ruta de una URL contenga tal cual, como lo contiene la ruta de la sesión, y no puede ser una expresión, que solo se evalúa después de nombrar la sesión.",
+    "fix": [
+      "Da a prompt-for-name un valor por defecto literal, como {default: mi-sesion}."
+    ]
+  },
+  "session_update_unsupported": {
+    "title": "update-session que meridian run no puede hacer",
+    "why": "targetInfo apunta una sesión a un recurso de Kubernetes, al que llega una plataforma con sus propias credenciales, y openAI y apiKey la registran como el punto de acceso de un modelo: meridian run no tiene ninguna de las dos cosas. Un túnel a esta máquina cuya sesión tiene useTLS: true necesita HTTPS hasta el servicio, comprobando su certificado, lo que meridian run aún no puede hacer, y no recurre a HTTP. Un túnel a un clúster ignora useTLS, como el formato 1.",
+    "fix": [
+      "Quita el campo del with: de update-session, o, para useTLS, sirve la aplicación por HTTP en la dirección de bucle local de esta máquina."
+    ]
+  },
+  "session_url_invalid": {
+    "title": "Enlace que no es una URL http o https",
+    "why": "update-session con type: link apunta la sesión a una URL, que meridian muestra para que la abra quien ejecuta el flujo de trabajo, y para la que no sirve nada. Debe ser una URL http o https absoluta.",
+    "fix": [
+      "Da a url la dirección de la página, como https://example.com/."
+    ]
+  },
+  "session_port_invalid": {
+    "title": "Puerto que no es uno de 1 a 65535",
+    "why": "remotePort, el puerto del servicio, y localPort, el puerto de las direcciones de bucle local de esta máquina en el que servir la sesión, son cada uno un número entero de 1 a 65535, o el texto de uno, como los lee el formato 1. Un túnel necesita remotePort. El formato 1 acepta más, como -1 o +80, que Meridian rechaza.",
+    "fix": [
+      "Da el puerto como un número de 1 a 65535, como remotePort: 8888."
+    ]
+  },
+  "session_target_unknown": {
+    "title": "Destino de una sesión que no nombra ningún clúster",
+    "why": "El target de un túnel es desde dónde se llega a su servicio: el workspace, esta máquina, para ninguno, \"\", localhost o user-workspace; o un clúster, por su id, que, para un clúster de clusters.yaml, es su nombre, como lo da ${{ inputs.<clúster>.id }}. Meridian llega al servicio por SSH a través del host del clúster.",
+    "fix": [
+      "Apunta target a ${{ inputs.<clúster>.id }} de una entrada compute-clusters, o añade el clúster a clusters.yaml."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",
@@ -2479,6 +2521,20 @@
     "why": "Cada sesión se sirve en un nombre de host propio, <etiqueta>.localhost, cuya etiqueta son 128 bits aleatorios, que un navegador resuelve a la dirección de bucle local de esta máquina. Un navegador envía una cookie solo a su host, sea cual sea el puerto, así que ninguna petición a otro nombre, como 127.0.0.1, localhost o el de otra sesión, lleva la cookie de la sesión, y el almacenamiento de sus páginas es solo de la sesión; y el puerto de la sesión escucha en las dos direcciones de bucle local de esta máquina, 127.0.0.1 y [::1], donde tiene IPv6, así que ningún otro programa puede responder en el nombre y el puerto de la sesión. Meridian solo responde a peticiones dirigidas a ese nombre: rechaza una a 127.0.0.1, a localhost, o a un nombre que se hizo resolver a 127.0.0.1 (DNS rebinding). Chrome y Firefox resuelven por sí mismos cualquier nombre bajo localhost a esta máquina, y también curl y el resolvedor de systemd; un navegador que no lo hace no puede abrir la sesión, y Meridian no la sirve en 127.0.0.1 en su lugar.",
     "fix": [
       "Abre la sesión en la dirección que muestra meridian session url, en un navegador que resuelva los nombres bajo localhost, como Chrome y Firefox, o a través de ssh -L hacia ella."
+    ]
+  },
+  "session_key_unknown": {
+    "title": "Ejecución sin esa sesión",
+    "why": "meridian session encuentra la sesión de una ejecución por su clave en las sessions: del flujo de trabajo, entre las del árbol de la ejecución que no han terminado: una sesión termina con la ejecución de arriba de su árbol.",
+    "fix": [
+      "Ejecuta meridian status para ver la ejecución, y da la clave de una de sus sesiones."
+    ]
+  },
+  "session_not_ready": {
+    "title": "Sesión que aún no apunta a ninguna parte",
+    "why": "Una sesión se sirve una vez que un paso que usa parallelworks/update-session la apunta a un servicio, y solo entonces tiene un enlace.",
+    "fix": [
+      "Espera al paso, que muestra meridian run, y vuelve a pedirlo."
     ]
   },
   "source_server_unknown": {

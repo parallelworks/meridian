@@ -751,6 +751,42 @@
       "Point a session the run's own tree made, as ${{ sessions.<key> }} gives it, or give the workflow at the top of the tree permissions: ['*'], if it is to act as you."
     ]
   },
+  "session_field_unsupported": {
+    "why": "meridian run serves a session on this machine, for as long as its run, at a port of its own. detach: true asks for a session that outlives its run, which needs a coordinator that outlives the command, as meridian serve will be. openAI: true asks a platform to register the session as a model's endpoint, and useCustomDomain: true to serve it at a domain of its own: neither is here.",
+    "fix": [
+      "Leave the field out, or set it to false, to run the workflow with meridian run."
+    ]
+  },
+  "session_name_needed": {
+    "why": "Format 1's form asks the person who runs a workflow for the name of a session whose prompt-for-name gives no default. meridian run asks no one: it names the session by its default, which must be a name a URL's path holds as it is, as the session's path holds it, and can't be an expression, which is evaluated only after the session is named.",
+    "fix": [
+      "Give prompt-for-name a literal default, as {default: my-session}."
+    ]
+  },
+  "session_update_unsupported": {
+    "why": "targetInfo points a session at a Kubernetes resource, which a platform reaches with its own credentials, and openAI and apiKey register it as a model's endpoint: meridian run has neither. A tunnel to this machine whose session has useTLS: true needs HTTPS to the service, with its certificate checked, which meridian run can't do yet, and it doesn't fall back to HTTP. A tunnel to a cluster ignores useTLS, as format 1 does.",
+    "fix": [
+      "Leave the field out of update-session's with:, or, for useTLS, serve the app over HTTP on this machine's loopback address."
+    ]
+  },
+  "session_url_invalid": {
+    "why": "update-session with type: link points the session at a URL, which meridian prints for the person who runs the workflow to open, and serves nothing for. It must be an absolute http or https URL.",
+    "fix": [
+      "Give url the page's address, as https://example.com/."
+    ]
+  },
+  "session_port_invalid": {
+    "why": "remotePort, the service's port, and localPort, the port of this machine's loopback addresses to serve the session at, are each a whole number from 1 to 65535, or text of one, as format 1 reads them. A tunnel needs remotePort. Format 1 takes more, as -1 or +80, which Meridian refuses.",
+    "fix": [
+      "Give the port as a number from 1 to 65535, as remotePort: 8888."
+    ]
+  },
+  "session_target_unknown": {
+    "why": "A tunnel's target is where its service is reached from: the workspace, this machine, for none, \"\", localhost or user-workspace; or a cluster, by its id, which, for a cluster of clusters.yaml, is its name, as ${{ inputs.<cluster>.id }} gives it. Meridian reaches the service over SSH through the cluster's host.",
+    "fix": [
+      "Point target at ${{ inputs.<cluster>.id }} of a compute-clusters input, or add the cluster to clusters.yaml."
+    ]
+  },
   "runs_on_invalid": {
     "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
     "fix": [
@@ -2134,6 +2170,18 @@
     "why": "Each session is served at a host name of its own, <label>.localhost, whose label is 128 random bits, which a browser resolves to this machine's loopback address. A browser sends a cookie to its host alone, whatever the port, so no request to another name, as 127.0.0.1, localhost or another session's, carries the session's cookie, and its pages' storage is the session's alone; and the session's port listens on both of this machine's loopback addresses, 127.0.0.1 and [::1], where it has IPv6, so no other program can answer at the session's name and port. Meridian answers only requests addressed to that name: one to 127.0.0.1, localhost, or a name made to resolve to 127.0.0.1 (DNS rebinding), it refuses. Chrome and Firefox resolve any name under localhost to this machine themselves, and so do curl and systemd's resolver; a browser that doesn't can't open the session, and Meridian doesn't serve it at 127.0.0.1 instead.",
     "fix": [
       "Open the session at the address meridian session url prints, in a browser that resolves names under localhost, as Chrome and Firefox do, or through ssh -L to it."
+    ]
+  },
+  "session_key_unknown": {
+    "why": "meridian session finds a run's session by its key in the workflow's sessions:, among those of the run's tree that haven't ended: a session ends with the run at the top of its tree.",
+    "fix": [
+      "Run meridian status to see the run, and give the key of one of its sessions."
+    ]
+  },
+  "session_not_ready": {
+    "why": "A session is served once a step that uses parallelworks/update-session points it at a service, and only then has a link.",
+    "fix": [
+      "Wait for the step, which meridian run shows, and ask again."
     ]
   },
   "source_server_unknown": {

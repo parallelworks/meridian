@@ -75,13 +75,18 @@ func runCancel(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int
 	}
 	interrupts, stopSignals := c.notify()
 	defer stopSignals()
-	coord, err := coordinate(ctx, c, dirs, cfg, db)
+	coord, sessions, err := coordinate(ctx, c, dirs, cfg, db)
 	if err != nil {
 		return c.fail(err)
 	}
-	// The coordinator is closed once it has stopped serving.
+	// The coordinator is closed once it has stopped serving, and its
+	// sessions' host before it.
 	defer func() { _ = coord.Close() }()
+	defer sessions.Close()
 	progress := local.NewProgress(c.stdout, c.stderr, c.json)
+	// Coordinating the run, it serves the store's sessions too, as
+	// meridian resume does, and says so.
+	sessions.AnnounceTo(progress, c.stdoutTerminal())
 	err = coord.Cancel(ctx, id)
 	if err != nil && !errors.Is(err, coordinator.ErrRunEnded) {
 		return c.fail(runNotFound(id, err))

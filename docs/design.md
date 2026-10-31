@@ -1918,7 +1918,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Groups | Execution groups | The user's config |
 | Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later; a workflow a platform stores, where `sources.yaml` maps it to one in Git |
 | Trees | The trees of the commits checkouts were pinned to, which the coordinator serves to their steps' workers | The copies of the repositories that Sources pinned them from, in Meridian's cache directory |
-| Sessions | Interactive sessions a workflow serves, which it makes and updates | None |
+| Sessions | Interactive sessions a workflow serves, which it makes and updates | This machine: each session at a host name of its own on its loopback addresses, which `meridian run`, `resume` and `cancel` serve as they coordinate ([Serving a session](#serving-a-session)) |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
 
 A name the local Inputs gives as it was given means what it means on a
@@ -2504,7 +2504,7 @@ runs as any other; none of the known calls has an `ssh:` of its own.
   works. The root's record is kept until every run in its tree has ended:
   the root's finisher waits for them, and the end of each wakes it.
 - **Its sessions.** A child's `sessions:` makes its own sessions, as its
-  run's. Its `parallelworks/update-session` asks the provider as any
+  run's, which every try of its call shares (below). Its `parallelworks/update-session` asks the provider as any
   run's does, which is told the child's tree's root and the root's
   `permissions:`, never the child's own, so that it authorizes the step
   as format 1 does a tree's, whose sessions it makes with the root's run,
@@ -2832,7 +2832,7 @@ jobs the coordinator's own.
 | --- | --- | --- | --- |
 | `parallelworks/checkout` | A Git repository | The coordinator, which pins it through Sources as the run is created, and sends its tree, read through Trees, to the worker, which writes it | Works, with Git on the coordinator's host, as Sources needs |
 | `parallelworks/cancel-jobs` | Jobs of the step's run | The coordinator, asked by the worker | Works |
-| `parallelworks/update-session` | A session the run may update, as the provider decides | The coordinator, through Sessions | The step fails (`resolver_missing`), as there is no local Sessions |
+| `parallelworks/update-session` | A session the run may update, as the provider decides | The coordinator, through Sessions | Works: the session is served on this machine ([Serving a session](#serving-a-session)); what only a platform reaches, as `targetInfo`'s Kubernetes resource, fails the step (`session_update_unsupported`) |
 | `parallelworks/scheduler-agent`, `parallelworks/wait-for-agent` | A platform's agent on a cluster's compute node, which the first starts through the cluster's scheduler with the platform's command-line tool and credentials, and the second waits for | A platform | The step fails (`action_needs_platform`) |
 
 None of them is a no-op where nothing provides it: a step that succeeded
@@ -3048,11 +3048,12 @@ checkout.
   run may not update, fails the step, as a command that fails does, so
   its `retry:` tries it again; a provider that can't answer is asked
   again, as the worker repeats its request. Where nothing provides
-  Sessions, as with `meridian run`, the step fails when it runs
-  (`resolver_missing`, with the interface Sessions), as a feature whose
-  interface is missing fails, but when the step runs, not as the run is
-  created; a run with `sessions:` can't start there anyway, and all 15
-  known update-session steps are in workflows that have them.
+  Sessions, the step fails when it runs (`resolver_missing`, with the
+  interface Sessions), as a feature whose interface is missing fails, but
+  when the step runs, not as the run is created; a run with `sessions:`
+  can't start there anyway, and all 15 known update-session steps are in
+  workflows that have them. `meridian run` provides them
+  ([Serving a session](#serving-a-session)).
 - **scheduler-agent and wait-for-agent** need a platform's agent, its
   command-line tool and its credentials, which Meridian has none of, so the
   step fails (`action_needs_platform`). A platform that embeds Meridian can
@@ -5133,6 +5134,7 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian logs <run> [job]` | Shows or follows logs. |
 | `meridian cancel <run>` | Cancels a run. |
 | `meridian resume <run>` | Picks up a run whose coordinator stopped. |
+| `meridian session url\|reset <run> <key>` | Prints a link to a run's session, or signs everyone out of it. |
 | `meridian rerun <run>` | Runs a run again, or only its failed jobs. |
 | `meridian serve` | Runs a coordinator that keeps running. |
 | `meridian worker`, `meridian host`, `meridian relay` | Started by backends, not by people. |
@@ -5524,9 +5526,71 @@ A run's session is served on this machine, on a port of its own of its
 loopback addresses, at a host name of its own, `<label>.localhost`, whose
 label is 128 random bits, kept with the session, at the path format 1's
 platform serves it at, `/me/session/<user>/<name>/`
-(`internal/sessionproxy`).
-Nothing provides Sessions to `meridian run` yet; this is what will serve
-them.
+(`internal/sessionproxy`). `meridian run`, `resume` and `cancel`, as they
+coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
+`local.SessionHost`).
+
+- **Which process serves it.** Each session is served by one process at a
+  time, which holds a lease on it, a lock beside the store's database. The
+  process whose step points a session takes it; one that, as it looks at
+  the store, every second, finds a session that points somewhere and that
+  no process that lives serves, as after the one that served it ended,
+  takes it over. As a process takes a session, before it serves it, it
+  gives it a new salt: while no process served it, another program could
+  have listened at its port and taken the cookie that a page of it, as it
+  reconnected, sent there, which the new secret makes worthless. So a
+  `meridian resume` after a crash, or any takeover, signs the session's
+  browsers out, and the links printed before it work no more. A session
+  another process that lives serves keeps its salt and its codes, and a
+  step of another process that points it has that process serve it there
+  as it next looks.
+- **Its name.** A session is named by its `prompt-for-name`'s default,
+  which format 1's form fills in, and which `meridian run` asks no one
+  for: a literal one, which a path holds as it is, or else the run can't
+  be created (`session_name_needed`); or, without `prompt-for-name`, by
+  its key, made fit for a path, a hyphen and 40 random bits. A workflow a
+  step calls has its sessions named as format 1 names them
+  ([Workflows a step calls](#workflows-a-step-calls)). A session that
+  needs what only a platform has, as `detach: true`, which outlives its
+  run, `openAI: true` or `useCustomDomain: true`, can't be created
+  (`session_field_unsupported`); `meridian validate` says so too.
+- **Where a step points it**, as format 1 reads `update-session`'s
+  `with:`. A link, `type: link`, is its `url`, an absolute http or https
+  URL (`session_url_invalid`), which the run's output says, and nothing
+  serves. A tunnel is a service at `remotePort`, and `remoteHost`, as its
+  `target` reaches it: none, `""`, `localhost` or `user-workspace` is the
+  workspace, this machine, at `localhost` whatever `remoteHost` says, as
+  format 1 has it; a cluster of `clusters.yaml`, by its id, is reached
+  over SSH through the cluster's host, as its jobs' workers are, where
+  its host connects to `remoteHost`, `localhost` by default
+  (`session_target_unknown` for another). A port is a whole number from 1
+  to 65535, or text of one (`session_port_invalid`). The session is
+  served at `localPort`, where the step gives one, or at the port it is
+  served at already, or at one the system picks. What only a platform
+  does is refused, failing the step (`session_update_unsupported`):
+  `targetInfo`'s Kubernetes resource, `openAI` and `apiKey`; and so is a
+  tunnel to the workspace of a session whose `useTLS` is true, which
+  Meridian can't yet reach over TLS that it checks, and doesn't reach over
+  plain HTTP instead. A tunnel to a cluster ignores `useTLS`, as format 1
+  does.
+- **Saying so.** As a process serves a session, its run's output says
+  so: on a person's terminal, with a link that holds a one-time code;
+  elsewhere, since a log keeps no link that works, with the command that
+  makes one, `meridian session url <run> <key>`; and, as JSON, as a
+  `session.ready` line, with the `run`, the `key` and, on a terminal, the
+  `url`. A link session's `url` is said as it is. `meridian session url`
+  prints a new link, whose code works once, within ten minutes, from the
+  run whose `sessions:` has the session, any run of its call among them;
+  `meridian session reset` gives the session a new salt, which signs out
+  every browser that opened it. A session that points nowhere has no link
+  yet (`session_not_ready`).
+- **A port it can't serve at.** A process that takes a session over, at
+  the port it was served at, which another program holds now, serves it
+  at one the system picks, unless the step gave it; then it keeps the
+  session where it was, if it served it, says why in the store
+  (`session_local_port_taken`), which `meridian session url` reports, and
+  tries again each time it looks. The port a process picks, the store
+  keeps too, so that every process shows it.
 
 - **The host name.** A browser sends a cookie to its host alone, whatever
   the port, and keeps a host's storage, and service workers, apart from
@@ -5655,6 +5719,19 @@ Where format 1's platform serves a session otherwise:
 - **Where requests may come from, and how many.** Meridian's checks of a
   request's host name, `Origin` and fetch metadata, and its bound on a
   session's connections, above, are its own.
+- **`localPort`.** The platform serves a tunnel that its agent on a
+  cluster carries at a port of its own, whatever `localPort` says;
+  Meridian serves every tunnel at its `localPort` where the step gives
+  one, so that what a workflow tells its user to forward, as with
+  `ssh -L`, is where the session is.
+- **Its URL.** The platform serves a session at its own host, which 3
+  known workflows build a link to from `PW_PLATFORM_HOST`, which Meridian
+  doesn't set: what they print leads nowhere, and the link the run's
+  output says, or `meridian session url` prints, is the session's.
+- **Signing out.** A browser that opened a session on the platform stays
+  signed in to it for as long as its platform login lasts; here, a
+  session taken over by another process, as a `meridian resume` after a
+  crash takes it, signs it out, which a new link signs in again.
 
 ## Editors and web UIs
 

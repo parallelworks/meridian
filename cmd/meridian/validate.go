@@ -22,6 +22,7 @@ import (
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
+	"github.com/parallelworks/meridian/internal/login"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -63,7 +64,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	diags := w.diags
 	if *start && w.created != nil {
 		_, started, err := compile.Start(ctx, w.created.Plan, compile.StartInput{
-			Variables: w.cfg, Record: w.created.Record, Inputs: w.cfg,
+			Variables: w.cfg, Record: w.created.Record, Inputs: w.cfg, Sessions: local.SessionNames{},
 		})
 		if err != nil {
 			return c.fail(err)
@@ -116,8 +117,10 @@ type compiled struct {
 
 // compileWorkflow creates a run of the workflow at path, or standard input
 // for -, without storing it, as validate and run do: with the user's
-// variables and groups, the workflows its steps' uses: name, and the input
-// values inputs gives. A workflow too large to read has no run, only its
+// variables and groups, the workflows its steps' uses: name, the input
+// values inputs gives, and its sessions checked and named as this
+// machine serves them, at the login name of the user who runs meridian
+// (local.SessionNames). A workflow too large to read has no run, only its
 // diagnostic; one with errors may have none.
 func compileWorkflow(ctx context.Context, c *cli, inputs *inputOptions, path string) (*compiled, error) {
 	sets, err := parseInputSets(inputs.set)
@@ -153,9 +156,10 @@ func compileWorkflow(ctx context.Context, c *cli, inputs *inputOptions, path str
 	if c.sources != nil {
 		sources = c.sources
 	}
+	user, _ := login.Name()
 	w.created, w.diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
 		Source: plan.Source{Location: workflowLocation(path)},
-		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: sources,
+		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: sources, Sessions: local.SessionNames{User: user},
 	})
 	if err != nil {
 		return nil, err

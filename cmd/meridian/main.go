@@ -177,6 +177,7 @@ func init() {
 		{name: "logs", args: "<run> [job]", summary: "Shows or follows logs.", run: runLogs},
 		{name: "cancel", args: "<run>", summary: "Cancels a run.", about: cancelAbout, run: runCancel},
 		{name: "resume", args: "<run>", summary: "Picks up a run whose coordinator stopped.", about: resumeAbout, run: runResume},
+		{name: "session", args: "url|reset <run> <key>", summary: "Prints a link to a run's session, or signs everyone out of it.", about: sessionAbout, run: runSession},
 		{name: "rerun", args: "<run>", summary: "Runs a run again, or only its failed jobs."},
 		{name: "serve", summary: "Runs a coordinator that keeps running."},
 		{name: "worker", summary: "Runs one attempt of a job. Started by backends, not by people.", run: runWorker},

@@ -874,6 +874,48 @@
       "${{ sessions.<key> }} が与えるとおり、実行自身のツリーが作ったセッションを向けるか、ツリーの最上位のワークフローがあなたとして振る舞うべきなら permissions: ['*'] を与えてください。"
     ]
   },
+  "session_field_unsupported": {
+    "title": "meridian run が提供できないセッション",
+    "why": "meridian run は、実行が続く間、このマシンのセッション専用のポートでセッションを提供します。detach: true は実行より長く続くセッションを求めますが、それにはコマンドより長く動くコーディネーター (今後の meridian serve) が必要です。openAI: true はプラットフォームにセッションをモデルのエンドポイントとして登録するよう求め、useCustomDomain: true は専用のドメインで提供するよう求めます。どちらもここにはありません。",
+    "fix": [
+      "meridian run でワークフローを実行するには、そのフィールドを外すか false にしてください。"
+    ]
+  },
+  "session_name_needed": {
+    "title": "名前を求めるセッション",
+    "why": "形式 1 のフォームは、prompt-for-name に既定値がないセッションの名前を、ワークフローを実行する人に尋ねます。meridian run は誰にも尋ねず、既定値でセッションに名前を付けます。既定値は、セッションのパスが含むように URL のパスにそのまま入れられる名前でなければならず、セッションに名前を付けた後でしか評価されない式は使えません。",
+    "fix": [
+      "prompt-for-name に {default: my-session} のような固定の既定値を与えてください。"
+    ]
+  },
+  "session_update_unsupported": {
+    "title": "meridian run にできない update-session",
+    "why": "targetInfo はセッションを Kubernetes のリソースに向けますが、プラットフォームはそこへ自身の認証情報で到達します。openAI と apiKey はセッションをモデルのエンドポイントとして登録します。meridian run にはどちらもありません。セッションの useTLS が true であるこのマシンへのトンネルには、証明書を確かめたうえでのサービスへの HTTPS が必要ですが、meridian run はまだそれができず、HTTP に切り替えることもしません。クラスターへのトンネルは、形式 1 と同じく useTLS を無視します。",
+    "fix": [
+      "update-session の with: からそのフィールドを外すか、useTLS の場合はこのマシンのループバックアドレスで HTTP でアプリを提供してください。"
+    ]
+  },
+  "session_url_invalid": {
+    "title": "http や https の URL ではないリンク",
+    "why": "type: link の update-session はセッションを URL に向けます。meridian はその URL をワークフローを実行する人が開けるよう表示し、何も提供しません。URL は http か https の絶対 URL でなければなりません。",
+    "fix": [
+      "url に https://example.com/ のようなページのアドレスを与えてください。"
+    ]
+  },
+  "session_port_invalid": {
+    "title": "1 から 65535 までのポートではない値",
+    "why": "サービスのポートである remotePort と、セッションを提供するこのマシンのループバックアドレスのポートである localPort は、形式 1 が読むとおり、それぞれ 1 から 65535 までの整数かその文字列です。トンネルには remotePort が必要です。形式 1 は -1 や +80 などそれ以上を受け付けますが、Meridian は拒否します。",
+    "fix": [
+      "remotePort: 8888 のように、ポートを 1 から 65535 までの数で与えてください。"
+    ]
+  },
+  "session_target_unknown": {
+    "title": "どのクラスターも指さないセッションのターゲット",
+    "why": "トンネルの target は、サービスにどこから到達するかです。なし、\"\"、localhost、user-workspace はこのマシンである workspace を、それ以外は id でクラスターを指します。clusters.yaml のクラスターの id はその名前で、${{ inputs.<cluster>.id }} が与えます。Meridian はクラスターのホストを経由して SSH でサービスに到達します。",
+    "fix": [
+      "target を compute-clusters 入力の ${{ inputs.<cluster>.id }} に向けるか、クラスターを clusters.yaml に追加してください。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on が実行場所ではない",
     "why": "ジョブの runs-on: はジョブを実行する場所を選びますが、その中の式が、どの場所も示さない値になりました。runs-on に指定できるのは、execution-groups 入力が返すような実行グループの名前、execution-group: を持つマッピング、environment: とそのクラスターと名前を持つマッピング、または compute-target 入力が返すようなコンピュートターゲットです。",
@@ -2479,6 +2521,20 @@
     "why": "各セッションは、ラベルが 128 ビットの乱数である専用のホスト名 <label>.localhost で提供され、ブラウザーはそれをこのマシンのループバックアドレスに解決します。ブラウザーはポートにかかわらず Cookie をそのホストにだけ送るため、127.0.0.1 や localhost、他のセッションの名前など別の名前へのリクエストには、このセッションの Cookie は付かず、そのページのストレージはこのセッションだけのものです。また、セッションのポートは、IPv6 がある場合はこのマシンの 2 つのループバックアドレス 127.0.0.1 と [::1] の両方で待ち受けるため、ほかのプログラムがセッションの名前とポートで応答することはできません。Meridian はその名前宛てのリクエストにだけ応答し、127.0.0.1 や localhost 宛て、または 127.0.0.1 に解決されるよう仕組まれた名前宛て (DNS リバインディング) のリクエストは拒否します。Chrome と Firefox は localhost 配下のどの名前も自らこのマシンに解決し、curl と systemd のリゾルバーも同様です。そうしないブラウザーではセッションを開けず、Meridian が代わりに 127.0.0.1 で提供することもありません。",
     "fix": [
       "meridian session url が表示するアドレスで、Chrome や Firefox のように localhost 配下の名前を解決するブラウザーで、またはそこへの ssh -L を通して、セッションを開いてください。"
+    ]
+  },
+  "session_key_unknown": {
+    "title": "そのセッションのない実行",
+    "why": "meridian session は、実行のツリーの終わっていないセッションの中から、ワークフローの sessions: でのキーで実行のセッションを探します。セッションはツリーの最上位の実行とともに終わります。",
+    "fix": [
+      "meridian status で実行を確かめ、そのセッションのいずれかのキーを与えてください。"
+    ]
+  },
+  "session_not_ready": {
+    "title": "まだどこも指していないセッション",
+    "why": "セッションは、parallelworks/update-session を使うステップがそれをサービスに向けて初めて提供され、そのとき初めてリンクを持ちます。",
+    "fix": [
+      "meridian run が表示するそのステップを待ってから、もう一度求めてください。"
     ]
   },
   "source_server_unknown": {

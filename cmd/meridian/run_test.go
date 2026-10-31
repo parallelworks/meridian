@@ -36,7 +36,8 @@ const helloWorkflow = "jobs:\n  main:\n    steps:\n      - run: echo hello\n"
 // TestMain runs the test binary as meridian worker when the local backend
 // starts it so, as it starts the binary that placed a job, for a job of a
 // run that a test's meridian run coordinates; and as meridian, with its
-// arguments, when a test starts it so (envMain). Run with
+// arguments, when a test starts it so (envMain); and as a session's
+// service, as a test's step starts it (envSessionService). Run with
 // testtiming.EnvScale, it shortens the timing of the coordinators it opens
 // (testtiming.Scale), as only a test does.
 func TestMain(m *testing.M) {
@@ -47,6 +48,9 @@ func TestMain(m *testing.M) {
 			os.Exit(exitError)
 		}
 		testtiming.Scale = s
+	}
+	if file := os.Getenv(envSessionService); file != "" {
+		os.Exit(sessionService(file))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "worker" && os.Getenv(hostStubEnv) != "" {
 		os.Exit(hostStub())

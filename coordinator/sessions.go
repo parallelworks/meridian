@@ -585,6 +585,53 @@ func (c *Coordinator) RunSessions(ctx context.Context, root string) ([]Session, 
 	return out, nil
 }
 
+// CallSessions returns the sessions, that haven't ended, of the run run's
+// sessions:: those that its call in its tree made, which every try,
+// attempt and matrix instance of the call shares, so that any of their
+// runs finds them, in the order they were made; or, for a run no step
+// called, its own. What a private one is, and where it points, is there
+// only where the coordinator holds the keys to open it. A run the store
+// hasn't is ErrRunNotFound.
+func (c *Coordinator) CallSessions(ctx context.Context, run string) ([]Session, error) {
+	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) {
+		r, err := tx.Run(run)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrRunNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		root := r.ID
+		if r.Parent != nil {
+			root = r.Parent.Root
+		}
+		path, err := callPathOf(tx, r)
+		if err != nil {
+			return nil, err
+		}
+		callPath, err := encodeCallPath(path)
+		if err != nil {
+			return nil, err
+		}
+		all, err := tx.Sessions(root)
+		return slices.DeleteFunc(all, func(s store.Session) bool { return s.CallPath != callPath || !s.EndedAt.IsZero() }), err
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Session, len(read.stored))
+	for i, s := range read.stored {
+		if c.sealer == nil && s.Sealed != nil {
+			out[i] = sessionOf(s)
+			continue
+		}
+		if out[i], err = read.open(ctx, i); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // AddSessionCode keeps a one-time code of the session id, by its keyed
 // hash, mac, for lifetime, by the store's clock, which a link to it holds.
 func (c *Coordinator) AddSessionCode(ctx context.Context, id string, mac []byte, lifetime time.Duration) error {

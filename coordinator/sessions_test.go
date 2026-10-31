@@ -998,6 +998,26 @@ func TestSessionsOfCalls(t *testing.T) {
 	if !slices.Equal(made, all) {
 		t.Errorf("the tree's sessions are %q, want %q", made, all)
 	}
+	// Any run of a call finds the sessions it shares.
+	for which, call := range map[string]string{"retried": "first", "attempted": "first", "other": "fan", "other leaf": "leaf 2"} {
+		shared, err := c.CallSessions(t.Context(), children[which])
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := map[string]string{}
+		for _, s := range shared {
+			found[s.Key] = s.Name
+		}
+		if !maps.Equal(found, want[call]) {
+			t.Errorf("the %s child's call's sessions are %v, want %v", which, found, want[call])
+		}
+	}
+	if own, err := c.CallSessions(t.Context(), root); err != nil || len(own) != 0 {
+		t.Errorf("the root's own sessions are %+v, %v", own, err)
+	}
+	if _, err := c.CallSessions(t.Context(), "999"); !errors.Is(err, ErrRunNotFound) {
+		t.Errorf("CallSessions of a run the store hasn't = %v", err)
+	}
 }
 
 // TestSessionsPointedTogether checks steps of two processes that point one

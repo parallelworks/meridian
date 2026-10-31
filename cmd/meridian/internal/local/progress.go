@@ -93,6 +93,10 @@ type progressLine struct {
 	Ended       bool                 `json:"ended,omitzero"`
 	Cut         bool                 `json:"cut,omitzero"`
 	Diagnostics problems.Diagnostics `json:"diagnostics,omitempty"`
+	// Key and URL are a session's, as session.ready gives them: its key in
+	// its run's sessions:, and a link to it, where the line gives one.
+	Key string `json:"key,omitempty"`
+	URL string `json:"url,omitempty"`
 }
 
 // A progressCaller is the try of a step that called a run, in a JSON line
@@ -121,7 +125,26 @@ const (
 	kindRunResumed = "run.resumed"
 	kindRunLeft    = "run.left"
 	kindLog        = "log"
+	kindSession    = "session.ready"
 )
+
+// Session writes that the session key of the run run is served: at link,
+// a link to it, with a one-time code, on a person's terminal, or a link
+// session's own; or, where link is "", that meridian session url makes
+// one. Another goroutine than the one that shows the run may call it, as
+// a session's host does, where each write to out is whole, under a lock
+// that every writer shares, as meridian's are.
+func (p *Progress) Session(run, key, link string) error {
+	if p.json {
+		return p.writeJSON(progressLine{Kind: kindSession, Run: run, Key: key, URL: link})
+	}
+	if link == "" {
+		_, err := fmt.Fprintf(p.out, "session %s of run %s is ready: meridian session url %s %s\n", key, run, run, key)
+		return err
+	}
+	_, err := fmt.Fprintf(p.out, "session %s of run %s: %s\n", key, run, problems.EscapeControl(link))
+	return err
+}
 
 // Created writes that the run id is stored, with its directory dir.
 func (p *Progress) Created(id, dir string) error {

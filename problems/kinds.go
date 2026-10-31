@@ -257,12 +257,23 @@ var (
 	SessionUserUnsupported = define(Error, "session_user_unsupported", "Login name a session's path can't hold", "user")
 	// name is a session's name, as a run's sessions: named it, or as
 	// update-session's with: gives it.
-	SessionNameTaken        = define(Error, "session_name_taken", "Session name another session has", "name")
-	SessionNameEmpty        = define(Error, "session_name_empty", "update-session without a session's name")
-	SessionUnknown          = define(Error, "session_unknown", "No such session", "name")
-	SessionNotPermitted     = define(Error, "session_not_permitted", "Session the run may not point", "name")
-	SessionLocalPortTaken   = define(Error, "session_local_port_taken", "Session's port in use", "port")
-	SessionLocalPortRefused = define(Error, "session_local_port_refused", "Session's port this machine won't listen on", "port")
+	SessionNameTaken    = define(Error, "session_name_taken", "Session name another session has", "name")
+	SessionNameEmpty    = define(Error, "session_name_empty", "update-session without a session's name")
+	SessionUnknown      = define(Error, "session_unknown", "No such session", "name")
+	SessionNotPermitted = define(Error, "session_not_permitted", "Session the run may not point", "name")
+	// key is a session's key in a workflow's sessions:, and field one of
+	// its keys, or of update-session's with:; target is update-session's
+	// target, clusters the clusters of the clusters file, as QuoteAll
+	// writes them, and value a value of update-session's with:, as Show
+	// writes it.
+	SessionFieldUnsupported  = define(Error, "session_field_unsupported", "Session meridian run can't serve", "key", "field")
+	SessionNameNeeded        = define(Error, "session_name_needed", "Session that asks for a name", "key")
+	SessionUpdateUnsupported = define(Error, "session_update_unsupported", "update-session meridian run can't do", "name", "field")
+	SessionURLInvalid        = define(Error, "session_url_invalid", "Link that isn't an http or https URL", "value")
+	SessionPortInvalid       = define(Error, "session_port_invalid", "Port that isn't one from 1 to 65535", "key", "value")
+	SessionTargetUnknown     = define(Error, "session_target_unknown", "Session's target that names no cluster", "target", "clusters")
+	SessionLocalPortTaken    = define(Error, "session_local_port_taken", "Session's port in use", "port")
+	SessionLocalPortRefused  = define(Error, "session_local_port_refused", "Session's port this machine won't listen on", "port")
 )
 
 // Creating and starting a run: what the caller gives the compiler, and
@@ -860,6 +871,11 @@ var (
 	SessionCrossOrigin  = defineCommand("session_cross_origin", "Request to a session from another page")
 	SessionNotHere      = defineCommand("session_not_here", "No session at this path", "path")
 	SessionHostRefused  = defineCommand("session_host_refused", "Session asked for at another host name", "host")
+	// What meridian session finds of a run's session: run is the run's
+	// ID, key the session's key, and keys the keys of the run's sessions
+	// that haven't ended, as QuoteAll writes them.
+	SessionKeyUnknown = defineCommand("session_key_unknown", "Run without such a session", "run", "key", "keys")
+	SessionNotReady   = defineCommand("session_not_ready", "Session that points nowhere yet", "run", "key")
 )
 
 // The worker API's own problems, in WorkerRegistry, with which a coordinator
