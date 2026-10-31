@@ -299,8 +299,40 @@ func TestResolveInput(t *testing.T) {
 	if p := kindtest.Want(t, err, problems.ExecutionGroupUnknown); p.Params["value"] != "3" {
 		t.Errorf("ResolveInput of a number: %v", p.Params)
 	}
-	if _, err := c.ResolveInput(t.Context(), "slurm-partitions", nil, "debug"); !errors.Is(err, compile.ErrInputType) {
+	if _, err := c.ResolveInput(t.Context(), "region", nil, "us-east-1"); !errors.Is(err, compile.ErrInputType) {
 		t.Errorf("ResolveInput of a type it doesn't provide: %v", err)
+	}
+}
+
+// TestResolveInputPassesNamesThrough checks that each input type whose
+// value is a name, a scheduler's, a Kubernetes cluster's or an
+// organization group's, gives its value as it was given, as format 1
+// does: a name, "", or a mapping, as a run passes the value it has to a
+// workflow it calls; and refuses any other value as input_not_text, as
+// format 1 does.
+func TestResolveInputPassesNamesThrough(t *testing.T) {
+	c := load(t, nil, nil)
+	mapping := map[string]any{"name": "debug"}
+	for _, typ := range []string{
+		"slurm-partitions", "slurm-accounts", "slurm-qos", "pbs-queues",
+		"kubernetes-clusters", "kubernetes-namespaces", "kubernetes-pvc",
+		"organization-groups",
+	} {
+		for _, v := range []any{"debug", "", "gpu,debug", mapping} {
+			if got, err := c.ResolveInput(t.Context(), typ, nil, v); err != nil || !reflect.DeepEqual(got, v) {
+				t.Errorf("ResolveInput(%s, %v) = %v, %v, want it as it is", typ, v, got, err)
+			}
+		}
+		for v, shown := range map[any]string{int64(3): "3", true: "true"} {
+			_, err := c.ResolveInput(t.Context(), typ, nil, v)
+			if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != shown {
+				t.Errorf("ResolveInput(%s, %v): %v", typ, v, p.Params)
+			}
+		}
+		_, err := c.ResolveInput(t.Context(), typ, nil, []any{"debug"})
+		if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != `["debug"]` {
+			t.Errorf("ResolveInput(%s) of a list: %v", typ, p.Params)
+		}
 	}
 }
 

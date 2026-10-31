@@ -967,7 +967,13 @@ ACTIVATE's launch form and its backend do together:
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
-  input of such a type that has a value is an error.
+  input of such a type that has a value is an error. Format 1 gives a run
+  the details of a cluster and of a bucket for its name; every other type's
+  value is the name as it was given, text or a mapping, which nothing checks
+  as the run is created: a platform's form lists the names to choose from,
+  as a cluster's partitions, and the scheduler, or the command the workflow
+  gives the name to, checks it as the run uses it. The meridian command's
+  resolver gives these names so ([Interfaces](#interfaces)).
 - **What waits for Start.** A default that reads something not known when
   the run is created, such as `env` or a secret variable, isn't evaluated
   until then: its input isn't among the plan's values, and Start, which
@@ -1862,7 +1868,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts and queues come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
@@ -1870,6 +1876,13 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Trees | The trees of the commits checkouts were pinned to, which the coordinator serves to their steps' workers | The copies of the repositories that Sources pinned them from, in Meridian's cache directory |
 | Sessions | Interactive sessions a workflow serves, which it makes and updates | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
+
+A name the local Inputs gives as it was given means what it means on a
+platform: a Kubernetes cluster's is the name the platform knows it by. A
+step that gives one to the platform's own CLI, as `pw kube auth` does in
+every known workflow with such an input, needs that CLI installed and
+signed in to the platform as it runs, standalone as on the platform:
+Meridian gives the step the name, and doesn't stand in for that CLI.
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
 are interfaces in `compile`, the coordinator's, Keys, Trees and Logs, in
