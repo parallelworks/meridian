@@ -26,11 +26,14 @@ import (
 // cleanup: the step's index and the try; the ssh: the try evaluated, or
 // nil for one that is null or names no host; of the job's state only what
 // format 1 passes between steps, never a variable of the environment or a
-// path; and the strings the worker masks, which the step run's masks too.
+// path, and of the earlier steps' outputs only those the step run reads,
+// as the coordinator keeps them (plan.ReadyJob.StepRunReads), so that
+// what it doesn't read never makes the request too large; and the strings
+// the worker masks, which the step run's masks too.
 func (a *attempt) stepRunRequest(rs *plan.ReadyStep, try int, cleanup bool, state plan.JobState, first *plan.ReadyStep) *workerapi.StepRunRequest {
 	st := workerapi.StepRunState{Cancelled: state.Cancelled}
 	st.JobRetry, st.JobAttempt = a.jobCounters()
-	for _, r := range state.Steps {
+	for _, r := range a.job.StepRunReads(rs.Index, cleanup, state.Steps) {
 		st.Steps = append(st.Steps, workerapi.StepRunResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs})
 	}
 	if first != nil {

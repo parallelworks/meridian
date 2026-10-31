@@ -131,20 +131,19 @@ func (c *Coordinator) stepRunPath(ctx context.Context, id string) (string, error
 
 // stepRunState returns the state a step run of the attempt a's job j is
 // given, of what req asks: of the outputs of the job's steps, only those
-// its step, or its cleanup:, and the job's env: read (plan.Job.ReadsSteps),
-// as the plan says, never the worker, since an output can hold what was
-// made from a secret, which the state doesn't mark; and the job's retry
-// counter and attempt as the caller's claim gives them, whatever req says.
+// its step, or its cleanup:, and the job's env: read
+// (plan.Job.StepRunReads), as the plan says, never the worker, since an
+// output can hold what was made from a secret, which the state doesn't
+// mark; and the job's retry counter and attempt as the caller's claim
+// gives them, whatever req says.
 func (c *Coordinator) stepRunState(ctx context.Context, a *store.Attempt, j *plan.Job, req *workerapi.StepRunRequest) (workerapi.StepRunState, error) {
 	st := req.State
 	results := make([]plan.StepResult, len(st.Steps))
 	for i, r := range st.Steps {
 		results[i] = plan.StepResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
 	}
-	trimmed := *j
-	trimmed.Steps, trimmed.Outputs = stepRunSteps(j.Steps, req.Step, req.Cleanup), nil
 	st.Steps = make([]workerapi.StepRunResult, len(results))
-	for i, r := range trimmed.ReadsSteps(results) {
+	for i, r := range j.StepRunReads(req.Step, req.Cleanup, results) {
 		st.Steps[i] = workerapi.StepRunResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
 	}
 	st.JobAttempt = a.Number
@@ -154,37 +153,6 @@ func (c *Coordinator) stepRunState(ctx context.Context, a *store.Attempt, j *pla
 		return err
 	})
 	return st, err
-}
-
-// stepRunSteps returns the steps of a step run's job, of steps, its
-// caller's job's: the step at index whole, without its cleanup:, the steps
-// before it by their id and path alone, and none after it; or, for a
-// cleanup's, every step so, but the step at index, with what the Cleanup
-// phase evaluates of it, its cleanup: among them, and none of what only
-// its tries run, as its run:, its uses: and with:, its timeout: and its
-// early-cancel:, but whether it has a retry:, which gives the cleanup its
-// retry counters, as format 1 does.
-func stepRunSteps(steps []plan.Step, index int, cleanup bool) []plan.Step {
-	n := index + 1
-	if cleanup {
-		n = len(steps)
-	}
-	out := make([]plan.Step, n)
-	for i := range out {
-		out[i] = plan.Step{ID: steps[i].ID, Path: steps[i].Path}
-	}
-	s := steps[index]
-	if cleanup {
-		s.Run, s.Uses, s.Source, s.Checkout, s.With = plan.Value{}, "", nil, nil, plan.Value{}
-		s.Timeout, s.EarlyCancel = plan.Value{}, ""
-		if s.Retry != nil {
-			s.Retry = &plan.StepRetry{}
-		}
-	} else {
-		s.Cleanup = plan.Value{}
-	}
-	out[index] = s
-	return out
 }
 
 // stepRunStateData returns state, as the worker API gives it, as the
@@ -229,6 +197,6 @@ func stepRunClaim(run *store.Run, rec *plan.Record, rj *plan.ReadyJob) (*workera
 		return nil, nil, fmt.Errorf("coordinator: step run %s's job has no step %d", run.ID, l.Step)
 	}
 	j := *rj
-	j.Steps, j.Outputs = stepRunSteps(rj.Steps, l.Step, l.Cleanup), nil
+	j.Steps, j.Outputs = plan.StepRunSteps(rj.Steps, l.Step, l.Cleanup), nil
 	return &workerapi.StepRunClaim{Step: l.Step, Try: l.Try, Cleanup: l.Cleanup, State: state}, &j, nil
 }

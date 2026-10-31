@@ -51,8 +51,9 @@ func stepRunEnds(f *workerapitest.Fake, ends map[string]workerapi.StepRun) func(
 
 // TestStepRunCaller checks a job's steps whose ssh: names another host
 // than the job's: each try asks the coordinator for a step run, with the
-// try's ssh:, the job's state and what the worker masks, never a variable
-// of its environment or a path, and ends as it ended. What a step run's
+// try's ssh:, the job's state, of the outputs only those the step reads,
+// and what the worker masks, never a variable of its environment or a
+// path, and ends as it ended. What a step run's
 // step wrote to $OUTPUTS, once it succeeded, is appended to the file the
 // step would have written, read as any step's: the job's, for a step
 // without an id, of which the step's outputs are what it changed, or the
@@ -62,14 +63,16 @@ func stepRunEnds(f *workerapitest.Fake, ends map[string]workerapi.StepRun) func(
 // ssh: the next try gives, as a step that fails over to another host does.
 func TestStepRunCaller(t *testing.T) {
 	t.Parallel()
-	own := remote("echo own")
-	own.ID = "own"
+	own := remote("")
+	own.Run, own.ID = mustValue(t, "echo own ${{ needs.build.outputs.y }}"), "own"
 	ignored := remote("exit 2")
 	ignored.IgnoreErrors = plan.Literal(true)
 	failover := command("echo failover")
 	failover.SSH = mustValue(t, map[string]any{"remoteHost": "${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY == '0' && 'farm' || 'backup' }}"})
 	failover.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: plan.Literal("0s")}
-	job := newJob(command("echo 'x=here' >> $OUTPUTS"), remote("echo remote"), own, ignored, failover)
+	reads := remote("")
+	reads.Run = mustValue(t, "echo remote ${{ needs.build.outputs.x }}")
+	job := newJob(command("echo 'x=here' >> $OUTPUTS"), reads, own, ignored, failover)
 	job.Masked = []string{"masked-by-the-job"}
 	job.Outputs = map[string]plan.Value{"y": cond("needs.build.outputs.y"), "z": cond("steps.own.outputs.z"), "s": cond("needs.build.outputs.s")}
 	f := workerapitest.NewFake(t, job)
@@ -540,6 +543,53 @@ func TestStepRunAnswered(t *testing.T) {
 	}
 	if err := stepRunAnswered(workerapi.PathStepRun, &workerapi.StepRun{Run: "r", Ended: true, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "a\nb"}}); err != nil {
 		t.Errorf("a success with outputs: %v", err)
+	}
+}
+
+// TestStepRunCallerLargeOutputs checks that a step run's ask carries, of
+// what the job's earlier steps wrote, only what its step reads: earlier
+// steps that wrote far more, together, than the coordinator takes in an
+// ask (workerapi.MaxStepRunRequest), but that the step doesn't read,
+// leave the ask small, and the step reads what it does.
+func TestStepRunCallerLargeOutputs(t *testing.T) {
+	t.Parallel()
+	const steps = 5
+	var job []plan.Step
+	for i := range steps {
+		// About 1 MiB each, in lines short enough to read.
+		s := command(`line=$(head -c 60000 /dev/zero | tr '\0' a)
+for i in $(seq 16); do echo "big$i=$line"; done >> $OUTPUTS
+echo small=ok >> $OUTPUTS`)
+		s.ID = "s" + strconv.Itoa(i)
+		job = append(job, s)
+	}
+	reads := remote("")
+	reads.Run = mustValue(t, "echo ${{ steps.s0.outputs.small }}")
+	f := workerapitest.NewFake(t, newJob(append(job, reads)...))
+	f.StepRun = stepRunEnds(f, map[string]workerapi.StepRun{stepRunKey(steps, 0, false): {Outcome: plan.OutcomeSuccess}})
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEnd(t, f, plan.OutcomeSuccess, "")
+	asks := f.StepRunAsks()
+	if len(asks) != 1 {
+		t.Fatalf("the worker asked for %d step runs", len(asks))
+	}
+	st := asks[0].State
+	if len(st.Steps) != steps || !maps.Equal(st.Steps[0].Outputs, map[string]string{"small": "ok"}) {
+		t.Errorf("the ask's state has of the steps before it %d, the first with %d outputs", len(st.Steps), len(st.Steps[0].Outputs))
+	}
+	for i, r := range st.Steps[1:] {
+		if len(r.Outputs) != 0 || r.Outcome != plan.OutcomeSuccess {
+			t.Errorf("the ask's state has of step %d %d outputs, %s", i+1, len(r.Outputs), r.Outcome)
+		}
+	}
+	encoded, err := workerapi.Marshal(asks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > workerapi.MaxStepRunRequest/64 {
+		t.Errorf("the ask is %d bytes", len(encoded))
 	}
 }
 

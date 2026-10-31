@@ -317,7 +317,7 @@ func (c *Coordinator) startStepRun(ctx context.Context, run *store.Run, done fun
 // its caller's run, with that run's values and the results of the jobs it
 // needs; but where the step's ssh: put the try (stepRunJob), and with of
 // its steps only what the step run's attempt is given of them
-// (stepRunSteps), so that what its supervisor places is what its claim
+// (plan.StepRunSteps), so that what its supervisor places is what its claim
 // gives.
 func (c *Coordinator) readyStepRun(ctx context.Context, run *store.Run, early bool) (*readied, error) {
 	caller, err := c.callerOf(ctx, run)
@@ -339,7 +339,7 @@ func (c *Coordinator) readyStepRun(ctx context.Context, run *store.Run, early bo
 	if run.Parent.Step >= len(j.Steps) {
 		return nil, fmt.Errorf("coordinator: step run %s's job has no step %d", run.ID, run.Parent.Step)
 	}
-	j.Steps, j.Outputs = stepRunSteps(j.Steps, run.Parent.Step, run.Parent.Cleanup), nil
+	j.Steps, j.Outputs = plan.StepRunSteps(j.Steps, run.Parent.Step, run.Parent.Cleanup), nil
 	r.result.Job = j
 	return r, nil
 }
