@@ -846,6 +846,34 @@
       "localPort에 1024부터 65535까지의 포트를 주거나, localPort를 빼서 Meridian이 고르게 하세요."
     ]
   },
+  "session_name_taken": {
+    "title": "다른 세션이 가진 세션 이름",
+    "why": "세션의 이름은 그 경로 /me/session/<user>/<name>/이며 update-session이 세션을 가리키는 이름이므로, 끝나지 않은 두 세션이 같은 이름을 가질 수 없습니다. 이 이름은 워크플로가 prompt-for-name의 기본값 등으로 고른 것이며, 끝나지 않은 다른 세션도 같은 이름을 가지고 있습니다. 워크플로 sessions:의 다른 세션이거나, 아직 실행 중인 다른 실행의 세션입니다.",
+    "fix": [
+      "워크플로의 각 세션에 서로 다른 이름을 주거나, meridian cancel로 다른 실행을 끝내세요."
+    ]
+  },
+  "session_name_empty": {
+    "title": "세션 이름 없는 update-session",
+    "why": "parallelworks/update-session을 쓰는 단계는 with:의 name이 가리키는 세션을 향하게 합니다. ${{ sessions.<key> }}는 실행 자신의 세션 이름을 줍니다. name이 비었거나 없었거나, 값이 없는 입력이나 출력을 읽었습니다.",
+    "fix": [
+      "name에 ${{ sessions.<key> }}처럼 워크플로 sessions:의 키로 세션 이름을 주세요."
+    ]
+  },
+  "session_unknown": {
+    "title": "그런 세션이 없음",
+    "why": "parallelworks/update-session을 쓰는 단계는 실행의 트리가 sessions:로 만든 세션을 향하게 하며, 세션은 트리의 루트가 끝나면 끝납니다. 그런 세션이 없습니다. 이름이 어느 세션의 것도 아니거나, 그것을 만든 실행이 끝났습니다.",
+    "fix": [
+      "${{ sessions.<key> }}가 주는 대로 실행 자신의 세션을 가리키세요."
+    ]
+  },
+  "session_not_permitted": {
+    "title": "실행이 향하게 할 수 없는 세션",
+    "why": "형식 1의 플랫폼이 정하듯, 실행은 자기 트리가 만든 세션을 향하게 할 수 있으며, 그것이 호출하는 워크플로도 그렇습니다. 워크플로의 permissions:에 '*'가 있는 실행은 그것을 실행하는 사람으로 행동하며, 그 사람의 어떤 세션도 향하게 할 수 있습니다. 이 세션은 다른 실행의 것이며, 이 실행의 트리는 '*'를 요구하지 않습니다.",
+    "fix": [
+      "${{ sessions.<key> }}가 주는 대로 실행 자신의 트리가 만든 세션을 향하게 하거나, 트리 맨 위의 워크플로가 당신으로 행동해야 한다면 permissions: ['*']를 주세요."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on이 실행 위치가 아님",
     "why": "작업의 runs-on:은 작업을 실행할 위치를 고르는데, 그 안의 표현식이 어떤 위치도 가리키지 않는 값을 만들었습니다. runs-on에는 execution-groups 입력이 주는 것 같은 실행 그룹의 이름, execution-group:이 있는 매핑, environment:와 그 클러스터 및 이름이 있는 매핑, 또는 compute-target 입력이 주는 것 같은 컴퓨팅 대상을 지정할 수 있습니다.",

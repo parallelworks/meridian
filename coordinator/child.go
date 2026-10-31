@@ -236,6 +236,10 @@ func (c *Coordinator) compileChild(ctx context.Context, p, rootPlan *plan.Plan, 
 	if err != nil {
 		return nil, nil, err
 	}
+	sessions, err := c.childSessions(ctx, link, rootPlan)
+	if err != nil {
+		return nil, nil, err
+	}
 	remote := make(map[string]any, len(source.Remote))
 	for k, v := range source.Remote {
 		remote[k] = v
@@ -243,7 +247,7 @@ func (c *Coordinator) compileChild(ctx context.Context, p, rootPlan *plan.Plan, 
 	with, _ := req.With.Get().(map[string]any)
 	return compile.Create(ctx, source.Location, text, with, compile.Options{
 		Source: *source, Contexts: map[string]any{"remote": remote}, Variables: vars,
-		Inputs: c.opts.Inputs, Groups: c.opts.Groups, Sessions: c.opts.Sessions, Limits: p.Run.Limits,
+		Inputs: c.opts.Inputs, Groups: c.opts.Groups, Sessions: sessions, Limits: p.Run.Limits,
 		Parent: &compile.Parent{
 			Run: link.Run, Job: link.Job, Step: link.Step, Try: link.Try, Root: link.Root, Depth: link.Depth,
 			Env: req.Env, Private: privateNames(req.WithPrivate, req.EnvPrivate), Secrets: privateNames(req.WithSecrets, req.EnvSecrets),

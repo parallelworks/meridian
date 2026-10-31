@@ -727,6 +727,30 @@
       "Give localPort a port from 1024 to 65535, or leave it out, so that Meridian picks one."
     ]
   },
+  "session_name_taken": {
+    "why": "A session's name is its path, /me/session/<user>/<name>/, and what update-session names it by, so no two sessions that haven't ended have one name. The name is one the workflow chose, as prompt-for-name's default, which another session that hasn't ended has too: another of the workflow's sessions:, or one of another run, still running.",
+    "fix": [
+      "Name each of the workflow's sessions otherwise, or end the other run, with meridian cancel."
+    ]
+  },
+  "session_name_empty": {
+    "why": "A step that uses parallelworks/update-session points the session its with:'s name names, as ${{ sessions.<key> }} gives one of the run's own. Its name was empty, or missing, as where it reads an input or an output that has no value.",
+    "fix": [
+      "Give name a session's name, as ${{ sessions.<key> }}, with the key of one of the workflow's sessions:."
+    ]
+  },
+  "session_unknown": {
+    "why": "A step that uses parallelworks/update-session points a session its run's tree made, as its sessions: made it, which ends as the tree's root ends. No such session is there: the name isn't one, or the run that made it has ended.",
+    "fix": [
+      "Name a session of the run's own, as ${{ sessions.<key> }} gives it."
+    ]
+  },
+  "session_not_permitted": {
+    "why": "As format 1's platform decides, a run may point a session its own tree made, which a workflow it calls may too; one whose workflow's permissions: hold '*' acts as the person who runs it, and may point any session of theirs. This session is another run's, and this run's tree asks for no '*'.",
+    "fix": [
+      "Point a session the run's own tree made, as ${{ sessions.<key> }} gives it, or give the workflow at the top of the tree permissions: ['*'], if it is to act as you."
+    ]
+  },
   "runs_on_invalid": {
     "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
     "fix": [

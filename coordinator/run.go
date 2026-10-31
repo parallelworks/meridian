@@ -77,6 +77,11 @@ type Options struct {
 	Variables compile.Variables
 	Inputs    compile.InputResolver
 	Sessions  compile.Sessions
+	// SessionHost serves the store's sessions where the coordinator runs.
+	// With one, and no Sessions, a coordinator that may write the store
+	// provides Sessions itself, keeping the sessions in the store, which
+	// ServeSessions has the host serve. Nil means none.
+	SessionHost SessionHost
 	// Env are the variables a platform gives every job's steps, by name,
 	// as format 1's PW_USER, which each claim gives the worker
 	// (workerapi.Claim.Env), in every run the coordinator works, whoever
@@ -192,6 +197,20 @@ type Coordinator struct {
 	store  *store.Store
 	sealer *seal.Sealer
 	plans  *planCache
+	// sessionsWake tells ServeSessions that the store's sessions may have
+	// changed in this process.
+	sessionsWake chan struct{}
+	// sessionLeases are the sessions this process serves, while
+	// ServeSessions runs, or nil, each with what lets go of its lease
+	// (store.Store.ServeSession). sessionsMu guards them, and is held from
+	// when a session is read to when its host has been asked to serve it,
+	// so that the host serves it as the store has it once taken
+	// (takeSession).
+	sessionsMu    sync.Mutex
+	sessionLeases map[string]func()
+	// sessionsSeen are the IDs of the store's sessions that hadn't ended
+	// as ServeSessions last looked, which sessionsMu guards too.
+	sessionsSeen map[string]bool
 	// inserter inserts runs' workflows, and served works their jobs while
 	// Serve runs.
 	inserter *hopper.Client[*sql.Tx]
@@ -202,6 +221,9 @@ type Coordinator struct {
 	supervision  supervision
 	startTimeout time.Duration
 	pollInterval time.Duration
+	// sessionsPoll is how often ServeSessions looks at the store's
+	// sessions, for changes another process made.
+	sessionsPoll time.Duration
 	stopTimeout  time.Duration
 	followEvery  time.Duration
 	followHold   time.Duration
@@ -344,9 +366,12 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	*c = Coordinator{
 		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
-		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
+		startTimeout: 5 * time.Minute, pollInterval: time.Second, sessionsPoll: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, seenFailed: map[string]int{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
-		outlives: map[string]bool{}, checkoutWaits: checkoutWaits,
+		outlives: map[string]bool{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
+	}
+	if opts.SessionHost != nil && opts.Sessions == nil && !opts.ReadOnly {
+		c.opts.Sessions = sessionProvider{c: c}
 	}
 	c.wakersCtx, c.stopWakers = context.WithCancel(context.WithoutCancel(ctx))
 	if opts.ReadOnly {
@@ -422,8 +447,8 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 // background, and waits for them (wakeLaterGo); closes what members'
 // drivers set up for their workers to reach the coordinator, and the
 // drivers that are io.Closers; releases its holds on runs' Starts; and
-// closes the coordinator's store. Serve, ServeWorkers and ServeMembers
-// must have returned.
+// closes the coordinator's store. Serve, ServeWorkers, ServeMembers and
+// ServeSessions must have returned.
 func (c *Coordinator) Close() error {
 	c.wakersMu.Lock()
 	c.stopWakers()

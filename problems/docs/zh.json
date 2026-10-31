@@ -846,6 +846,34 @@
       "给 localPort 一个 1024 到 65535 之间的端口，或去掉 localPort，让 Meridian 自己选择。"
     ]
   },
+  "session_name_taken": {
+    "title": "另一个会话已有的会话名",
+    "why": "会话的名称就是它的路径 /me/session/<user>/<name>/，也是 update-session 指代它所用的名称，因此两个尚未结束的会话不能同名。这个名称是工作流选择的，例如 prompt-for-name 的默认值，而另一个尚未结束的会话也有这个名称：工作流 sessions: 中的另一个会话，或另一个仍在进行的运行的会话。",
+    "fix": [
+      "给工作流的每个会话取不同的名称，或用 meridian cancel 结束另一个运行。"
+    ]
+  },
+  "session_name_empty": {
+    "title": "没有会话名称的 update-session",
+    "why": "使用 parallelworks/update-session 的步骤会指向其 with: 的 name 所指定的会话，${{ sessions.<key> }} 会给出运行自己的会话名称。它的 name 为空或缺失，例如读取了一个没有值的输入或输出。",
+    "fix": [
+      "给 name 一个会话名称，例如 ${{ sessions.<key> }}，其中 key 是工作流 sessions: 中的一个键。"
+    ]
+  },
+  "session_unknown": {
+    "title": "没有这样的会话",
+    "why": "使用 parallelworks/update-session 的步骤会指向其运行的树通过 sessions: 创建的会话，会话在树的根结束时结束。这样的会话不存在：该名称不是任何会话的，或者创建它的运行已经结束。",
+    "fix": [
+      "指定运行自己的会话，即 ${{ sessions.<key> }} 给出的名称。"
+    ]
+  },
+  "session_not_permitted": {
+    "title": "运行不能指向的会话",
+    "why": "按照格式 1 的平台的规则，运行可以指向它自己的树创建的会话，它调用的工作流也可以；工作流的 permissions: 含有 '*' 的运行以运行它的人的身份行事，可以指向此人的任何会话。这个会话属于另一个运行，而此运行的树没有要求 '*'。",
+    "fix": [
+      "指向运行自己的树创建的会话，即 ${{ sessions.<key> }} 给出的名称；或者，如果树顶端的工作流应以你的身份行事，就给它 permissions: ['*']。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on 不是运行位置",
     "why": "作业的 runs-on: 用于选择作业的运行位置，但其中的表达式得到的值没有指定任何位置。runs-on 接受执行组的名称（如 execution-groups 输入给出的值）、带有 execution-group: 的映射、带有 environment: 及其集群和名称的映射，或计算目标（如 compute-target 输入给出的值）。",

@@ -2588,6 +2588,17 @@ runs as any other; none of the known calls has an `ssh:` of its own.
   child again, evaluating its `with:` again, as in format 1: a child for
   each try, linked to it. A rerun, which is Meridian's own, makes new
   children from the plan's pins.
+- **A call's sessions are made once.** Format 1 makes a called workflow's
+  `sessions:` once for each call in the tree, as the run is submitted, so
+  every try of a call, every attempt of its job, and every instance of a
+  matrix job that makes it, shares them. Meridian keeps them so: by where
+  the call is, each level's job, without a matrix instance's index, and
+  step, but not its try or its attempt. It names them as format 1 does,
+  `<workflow>_<root>_<job>_step_<n>[_<job>_step_<n>…]_<key>`, where
+  `<workflow>` is the root's file's name; `prompt-for-name` asks nothing
+  of a called workflow. Instances that point their shared session in turn
+  leave it where the last pointed it, as in format 1: 2 of the 14 known
+  workflows whose matrix job calls a workflow call one with a session.
 - **What people see.** A child is a run, with its own number, shown under
   the step that called it:
   - `meridian run`, `resume` and `cancel -f`, and `meridian logs`, follow
@@ -2619,8 +2630,10 @@ runs as any other; none of the known calls has an `ssh:` of its own.
   fails a calling step, and its job, rather than cancelling them; a cancel
   from within a child that stops its caller's job too; a type check of a
   `with:` against its child's inputs, and a refusal of a key the child
-  doesn't define; and a name for a matrix instance's directory that can't
-  be a job's, as `build-0` can.
+  doesn't define; a name for a matrix instance's directory that can't
+  be a job's, as `build-0` can; and sessions of its own for each instance
+  of a matrix job that calls a workflow with `sessions:`, rather than one
+  set that the instances share.
 
 ### Steps on another host
 
