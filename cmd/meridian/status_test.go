@@ -60,7 +60,7 @@ func TestStatus(t *testing.T) {
 	}
 	workflow, release := waitingWorkflow(t)
 	running := startCommand(t, env, nil, "run", workflow)
-	waitUntil(t, "run 4's step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
+	untilSaid(t, running, "main step 0 started")
 
 	r := commandTest(t, env, "status")
 	when := `\d{4}-\d\d-\d\d \d\d:\d\d:\d\d`

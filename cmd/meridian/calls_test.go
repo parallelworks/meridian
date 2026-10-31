@@ -153,9 +153,7 @@ func TestCancelTree(t *testing.T) {
 `, quoted(t, file))}}
 	workflow := writeFile(t, "w.yaml", "jobs:\n  main:\n    steps:\n      - uses: github/t/wait\n        with: {$yaml: w.yaml}\n")
 	running := startCommand(t, env, func(c *cli) { c.sources = sources }, "run", workflow)
-	waitUntil(t, "the child's step to start", func() bool {
-		return strings.Contains(running.stdout.String(), "main step 0 › wait step 0 started")
-	})
+	untilSaid(t, running, "main step 0 › wait step 0 started")
 	cancel := meridianProcess(t, env, "cancel", "1")
 	if err := cancel.cmd.Wait(); err != nil {
 		t.Fatalf("meridian cancel 1: %v\n%s%s", err, cancel.stdout.String(), cancel.stderr.String())

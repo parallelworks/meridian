@@ -427,7 +427,7 @@ func TestSSHOutage(t *testing.T) {
 	env := runEnv(t)
 	h := newSSHHost(t, env)
 	running := startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow))
-	waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
+	untilSaid(t, running, "main step 0 started")
 	h.server.Drop()
 	h.release(t)
 	if r := endedWithin(t, running); r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
@@ -453,7 +453,7 @@ func TestSSHTakeover(t *testing.T) {
 		h.setUp(c)
 		c.interactive, c.signals = &no, interrupt
 	}, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow))
-	waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
+	untilSaid(t, running, "main step 0 started")
 	interrupt <- os.Interrupt
 	if r := endedWithin(t, running); r.code != exitError || !strings.Contains(r.stdout, "run 1 left running") {
 		t.Fatalf("meridian run interrupted = %+v", r)

@@ -23,7 +23,7 @@ func TestCancelFollowed(t *testing.T) {
 	for _, follow := range []bool{false, true} {
 		workflow, _ := waitingWorkflow(t)
 		running := startCommand(t, env, nil, "run", workflow)
-		waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
+		untilSaid(t, running, "main step 0 started")
 		id := startedRE.FindStringSubmatch(running.stdout.String())[1]
 		args := []string{"cancel", id}
 		if follow {
@@ -67,7 +67,7 @@ func TestCancelRunEndingAtOnce(t *testing.T) {
 	for _, follow := range []bool{false, true} {
 		workflow, _ := waitingWorkflow(t)
 		running := startCommand(t, env, nil, "run", workflow)
-		waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
+		untilSaid(t, running, "main step 0 started")
 		id := startedRE.FindStringSubmatch(running.stdout.String())[1]
 		args := []string{"cancel", id}
 		if follow {
@@ -106,7 +106,7 @@ func TestCancelUncoordinated(t *testing.T) {
 	no := false
 	interrupt := make(chan os.Signal, 1)
 	running := startCommand(t, env, func(c *cli) { c.interactive, c.signals = &no, interrupt }, "run", workflow)
-	waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
+	untilSaid(t, running, "main step 0 started")
 	interrupt <- os.Interrupt
 	if r := <-running.done; r.code != exitError || !strings.Contains(r.stdout, "run 1 left running") {
 		t.Fatalf("meridian run interrupted = %+v", r)
@@ -164,7 +164,7 @@ func TestCancelRunDir(t *testing.T) {
 	no := false
 	interrupt := make(chan os.Signal, 1)
 	running := startCommand(t, env, func(c *cli) { c.interactive, c.signals = &no, interrupt }, "run", workflow)
-	waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
+	untilSaid(t, running, "main step 0 started")
 	dir := startedRE.FindStringSubmatch(running.stdout.String())[2]
 	interrupt <- os.Interrupt
 	if r := <-running.done; r.code != exitError {
@@ -212,10 +212,8 @@ jobs:
 	no := false
 	interrupt := make(chan os.Signal, 1)
 	running := startCommand(t, env, func(c *cli) { c.interactive, c.signals = &no, interrupt }, "run", workflow)
-	waitUntil(t, "the run's timeout to fail a", func() bool {
-		out := running.stdout.String()
-		return strings.Contains(out, "run 1 stopping (timeout)") && strings.Contains(out, "a finished: failure (timeout)")
-	})
+	untilSaid(t, running, "run 1 stopping (timeout)")
+	untilSaid(t, running, "a finished: failure (timeout)")
 	interrupt <- os.Interrupt
 	if r := <-running.done; r.code != exitError {
 		t.Fatalf("meridian run interrupted = %+v", r)

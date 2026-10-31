@@ -189,17 +189,43 @@ func waitingWorkflow(t *testing.T) (workflow string, release func()) {
 	return workflow, release
 }
 
-// waitUntil waits until ok, which it asks every so often, for as long as a
-// run on a loaded runner can take to get there.
+// waitLimit is how long waitUntil waits: as long as a run on a loaded
+// runner can take to get somewhere, a session's service started among it.
+const waitLimit = 3 * time.Minute
+
+// waitUntil waits until ok, which it asks every so often, for as long as
+// waitLimit.
 func waitUntil(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
+	deadline := time.Now().Add(waitLimit)
 	for !ok() {
 		if time.Now().After(deadline) {
-			t.Fatalf("waited a minute for %s", what)
+			t.Fatalf("waited %v for %s", waitLimit, what)
 		}
 		<-time.After(20 * time.Millisecond)
 	}
+}
+
+// untilSaid waits until cmd's output says said, as waitUntil does, and
+// fails the test if cmd ends first. Whoever waits for cmd's end after it
+// is given its result all the same.
+func untilSaid(t *testing.T, cmd *commandRun, said string) {
+	t.Helper()
+	waitUntil(t, fmt.Sprintf("the command to say %q", said), func() bool {
+		if strings.Contains(cmd.stdout.String(), said) {
+			return true
+		}
+		select {
+		case r := <-cmd.done:
+			cmd.done <- r
+			if !strings.Contains(r.stdout, said) {
+				t.Fatalf("the command ended before it said %q: %+v", said, r)
+			}
+			return true
+		default:
+			return false
+		}
+	})
 }
 
 var startedRE = regexp.MustCompile(`^run (\d+) started \(run directory (.+)\)\n`)
