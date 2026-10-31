@@ -42,7 +42,7 @@ type Session struct {
 	Generation uint64
 	// Port is the port of 127.0.0.1 the session is served at, or 0
 	// before its process serves it at one, as after another took it over
-	// (ServeSession).
+	// (HoldSession).
 	Port int
 	// Problem is why the process that serves the session can't, as it
 	// last said (SessionServed), or nil.
@@ -119,6 +119,17 @@ func (tx *Tx) Sessions(root string) ([]Session, error) {
 		return nil, err
 	}
 	return tx.sessions("SELECT "+sessionColumns+" FROM meridian_sessions WHERE root_id = ? ORDER BY created_at, call_path, key", n)
+}
+
+// CallSessions returns the sessions, that haven't ended, of the tree whose
+// root is the run root, that the call at callPath in it made (CallPath),
+// in the order they were made: ErrNotFound for a run the store hasn't.
+func (tx *Tx) CallSessions(root, callPath string) ([]Session, error) {
+	n, err := tx.runNumberOf(root)
+	if err != nil {
+		return nil, err
+	}
+	return tx.sessions("SELECT "+sessionColumns+" FROM meridian_sessions WHERE root_id = ? AND call_path = ? AND ended_at IS NULL ORDER BY created_at, call_path, key", n, callPath)
 }
 
 // LiveSessions returns the store's sessions that haven't ended, in the
@@ -214,17 +225,17 @@ func (tx *Tx) ResetSession(id string, salt []byte) error {
 	return err
 }
 
-// ErrSessionServed is what ServeSession returns for a session another
-// serves, in this process or another.
-var ErrSessionServed = errors.New("store: another serves the session")
+// ErrSessionHeld is what HoldSession returns for a session another
+// holds, to serve it, in this process or another.
+var ErrSessionHeld = errors.New("store: another holds the session")
 
 // sessionID is what a session's ID is, as the coordinator makes it: hex.
 var sessionID = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
 
-// ServeSession takes the session id, to serve it, so that no other does
+// HoldSession takes the session id, to serve it, so that no other does
 // as long as this lives: until release is called, or the process ends. It
 // is a lock on a file beside the database, named for the database and the
-// session, which release removes: ErrSessionServed while another holds
+// session, which release removes: ErrSessionHeld while another holds
 // it. On a system without file locks, it fails.
 //
 // Once it holds the lock, before it returns, it resets the session
@@ -233,24 +244,21 @@ var sessionID = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
 // at its port, and taken the cookie that a page of it that reconnected
 // sent there; the new secret makes such a cookie worthless, and the
 // session's codes go with it. No other process can take the session
-// between the two, and its holder serves it only once ServeSession has
+// between the two, and its holder serves it only once HoldSession has
 // returned, so the session is never served with the salt it had before.
 // It forgets the port the session was served at too, in the same
 // transaction, until its new process says where it serves it
 // (SessionServed): no link is made to a port that another program can
 // hold by now. A session the store hasn't is ErrNotFound, and one that
 // has ended ErrState, and the lock is let go of.
-func (s *Store) ServeSession(ctx context.Context, id string, salt []byte) (release func(), err error) {
+func (s *Store) HoldSession(ctx context.Context, id string, salt []byte) (release func(), err error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
 	if !sessionID.MatchString(id) {
 		return nil, ErrNotFound
 	}
-	release, err = flock.TryLock(s.file + ".session-" + id + ".lock")
-	if errors.Is(err, flock.ErrHeld) {
-		return nil, ErrSessionServed
-	}
+	release, err = s.tryHold(holdSession, id, ErrSessionHeld)
 	if err != nil {
 		return nil, err
 	}
@@ -267,8 +275,8 @@ func (s *Store) ServeSession(ctx context.Context, id string, salt []byte) (relea
 	return release, nil
 }
 
-// SessionHeld reports whether a process holds the lease of the session id
-// now (ServeSession), this one or another, as the lock on its file says,
+// SessionHeld reports whether a process holds the session id now
+// (HoldSession), this one or another, as the lock on its file says,
 // without holding it for longer than it takes to ask: a session whose
 // process ended, or that none took, is held by none. On a system without
 // file locks, it fails.
@@ -276,24 +284,24 @@ func (s *Store) SessionHeld(id string) (bool, error) {
 	if !sessionID.MatchString(id) {
 		return false, ErrNotFound
 	}
-	return flock.Held(s.file + ".session-" + id + ".lock")
+	return flock.Held(s.lockFile(holdSession, id))
 }
 
-// ForgetSessionLease removes the file of the lease of the session id, which
-// has ended (ServeSession), as one left by a process that ended while it
+// ForgetSessionHold removes the file of the hold of the session id, which
+// has ended (HoldSession), as one left by a process that ended while it
 // held it: unless a process holds it, which removes it as it lets it go.
-func (s *Store) ForgetSessionLease(id string) error {
+func (s *Store) ForgetSessionHold(id string) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
 	if !sessionID.MatchString(id) {
 		return ErrNotFound
 	}
-	release, err := flock.TryLock(s.file + ".session-" + id + ".lock")
-	if errors.Is(err, flock.ErrHeld) {
+	release, err := s.tryHold(holdSession, id, ErrSessionHeld)
+	switch {
+	case errors.Is(err, ErrSessionHeld):
 		return nil
-	}
-	if err != nil {
+	case err != nil:
 		return err
 	}
 	release()

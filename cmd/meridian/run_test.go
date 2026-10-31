@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -189,16 +190,96 @@ func waitingWorkflow(t *testing.T) (workflow string, release func()) {
 	return workflow, release
 }
 
-// waitUntil waits until ok, which it asks every so often, for as long as a
-// run on a loaded runner can take to get there.
-func waitUntil(t *testing.T, what string, ok func() bool) {
+// waitLimit is how long waitUntil waits: as long as a run on a loaded
+// runner can take to get somewhere, a session's service started among it.
+const waitLimit = 3 * time.Minute
+
+// waitUntil waits until ok, which it asks every so often, for as long as
+// waitLimit; and fails the test then, with what detail gives, if it is
+// given, as what a command has said so far.
+func waitUntil(t testing.TB, what string, ok func() bool, detail ...func() string) {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
+	deadline := time.Now().Add(waitLimit)
 	for !ok() {
 		if time.Now().After(deadline) {
-			t.Fatalf("waited a minute for %s", what)
+			var more strings.Builder
+			for _, d := range detail {
+				more.WriteString("\n" + d())
+			}
+			t.Fatalf("waited %v for %s%s", waitLimit, what, more.String())
 		}
 		<-time.After(20 * time.Millisecond)
+	}
+}
+
+// untilSaid waits until cmd's output says said, as waitUntil does, and
+// fails the test if cmd ends first, or doesn't say it in time, with what
+// it said. Whoever waits for cmd's end after it is given its result all
+// the same.
+func untilSaid(t testing.TB, cmd *commandRun, said string) {
+	t.Helper()
+	waitUntil(t, fmt.Sprintf("the command to say %q", said), func() bool {
+		if strings.Contains(cmd.stdout.String(), said) {
+			return true
+		}
+		select {
+		case r := <-cmd.done:
+			cmd.done <- r
+			if !strings.Contains(r.stdout, said) {
+				t.Fatalf("the command ended before it said %q: %+v", said, r)
+			}
+			return true
+		default:
+			return false
+		}
+	}, func() string { return cmd.stdout.String() + cmd.stderr.String() })
+}
+
+// A fatalTB is a test whose Fatalf, which ends the goroutine that calls
+// it, it keeps the message of, rather than fail.
+type fatalTB struct {
+	testing.TB
+	fatal string
+}
+
+func (f *fatalTB) Helper() {}
+
+func (f *fatalTB) Fatalf(format string, args ...any) {
+	f.fatal = fmt.Sprintf(format, args...)
+	runtime.Goexit()
+}
+
+// TestUntilSaid checks untilSaid with commands that have ended: one that
+// said it last, after untilSaid looked at what it had said, whose result
+// untilSaid puts back for whoever waits for its end; and one that didn't
+// say it, which fails at once, with its result.
+func TestUntilSaid(t *testing.T) {
+	ended := func(stdout string) *commandRun {
+		cmd := &commandRun{done: make(chan result, 1)}
+		cmd.done <- result{stdout: stdout, code: exitOK}
+		return cmd
+	}
+	cmd := ended("ready\n")
+	untilSaid(t, cmd, "ready")
+	select {
+	case r := <-cmd.done:
+		if r.stdout != "ready\n" {
+			t.Errorf("the command's result is %+v", r)
+		}
+	default:
+		t.Error("untilSaid kept the command's result")
+	}
+
+	f := &fatalTB{TB: t}
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		untilSaid(f, ended("other\n"), "ready")
+	}()
+	<-done
+	if !strings.Contains(f.fatal, `the command ended before it said "ready"`) || !strings.Contains(f.fatal, "other") || time.Since(start) > 5*time.Second {
+		t.Errorf("untilSaid of a command that ended without saying it failed with %q, after %v", f.fatal, time.Since(start))
 	}
 }
 

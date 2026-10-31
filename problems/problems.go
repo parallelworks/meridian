@@ -98,6 +98,17 @@ type Params = map[string]any
 // maxShown is how many characters of a value a message shows.
 const maxShown = 40
 
+// Listed sets params' key to items, as QuoteAll shows them, and listed to
+// whether there are any, "true" or "false", on which a message selects,
+// so that it says there are none rather than listing nothing; and returns
+// params. A new kind that lists the names a value could have been takes
+// them so.
+func Listed(params Params, key string, items []string) Params {
+	params[key] = QuoteAll(items)
+	params["listed"] = strconv.FormatBool(len(items) > 0)
+	return params
+}
+
 // QuoteAll shows a list of names or keys in a message: each in neutral
 // double quotes, joined with ", ". A message quotes a single name itself,
 // with its language's quotation marks, but ICU can't quote each item of a

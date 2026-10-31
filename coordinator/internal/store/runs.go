@@ -98,6 +98,15 @@ type Run struct {
 	WaitedAt   time.Time
 }
 
+// RootID returns the ID of the root of the run's tree: the run's own, for
+// a run no step called.
+func (r *Run) RootID() string {
+	if r.Parent != nil {
+		return r.Parent.Root
+	}
+	return r.ID
+}
+
 // A NewRun is a run to store.
 type NewRun struct {
 	// ID is the run's ID, which NewRunID gave.
@@ -557,11 +566,10 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	if err := tx.deleteRecords(n); err != nil {
 		return err
 	}
-	if err := tx.eraseDigests(); err != nil {
+	if _, err := tx.eraseDigests(); err != nil {
 		return err
 	}
-	tx.erased = true
-	return nil
+	return tx.markErased()
 }
 
 // deleteRecords deletes the secret record and the job records of the run

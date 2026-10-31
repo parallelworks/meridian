@@ -1,10 +1,6 @@
 package store
 
-import (
-	"errors"
-
-	"github.com/parallelworks/meridian/internal/flock"
-)
+import "errors"
 
 // ErrStartHeld is what HoldStart returns for a run whose Start another
 // holds, in this process or another.
@@ -23,9 +19,5 @@ func (s *Store) HoldStart(id string) (release func(), err error) {
 	if _, ok := runNumber(id); !ok {
 		return nil, ErrNotFound
 	}
-	release, err = flock.TryLock(s.file + ".start-" + id + ".lock")
-	if errors.Is(err, flock.ErrHeld) {
-		return nil, ErrStartHeld
-	}
-	return release, err
+	return s.tryHold(holdStart, id, ErrStartHeld)
 }
