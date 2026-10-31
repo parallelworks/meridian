@@ -1,0 +1,17 @@
+description: >-
+  A step on another host than its job's reads the host's paths, as format
+  1 evaluates a step's env:, run: and with: once it has connected:
+  ${{ env.PW_JOB_DIR }} in its run: gives what $PW_JOB_DIR does there, the
+  host's copy of the job's directory, under its user's home there, and not
+  the directory of the job where it runs.
+source: ACTIVATE's executor, and Meridian
+hosts:
+  farm: {}
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 2, text: "the variable's, the host's own, under its user's home\n"}

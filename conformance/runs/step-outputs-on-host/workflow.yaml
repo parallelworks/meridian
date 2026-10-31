@@ -1,0 +1,13 @@
+jobs:
+  main:
+    steps:
+      - run: echo "where=here" >> $OUTPUTS
+      - run: |
+          echo "x=on the host" >> $OUTPUTS
+          echo "seen=${{ needs.main.outputs.where }}" >> $OUTPUTS
+        ssh:
+          remoteHost: farm
+  after:
+    needs: [main]
+    steps:
+      - run: echo "${{ needs.main.outputs.x }}, after ${{ needs.main.outputs.seen }}"

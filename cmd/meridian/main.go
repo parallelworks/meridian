@@ -99,8 +99,10 @@ type cli struct {
 	serveMembers func(*coordinator.Coordinator, context.Context, coordinator.Logs) error
 	// sources is what a test gives in place of the user's Git
 	// repositories (cacheSources) for the workflows a workflow's steps
-	// call, nil for theirs.
+	// call, nil for theirs; and trees for the trees its checkout steps
+	// check out, which those pinned.
 	sources compile.Sources
+	trees   coordinator.Trees
 }
 
 // getenv reads an environment variable, or "" if it isn't set.

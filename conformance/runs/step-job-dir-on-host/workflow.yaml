@@ -1,0 +1,11 @@
+jobs:
+  main:
+    steps:
+      - run: echo "here=$PW_JOB_DIR" >> $OUTPUTS
+      - run: |
+          if [ "${{ env.PW_JOB_DIR }}" = "$PW_JOB_DIR" ]; then echo "same=the variable's" >> $OUTPUTS; fi
+          if [ "$PW_JOB_DIR" != "${{ needs.main.outputs.here }}" ]; then echo "own=the host's own" >> $OUTPUTS; fi
+          case "$PW_JOB_DIR" in "$HOME"/*) echo "under=its user's home" >> $OUTPUTS ;; esac
+        ssh:
+          remoteHost: farm
+      - run: echo "${{ needs.main.outputs.same }}, ${{ needs.main.outputs.own }}, under ${{ needs.main.outputs.under }}"

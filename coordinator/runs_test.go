@@ -2,9 +2,12 @@ package coordinator
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -82,6 +85,10 @@ func checkRunEnd(t *testing.T, r *workerRig, id, what string, want conformance.R
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A step run, of a step on another host, is Meridian's own, which the
+	// case doesn't name: the step's try's own (docs/design.md, Steps on
+	// another host).
+	children = slices.DeleteFunc(children, func(ch RunStatus) bool { return storedRun(t, c, ch.ID).StepRun })
 	calls := 0
 	for _, j := range jobs {
 		w, ok := want.Jobs[j.Key]
@@ -191,7 +198,7 @@ func newWorkerRigOf(t *testing.T, opts Options) *workerRig {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s")
 	d := &workerDriver{dir: dir, log: t.Logf, placements: map[string]backend.Placement{}, cancels: map[string]context.CancelFunc{}}
-	opts.Drivers = map[string]backend.Driver{testBackend: d}
+	opts.Drivers = map[string]backend.Driver{testBackend: d, "ssh": d}
 	opts.Endpoint = backend.Endpoint{Address: socket}
 	c := open(t, opts)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
@@ -297,11 +304,65 @@ func startCase(t *testing.T, cs conformance.Case) (*workerRig, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := newWorkerRig(t, conformancetest.StartVariables(cs))
+	r := newWorkerRigOf(t, Options{Variables: conformancetest.StartVariables(cs), Trees: caseTrees(t, cs)})
 	r.sources = conformancetest.Sources(cs)
+	r.d.hostHomes(t, cs.Hosts)
 	id := r.create(t, data, cs.Inputs, conformancetest.CreateContexts(cs))
 	serve(t, r.c)
 	return r, id
+}
+
+// caseTrees returns the trees of the case's repositories, which its
+// parallelworks/checkout steps check out, at the commit the case's
+// sources pin (conformancetest.Tree), or nil for a case that names none.
+func caseTrees(t *testing.T, cs conformance.Case) Trees {
+	t.Helper()
+	if len(cs.Repositories) == 0 {
+		return nil
+	}
+	files, err := conformancetest.Tree(cs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &memRepo{files: map[string]string{}}
+	for name, data := range files {
+		repo.files[name] = string(data)
+	}
+	return &pinnedTrees{cs: cs, trees: &memTrees{repos: map[string]*memRepo{}}, repo: repo}
+}
+
+// pinnedTrees are a case's trees, of each repository Holds says is the
+// case's, at its commit, as a memTrees holds one, at pinnedCommit.
+type pinnedTrees struct {
+	cs    conformance.Case
+	trees *memTrees
+	repo  *memRepo
+}
+
+func (p *pinnedTrees) held(repo, commit string) (string, error) {
+	if !conformancetest.Holds(p.cs, repo) || commit != conformancetest.Commit(p.cs) {
+		return "", fmt.Errorf("no commit %s of %s", commit, repo)
+	}
+	p.trees.mu.Lock()
+	p.trees.repos[repo] = p.repo
+	p.trees.mu.Unlock()
+	return pinnedCommit, nil
+}
+
+func (p *pinnedTrees) SurveyTree(ctx context.Context, repo, commit string, paths []string) (TreeSurvey, error) {
+	pinned, err := p.held(repo, commit)
+	if err != nil {
+		return TreeSurvey{}, err
+	}
+	return p.trees.SurveyTree(ctx, repo, pinned, paths)
+}
+
+func (p *pinnedTrees) WriteTree(ctx context.Context, repo, commit string, paths []string, w io.Writer) error {
+	pinned, err := p.held(repo, commit)
+	if err != nil {
+		return err
+	}
+	return p.trees.WriteTree(ctx, repo, pinned, paths, w)
 }
 
 // TestNeedNeverEnded checks that a job a job needs that never ended, as
@@ -379,6 +440,11 @@ type workerDriver struct {
 	// ended, if it is set, is told of each attempt whose worker has
 	// ended.
 	ended func(attempt string)
+	// homes are the homes of the hosts the ssh backend reaches, by the
+	// name their remoteHost gives, each a directory of the test's: a
+	// worker it places on one runs as though there, with its home, in its
+	// run's directory there (hostPlacement).
+	homes map[string]string
 
 	mu         sync.Mutex
 	placements map[string]backend.Placement
@@ -397,10 +463,61 @@ func (d *workerDriver) Connect(_ context.Context, _ *backend.Member, coordinator
 	return coordinator, nil, nil
 }
 
-func (d *workerDriver) Place(ctx context.Context, _ *backend.Member, req backend.PlaceRequest) (backend.Placement, error) {
+// hostHomes gives d the hosts a case names, each a home of the test's own,
+// or another's that it shares (conformance.Host), as the ssh backend's.
+func (d *workerDriver) hostHomes(t *testing.T, hosts map[string]conformance.Host) {
+	t.Helper()
+	d.homes = map[string]string{}
+	for _, name := range slices.Sorted(maps.Keys(hosts)) {
+		if hosts[name].Home == "" {
+			d.homes[name] = filepath.Join(d.dir, "hosts", name)
+			if err := os.MkdirAll(d.homes[name], 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for name, h := range hosts {
+		if h.Home != "" {
+			d.homes[name] = d.homes[h.Home]
+		}
+	}
+}
+
+// hostPlacement returns the home of the host m is, of the ssh backend, and
+// the run's directory there, under it, as meridian host makes it: the
+// run's, or, for a child, its root's, with the child's path in it
+// (backend.PlaceRequest.Root and Path); or "", "" for a member of another
+// backend.
+func (d *workerDriver) hostPlacement(m *backend.Member, req backend.PlaceRequest) (home, runDir string, err error) {
+	if m == nil || m.Backend != "ssh" {
+		return "", "", nil
+	}
+	var settings struct {
+		RemoteHost string `json:"remoteHost"`
+	}
+	if err := jsonv2.Unmarshal(m.Settings, &settings); err != nil {
+		return "", "", err
+	}
+	home, ok := d.homes[settings.RemoteHost]
+	if !ok {
+		return "", "", fmt.Errorf("no host %q", settings.RemoteHost)
+	}
+	return home, filepath.Join(home, "runs", cmp.Or(req.Root, req.Run), req.Path), nil
+}
+
+func (d *workerDriver) Place(ctx context.Context, m *backend.Member, req backend.PlaceRequest) (backend.Placement, error) {
 	dir := filepath.Join(d.dir, "workers", req.Attempt)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return backend.Placement{}, err
+	}
+	home, runDir, err := d.hostPlacement(m, req)
+	if err != nil {
+		return backend.Placement{}, err
+	}
+	if runDir != "" {
+		if err := os.MkdirAll(runDir, 0o700); err != nil {
+			return backend.Placement{}, err
+		}
 	}
 	token := filepath.Join(dir, "token")
 	if err := os.WriteFile(token, []byte(req.BootstrapToken), 0o600); err != nil {
@@ -413,7 +530,10 @@ func (d *workerDriver) Place(ctx context.Context, _ *backend.Member, req backend
 		}
 	}
 	environ = append(environ, workerapi.EnvCoordinator+"="+req.Coordinator.Address, workerapi.EnvBootstrapTokenFile+"="+token)
-	p := backend.Placement{Attempt: req.Attempt, ID: "worker-" + req.Attempt, WorkerDigest: testDigest}
+	if home != "" {
+		environ = append(slices.DeleteFunc(environ, func(kv string) bool { return strings.HasPrefix(kv, "HOME=") }), "HOME="+home)
+	}
+	p := backend.Placement{Attempt: req.Attempt, ID: "worker-" + req.Attempt, WorkerDigest: testDigest, RunDir: runDir}
 	// The worker outlives the call that placed it.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	d.mu.Lock()

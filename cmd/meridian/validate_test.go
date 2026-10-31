@@ -529,8 +529,8 @@ func TestValidateChecksConfig(t *testing.T) {
 	}
 }
 
-// flowsRepo makes a Git repository of files, by their paths in it, on its
-// branch main, which Git reaches for github.com's acme/flows, and for each
+// flowsRepo makes a Git repository of files, by their paths in it, a
+// script among them executable, on its branch main, which Git reaches for github.com's acme/flows, and for each
 // of hosts' as acme/flows there: a workflow that uses: names, which
 // meridian fetches and pins. The user's own configuration may allow the
 // file transport, as this one does, which Meridian allows only https and
@@ -569,7 +569,12 @@ func flowsRepo(t *testing.T, files map[string]string, hosts ...string) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		// A script, which starts #!, is executable, as Git keeps it.
+		mode := os.FileMode(0o600)
+		if strings.HasPrefix(text, "#!") {
+			mode = 0o700
+		}
+		if err := os.WriteFile(path, []byte(text), mode); err != nil {
 			t.Fatal(err)
 		}
 	}

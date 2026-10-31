@@ -1,8 +1,12 @@
 package main
 
 import (
+	"archive/tar"
+	"cmp"
+	"context"
 	jsonv2 "encoding/json/v2"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -10,8 +14,11 @@ import (
 	"strings"
 	"testing"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/conformance"
+	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 )
 
@@ -96,10 +103,20 @@ func TestRunsConformance(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The workflows its steps call are the case's, as the suite
-			// says, rather than those of a Git repository of the user's.
-			var setUp func(*cli)
+			// says, rather than those of a Git repository of the user's; and
+			// its hosts are SSH servers of the test's, each at its name.
+			var setUps []func(*cli)
 			if sources := conformancetest.Sources(cs); sources != nil {
-				setUp = func(c *cli) { c.sources = sources }
+				trees := caseTrees{cs}
+				setUps = append(setUps, func(c *cli) { c.sources, c.trees = sources, trees })
+			}
+			if len(cs.Hosts) > 0 {
+				setUps = append(setUps, caseHosts(t, cs, env))
+			}
+			setUp := func(c *cli) {
+				for _, f := range setUps {
+					f(c)
+				}
 			}
 			r := runTest(t, env, setUp, append(args, writeFile(t, "workflow.yaml", string(workflow)))...)
 			wantCode := exitOK
@@ -121,7 +138,7 @@ func TestRunsConformance(t *testing.T) {
 			if first := lines[0]; first.Kind != "run.created" {
 				t.Fatalf("the first line is %+v", first)
 			}
-			checkRunLines(t, lines, lines[0].Run, nil, "the run", *want)
+			checkRunLines(t, lines, lines[0].Run, nil, "the run", *want, stepsElsewhere(t, workflow))
 		})
 	}
 }
@@ -131,7 +148,7 @@ func TestRunsConformance(t *testing.T) {
 // down: that it ended as want says, and its jobs, their logs, and the runs
 // their steps called, in turn, each line of which says which steps' tries
 // called it.
-func checkRunLines(t *testing.T, lines []runLine, id string, callers []lineCaller, what string, want conformance.RunEnd) {
+func checkRunLines(t *testing.T, lines []runLine, id string, callers []lineCaller, what string, want conformance.RunEnd, elsewhere map[string]bool) {
 	t.Helper()
 	var outcome string
 	jobs := map[string]string{}
@@ -154,7 +171,13 @@ func checkRunLines(t *testing.T, lines []runLine, id string, callers []lineCalle
 		case "job.running":
 			attempts[l.Job] = max(attempts[l.Job], l.Attempt)
 		case "child.created":
-			called[fmt.Sprintf("%s %d.%d", l.Job, *l.Step, l.Try)] = l
+			// A step run, of a step on another host than its job's, is
+			// Meridian's own, which the case doesn't name: the step's try's
+			// own (docs/design.md, Steps on another host).
+			name, _, _ := strings.Cut(l.Job, "#")
+			if !elsewhere[fmt.Sprintf("%s %d", name, *l.Step)] {
+				called[fmt.Sprintf("%s %d.%d", l.Job, *l.Step, l.Try)] = l
+			}
 		case "log":
 			name := runLogName(l.Job, l.Attempt, l.Part, l.Step, l.Try)
 			logs[name] += l.Text
@@ -199,7 +222,7 @@ func checkRunLines(t *testing.T, lines []runLine, id string, callers []lineCalle
 				t.Errorf("%s's job %s's attempt %d called a run, not its last, %d", what, name, created.Attempt, attempts[name])
 			}
 			under := append(slices.Clip(callers), lineCaller{Run: id, Job: name, Attempt: created.Attempt, Step: call.Step, Try: call.Try})
-			checkRunLines(t, lines, created.Child, under, fmt.Sprintf("the run %s's job %s's step %d called", what, name, call.Step), call.Run)
+			checkRunLines(t, lines, created.Child, under, fmt.Sprintf("the run %s's job %s's step %d called", what, name, call.Step), call.Run, nil)
 		}
 	}
 	if calls != len(called) {
@@ -266,4 +289,117 @@ func quoted(t *testing.T, s string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// caseHosts starts the hosts the case names, each an SSH server of the
+// test's at its name, as newSSHHosts does, those that share a home with
+// another after it, and returns what has meridian reach them.
+func caseHosts(t *testing.T, cs conformance.Case, env map[string]string) func(*cli) {
+	t.Helper()
+	shares := func(name string) int {
+		if cs.Hosts[name].Home != "" {
+			return 1
+		}
+		return 0
+	}
+	names := slices.SortedFunc(maps.Keys(cs.Hosts), func(a, b string) int {
+		return cmp.Or(cmp.Compare(shares(a), shares(b)), cmp.Compare(a, b))
+	})
+	specs := make([]hostSpec, len(names))
+	for i, name := range names {
+		specs[i] = hostSpec{alias: name, sameHome: cs.Hosts[name].Home}
+	}
+	return newSSHHosts(t, env, specs...)[names[0]].setUp
+}
+
+// stepsElsewhere returns the steps of workflow, by their job's name and
+// their index, as "main 1", that run on another host than their job's, as
+// step runs: those with an ssh: of their own that run a command, or check
+// out a repository.
+func stepsElsewhere(t *testing.T, workflow []byte) map[string]bool {
+	t.Helper()
+	var w struct {
+		Jobs map[string]struct {
+			Steps []map[string]any `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(workflow, &w); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for name, j := range w.Jobs {
+		for i, s := range j.Steps {
+			uses, _ := s["uses"].(string)
+			if _, ok := s["ssh"]; ok && (uses == "" || strings.HasPrefix(uses, "parallelworks/checkout")) {
+				out[fmt.Sprintf("%s %d", name, i)] = true
+			}
+		}
+	}
+	return out
+}
+
+// caseTrees are the trees of a case's repositories, which its checkout
+// steps check out, at the commit its sources pin (conformancetest.Tree).
+type caseTrees struct{ cs conformance.Case }
+
+// files returns the files of the tree of repo at commit that paths name,
+// or all of them, for none, in order, and the indexes of paths that name
+// none.
+func (c caseTrees) files(repo, commit string, paths []string) (map[string][]byte, []string, []int, error) {
+	if !conformancetest.Holds(c.cs, repo) || commit != conformancetest.Commit(c.cs) {
+		return nil, nil, nil, fmt.Errorf("no commit %s of %s", commit, repo)
+	}
+	files, err := conformancetest.Tree(c.cs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	all := slices.Sorted(maps.Keys(files))
+	if len(paths) == 0 {
+		return files, all, nil, nil
+	}
+	var names []string
+	var missing []int
+	for i, p := range paths {
+		p = strings.TrimSuffix(p, "/")
+		n := len(names)
+		for _, name := range all {
+			if (name == p || strings.HasPrefix(name, p+"/")) && !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+		if len(names) == n {
+			missing = append(missing, i)
+		}
+	}
+	slices.Sort(names)
+	return files, names, missing, nil
+}
+
+func (c caseTrees) SurveyTree(_ context.Context, repo, commit string, paths []string) (coordinator.TreeSurvey, error) {
+	files, names, missing, err := c.files(repo, commit, paths)
+	if err != nil {
+		return coordinator.TreeSurvey{}, err
+	}
+	s := coordinator.TreeSurvey{Entries: len(names), Missing: missing}
+	for _, name := range names {
+		s.Size += int64(len(files[name]))
+	}
+	return s, nil
+}
+
+func (c caseTrees) WriteTree(_ context.Context, repo, commit string, paths []string, w io.Writer) error {
+	files, names, _, err := c.files(repo, commit, paths)
+	if err != nil {
+		return err
+	}
+	tw := tar.NewWriter(w)
+	for _, name := range names {
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: 0o644, Size: int64(len(files[name]))}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(files[name]); err != nil {
+			return err
+		}
+	}
+	return tw.Close()
 }

@@ -1,0 +1,16 @@
+jobs:
+  fetch:
+    steps:
+      - uses: parallelworks/checkout
+        ssh:
+          remoteHost: farm
+        with:
+          repo: https://github.com/conformance/step-checkout-on-host.git
+          branch: main
+          path: app
+  use:
+    needs: [fetch]
+    ssh:
+      remoteHost: farm
+    steps:
+      - run: cat app/notes.txt

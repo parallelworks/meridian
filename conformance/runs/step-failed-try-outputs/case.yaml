@@ -1,0 +1,17 @@
+description: >-
+  What a step on another host than its job's wrote to $OUTPUTS there, in a
+  try that failed, isn't its job's, as format 1 copies the file back only
+  after a try that succeeded, though its ignore-errors: lets the step
+  succeed. A step whose if: is the word always reads the output that
+  nothing wrote as empty.
+source: ACTIVATE's executor, and Meridian
+hosts:
+  farm: {}
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 1, text: "[]\n"}

@@ -315,7 +315,10 @@ func (c *Coordinator) startStepRun(ctx context.Context, run *store.Run, done fun
 // readyStepRun readies the job of the step run run, as readyJob does, or
 // readyEarly when early is set: its caller's job, as Ready readies it, in
 // its caller's run, with that run's values and the results of the jobs it
-// needs; but where the step's ssh: put the try (stepRunJob).
+// needs; but where the step's ssh: put the try (stepRunJob), and with of
+// its steps only what the step run's attempt is given of them
+// (stepRunSteps), so that what its supervisor places is what its claim
+// gives.
 func (c *Coordinator) readyStepRun(ctx context.Context, run *store.Run, early bool) (*readied, error) {
 	caller, err := c.callerOf(ctx, run)
 	if err != nil {
@@ -329,9 +332,15 @@ func (c *Coordinator) readyStepRun(ctx context.Context, run *store.Run, early bo
 	if err != nil {
 		return nil, err
 	}
-	if r.result.Job, err = stepRunJob(run, rec, r.result.Job); err != nil {
+	j, err := stepRunJob(run, rec, r.result.Job)
+	if err != nil {
 		return nil, err
 	}
+	if run.Parent.Step >= len(j.Steps) {
+		return nil, fmt.Errorf("coordinator: step run %s's job has no step %d", run.ID, run.Parent.Step)
+	}
+	j.Steps, j.Outputs = stepRunSteps(j.Steps, run.Parent.Step, run.Parent.Cleanup), nil
+	r.result.Job = j
 	return r, nil
 }
 
