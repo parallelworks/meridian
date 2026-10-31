@@ -81,8 +81,7 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 		}
 		return ssh.DialTCP(ctx, &backend.Member{Name: clusterHost, Backend: "ssh", Settings: settings}, host, port)
 	}
-	user, _ := login.Name()
-	host, err := local.NewSessionHost(cfg, user, sessionKey, dialCluster, log)
+	host, err := local.NewSessionHost(cfg, local.UserLogin(), sessionKey, dialCluster, log)
 	if err != nil {
 		return nil, nil, errors.Join(err, ssh.Close())
 	}

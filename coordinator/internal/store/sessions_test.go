@@ -314,9 +314,15 @@ func TestServeSession(t *testing.T) {
 		}
 		return tx.AddSessionCode("a", []byte("code"), time.Hour)
 	})
+	if held, err := s.SessionHeld("a"); err != nil || held {
+		t.Errorf("a session no process took is held: %t, %v", held, err)
+	}
 	release, err := s.ServeSession(t.Context(), "a", []byte("taken"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if held, err := s.SessionHeld("a"); err != nil || !held {
+		t.Errorf("a session taken isn't held: %t, %v", held, err)
 	}
 	file := s.file + ".session-a.lock"
 	if _, err := os.Lstat(file); err != nil {
@@ -348,6 +354,12 @@ func TestServeSession(t *testing.T) {
 	}
 	other()
 	release()
+	if held, err := s.SessionHeld("a"); err != nil || held {
+		t.Errorf("a session let go of is held: %t, %v", held, err)
+	}
+	if _, err := s.SessionHeld("../a"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SessionHeld of no session's ID = %v", err)
+	}
 	if _, err := os.Lstat(file); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the lease's file is there once it is let go: %v", err)
 	}

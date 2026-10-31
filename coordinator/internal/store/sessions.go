@@ -259,6 +259,18 @@ func (s *Store) ServeSession(ctx context.Context, id string, salt []byte) (relea
 	return release, nil
 }
 
+// SessionHeld reports whether a process holds the lease of the session id
+// now (ServeSession), this one or another, as the lock on its file says,
+// without holding it for longer than it takes to ask: a session whose
+// process ended, or that none took, is held by none. On a system without
+// file locks, it fails.
+func (s *Store) SessionHeld(id string) (bool, error) {
+	if !sessionID.MatchString(id) {
+		return false, ErrNotFound
+	}
+	return flock.Held(s.file + ".session-" + id + ".lock")
+}
+
 // ForgetSessionLease removes the file of the lease of the session id, which
 // has ended (ServeSession), as one left by a process that ended while it
 // held it: unless a process holds it, which removes it as it lets it go.

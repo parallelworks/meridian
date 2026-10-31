@@ -31,12 +31,14 @@ import (
 
 // SessionStore is what a host keeps of a store's sessions in the store, as
 // the coordinator keeps it (coordinator.Coordinator's AddSessionCode,
-// RedeemSessionCode and SessionServed): their one-time codes, and how it
-// serves each, which any process shows.
+// RedeemSessionCode, SessionServed and SessionServing): their one-time
+// codes, how it serves each, which any process shows, and whether a
+// process serves one.
 type SessionStore interface {
 	AddSessionCode(ctx context.Context, id string, mac []byte, lifetime time.Duration) error
 	RedeemSessionCode(ctx context.Context, id string, mac []byte) bool
 	SessionServed(ctx context.Context, id string, port int, p *problem.Problem) error
+	SessionServing(ctx context.Context, id string) (bool, error)
 }
 
 // A SessionHost serves a store's sessions on this machine
@@ -49,7 +51,7 @@ type SessionStore interface {
 // machine, at its loopback address.
 type SessionHost struct {
 	cfg  *Config
-	user string
+	user Login
 	keys *sessionproxy.Keyring
 	// dialCluster connects to host at port from the host of a cluster of
 	// the clusters file, clusterHost, over SSH.
@@ -111,12 +113,12 @@ type sessionPoint struct {
 }
 
 // NewSessionHost returns a SessionHost of the clusters of cfg, which serves
-// sessions at the path of user, the login name of the user who runs it
-// (login.Name), as PW_USER gives it, under the key key, derived from the
+// sessions at the path of user, the login of the user who runs it
+// (UserLogin), as PW_USER gives it, under the key key, derived from the
 // state directory's key file under sessionproxy.KeyLabel, reaching a
 // cluster's services with dialCluster, and logging what no answer says to
 // log. It serves nothing until Attach gives it its store.
-func NewSessionHost(cfg *Config, user string, key []byte, dialCluster func(ctx context.Context, clusterHost, host string, port int) (net.Conn, error), log *slog.Logger) (*SessionHost, error) {
+func NewSessionHost(cfg *Config, user Login, key []byte, dialCluster func(ctx context.Context, clusterHost, host string, port int) (net.Conn, error), log *slog.Logger) (*SessionHost, error) {
 	keys, err := sessionproxy.NewKeyring(key)
 	if err != nil {
 		return nil, err
@@ -175,25 +177,41 @@ func (h *SessionHost) Close() {
 // or by its key, made fit for a URL's path, and 40 random bits, so that
 // it is no other session's. A session meridian run can't serve is
 // refused: one whose detach: is true, which needs a coordinator that
-// outlives its run, as meridian serve will be; one whose openAI: is true,
-// which a platform registers; and one whose useCustomDomain: is true,
-// which a platform serves at a domain of its own
-// (session_field_unsupported). So is one that asks for a name that isn't
-// a literal one a URL's path holds as it is (session_name_needed), and any
-// where the login name of the user who runs meridian isn't one either
-// (session_user_unsupported). The sessions of a workflow a step calls,
+// outlives its run, as meridian serve will be; and one whose openAI: is
+// true, which a platform registers (session_field_unsupported). Its
+// useCustomDomain: it ignores, as format 1 does where a platform has no
+// domain for sessions: each session has a host name of its own here. So
+// is one that asks for a name that isn't a literal one a URL's path holds
+// as it is (session_name_needed) refused, and any where the login name of
+// the user who runs meridian isn't one either (session_user_unsupported),
+// or where there is none (login_name_unknown). The sessions of a workflow
+// a step calls,
 // called, it checks, and names none of, as the coordinator names them, and
 // prompt-for-name asks nothing of them.
 func (h *SessionHost) Check(_ context.Context, sessions map[string]any, called bool) (map[string]string, error) {
 	return checkSessions(h.user, sessions, called)
 }
 
+// A Login is the login name of the user who runs meridian, as login.Name
+// gives it, or why there is none.
+type Login struct {
+	Name string
+	Err  error
+}
+
+// UserLogin returns the login name of the user who runs the process
+// (login.Name).
+func UserLogin() Login {
+	name, err := login.Name()
+	return Login{Name: name, Err: err}
+}
+
 // SessionNames is the Sessions meridian validates a workflow, and creates
 // a run of it, with, before any coordinator: it checks and names a
-// workflow's sessions:, as a SessionHost of the login name User does
+// workflow's sessions:, as a SessionHost of the login User does
 // (SessionHost.Check); it makes none, as validate --start, which starts no
 // run, doesn't; and a step points none.
-type SessionNames struct{ User string }
+type SessionNames struct{ User Login }
 
 var _ compile.Sessions = SessionNames{}
 
@@ -213,15 +231,18 @@ func (SessionNames) Update(context.Context, compile.SessionUpdate) error {
 	return errors.New("local: only a run's coordinator points a session")
 }
 
-// checkSessions is SessionHost.Check, for the login name user.
-func checkSessions(user string, sessions map[string]any, called bool) (map[string]string, error) {
-	if _, err := login.ForPath(user); err != nil {
+// checkSessions is SessionHost.Check, for the login user.
+func checkSessions(user Login, sessions map[string]any, called bool) (map[string]string, error) {
+	if user.Err != nil {
+		return nil, problems.LoginNameUnknown.Problem(problems.Params{"reason": user.Err.Error()})
+	}
+	if _, err := login.ForPath(user.Name); err != nil {
 		return nil, err
 	}
 	names := make(map[string]string, len(sessions))
 	for _, key := range slices.Sorted(maps.Keys(sessions)) {
 		def, _ := sessions[key].(map[string]any)
-		for _, field := range []string{"detach", "openAI", "useCustomDomain"} {
+		for _, field := range []string{"detach", "openAI"} {
 			if def[field] == true {
 				return nil, problems.SessionFieldUnsupported.Problem(problems.Params{"key": key, "field": field})
 			}
@@ -236,7 +257,7 @@ func checkSessions(user string, sessions map[string]any, called bool) (map[strin
 		}
 		m, _ := prompt.(map[string]any)
 		name, _ := m["default"].(string)
-		if !login.PathSafe(name) || strings.Contains(name, "${{") {
+		if !login.PathSafe(name) {
 			return nil, problems.SessionNameNeeded.Problem(problems.Params{"key": key})
 		}
 		names[key] = name
@@ -269,29 +290,31 @@ func newSessionName(key string) string {
 
 // Point reads where a step that uses parallelworks/update-session points
 // the session s, as format 1 reads its with:, and, where serve is set,
-// serves the session there. Where it isn't, as for a session another
-// process serves, which serves it there as it next looks at the store, it
-// serves nothing, and returns the port the step gave, or the one s is
-// served at.
+// serves the session there, at the port it is served at already, or one
+// the system picks. Where it isn't, as for a session another process
+// serves, which serves it there as it next looks at the store, it serves
+// nothing, and returns the port s is served at.
 //
-//   - A link, type: link, is its url, an http or https URL
+//   - Its type is the session's own, where its sessions: gives one, as
+//     format 1 gives a step that names the session the session's type, or
+//     else with:'s.
+//   - A link, type: link, is its url, an absolute http or https URL
 //     (session_url_invalid), which is announced, and served by none.
 //   - A tunnel, any other type, is a service at remoteHost, localhost by
 //     default, and remotePort, as its target reaches it: the workspace,
 //     this machine, for none, "", localhost or user-workspace, where
 //     remoteHost is localhost whatever it says, as format 1 has it; or the
 //     cluster of the clusters file whose name, which is its id, it gives
-//     (session_target_unknown), reached over SSH through its host. A port,
-//     remotePort or localPort, is a whole number from 1 to 65535, or text
-//     of one (session_port_invalid). The session is served at localPort,
-//     or, without one, at the port it is served at already, or one the
-//     system picks; a step that gives another moves it there.
+//     (session_target_unknown), reached over SSH through its host.
+//     remotePort is a whole number from 1 to 65535, or text of one
+//     (session_port_invalid). localPort, format 1 ignores, and so does
+//     Point: a session is served at a port of the system's choosing.
 //
 // What a platform alone does, targetInfo's Kubernetes resource, openAI and
-// apiKey, is session_update_unsupported, and so is a tunnel to the
-// workspace whose session's useTLS: is true, which meridian can't yet
-// reach over TLS that it checks: a tunnel to a cluster ignores it, as
-// format 1 does. status, which format 1 ignores, it ignores too.
+// apiKey, is session_update_unsupported; a tunnel to the workspace whose
+// session's useTLS: is true, which meridian can't yet reach over TLS that
+// it checks, is session_tls_unsupported: a tunnel to a cluster ignores it,
+// as format 1 does. status, which format 1 ignores, it ignores too.
 func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compile.SessionUpdate, serve bool) (coordinator.SessionPoint, error) {
 	w := u.With
 	for _, field := range []string{"targetInfo", "openAI", "apiKey"} {
@@ -299,7 +322,11 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 			return coordinator.SessionPoint{}, problems.SessionUpdateUnsupported.Problem(problems.Params{"name": s.Name, "field": field})
 		}
 	}
-	if expr.Text(w["type"]) == "link" {
+	typ := expr.Text(w["type"])
+	if own := expr.Text(s.Def["type"]); own != "" {
+		typ = own
+	}
+	if typ == "link" {
 		link, err := url.Parse(expr.Text(w["url"]))
 		if err != nil || link.Host == "" || link.Scheme != "http" && link.Scheme != "https" {
 			return coordinator.SessionPoint{}, problems.SessionURLInvalid.Problem(problems.Params{"value": problems.Show(w["url"])})
@@ -322,39 +349,32 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 	case "", "localhost", "user-workspace":
 		p.RemoteHost = "localhost"
 		if s.Def["useTLS"] == true {
-			return coordinator.SessionPoint{}, problems.SessionUpdateUnsupported.Problem(problems.Params{"name": s.Name, "field": "useTLS"})
+			return coordinator.SessionPoint{}, problems.SessionTLSUnsupported.Problem(problems.Params{"name": s.Name})
 		}
 	default:
 		if _, ok := h.cfg.ClusterHost(target); !ok {
-			return coordinator.SessionPoint{}, problems.SessionTargetUnknown.Problem(problems.Params{"target": target, "clusters": problems.QuoteAll(h.cfg.ClusterNames())})
+			clusters := h.cfg.ClusterNames()
+			return coordinator.SessionPoint{}, problems.SessionTargetUnknown.Problem(problems.Params{
+				"target": target, "clusters": problems.QuoteAll(clusters), "listed": strconv.FormatBool(len(clusters) > 0),
+			})
 		}
 		p.Cluster = target
 		if p.RemoteHost == "" {
 			p.RemoteHost = "localhost"
 		}
 	}
-	port, given := 0, false
-	if v, ok := w["localPort"]; ok && v != nil {
-		if port, ok = portOf(v); !ok {
-			return coordinator.SessionPoint{}, problems.SessionPortInvalid.Problem(problems.Params{"key": "localPort", "value": problems.Show(v)})
-		}
-		given = true
-	}
 	data, err := jsonv2.Marshal(p)
 	if err != nil {
 		return coordinator.SessionPoint{}, err
 	}
 	if !serve {
-		if !given {
-			port = s.Port
-		}
-		return coordinator.SessionPoint{Point: data, Port: port, PortGiven: given}, nil
+		return coordinator.SessionPoint{Point: data, Port: s.Port}, nil
 	}
-	served, err := h.serve(ctx, s, p, string(data), port)
+	served, err := h.serve(ctx, s, p, string(data))
 	if err != nil {
 		return coordinator.SessionPoint{}, err
 	}
-	return coordinator.SessionPoint{Point: data, Port: served, PortGiven: given}, nil
+	return coordinator.SessionPoint{Point: data, Port: served}, nil
 }
 
 // portOf returns v as a port, a whole number from 1 to 65535, as JSON
@@ -384,26 +404,20 @@ func portOf(v any) (int, bool) {
 	return int(n), true
 }
 
-// serve serves the session s where p, encoded as point, says, at port, or,
-// for 0, at the port it is served at already, or one the system picks; and
-// returns the port it serves it at. A session served already at the port
-// is pointed there, and one a step moves to another port is served there
-// alone, once it is.
-func (h *SessionHost) serve(ctx context.Context, s coordinator.Session, p sessionPoint, point string, port int) (int, error) {
+// serve serves the session s where p, encoded as point, says, at the port
+// it is served at already, or one the system picks; and returns the port
+// it serves it at.
+func (h *SessionHost) serve(ctx context.Context, s coordinator.Session, p sessionPoint, point string) (int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	sv := h.served[s.ID]
-	if sv != nil && (port == 0 || port == sv.listener.Port()) {
+	if sv := h.served[s.ID]; sv != nil {
 		sv.proxy.Repoint(h.dialer(p))
 		sv.point = point
 		return sv.listener.Port(), nil
 	}
-	next, err := h.start(ctx, s, p, point, port)
+	next, err := h.start(ctx, s, p, point, 0)
 	if err != nil {
 		return 0, err
-	}
-	if sv != nil {
-		sv.close()
 	}
 	h.served[s.ID] = next
 	h.announceTunnel(ctx, s, next.listener.Port(), p)
@@ -421,7 +435,7 @@ func (h *SessionHost) start(ctx context.Context, s coordinator.Session, p sessio
 		return nil, err
 	}
 	proxy, err := sessionproxy.New(h.life, sessionproxy.Config{
-		User: h.user, Name: s.Name, Label: s.Label, Run: s.Run, Key: s.Key,
+		User: h.user.Name, Name: s.Name, Label: s.Label, Run: s.Run, Key: s.Key,
 		Session: s.ID, Secret: secret, Keyring: h.keys, Codes: redeemer{h.codes}, Dial: h.dialer(p), Log: h.log,
 	})
 	if err != nil {
@@ -485,12 +499,10 @@ func (h *SessionHost) dialer(p sessionPoint) sessionproxy.DialFunc {
 // process serves, as the store has them, and no others
 // (coordinator.SessionHost): a session that points somewhere, and isn't
 // served yet, as one a process that stopped served, at its port, or, where
-// that is taken now and the step didn't give it, one the system picks; one
-// whose salt changed, as a reset changes it, with its new secret; one
-// pointed elsewhere, or at another port, as another process's step may
-// have, there; and none that has ended. What it can't serve it says, and
-// the port it picks, in the store (SessionStore.SessionServed), and tries
-// again as Serve is called again.
+// that is another program's now, one the system picks, which it keeps in
+// the store (SessionStore.SessionServed); one whose salt changed, as a
+// reset changes it, with its new secret; one pointed elsewhere, as another
+// process's step may have, there; and none that has ended.
 func (h *SessionHost) Serve(ctx context.Context, live []coordinator.Session) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -516,8 +528,8 @@ func (h *SessionHost) Serve(ctx context.Context, live []coordinator.Session) {
 			continue
 		}
 		sv := h.served[s.ID]
-		if sv == nil || s.Port != 0 && s.Port != sv.listener.Port() {
-			h.serveAgain(ctx, s, p, sv)
+		if sv == nil {
+			h.serveAgain(ctx, s, p)
 			continue
 		}
 		if string(s.Salt) != sv.salt {
@@ -546,38 +558,23 @@ func (h *SessionHost) Serve(ctx context.Context, live []coordinator.Session) {
 }
 
 // serveAgain serves the session s, which points where p says, and which
-// this process doesn't serve yet, as one that took it over finds it, or
-// serves, as was, at another port than the store's, as another process's
-// step gave: at its port, or, where that is taken now and the step didn't
-// give it, at one the system picks, which the store keeps. A session it
-// can't serve, as at a port another program holds, it says so in the store,
-// and serves as it was, if it was; it tries again as Serve is called again.
-func (h *SessionHost) serveAgain(ctx context.Context, s coordinator.Session, p sessionPoint, was *served) {
+// this process doesn't serve yet, as one that took it over finds it: at
+// its port, or, where that is another program's now, at one the system
+// picks, which the store keeps; and tries again as Serve is called again
+// where it can't.
+func (h *SessionHost) serveAgain(ctx context.Context, s coordinator.Session, p sessionPoint) {
 	next, err := h.start(ctx, s, p, string(s.Point), s.Port)
-	if taken, isProblem := errors.AsType[*problem.Problem](err); isProblem && !s.PortGiven && taken.Code == problems.SessionLocalPortTaken.Code() {
+	if err != nil && s.Port != 0 {
 		next, err = h.start(ctx, s, p, string(s.Point), 0)
 	}
 	if err != nil {
-		prob, isProblem := errors.AsType[*problem.Problem](err)
-		switch {
-		case isProblem && s.Problem != nil && s.Problem.Code == prob.Code:
-			// The store says so already.
-		case isProblem:
-			if err := h.codes.SessionServed(ctx, s.ID, 0, prob); err != nil {
-				h.log.Warn("local: couldn't say why a session isn't served", "session", s.Name, "err", err)
-			}
-		default:
-			h.log.Warn("local: couldn't serve a session", "session", s.Name, "err", err)
-		}
+		h.log.Warn("local: couldn't serve a session", "session", s.Name, "err", err)
 		return
 	}
 	if port := next.listener.Port(); port != s.Port || s.Problem != nil {
 		if err := h.codes.SessionServed(ctx, s.ID, port, nil); err != nil {
 			h.log.Warn("local: couldn't store a session's port", "session", s.Name, "err", err)
 		}
-	}
-	if was != nil {
-		was.close()
 	}
 	h.served[s.ID] = next
 	h.announceTunnel(ctx, s, next.listener.Port(), p)
@@ -593,7 +590,7 @@ func (h *SessionHost) announceTunnel(ctx context.Context, s coordinator.Session,
 	link := ""
 	if h.terminal {
 		var err error
-		if link, err = NewSessionLink(ctx, h.codes, h.keys, h.user, s, port, p.Slug); err != nil {
+		if link, err = NewSessionLink(ctx, h.codes, h.keys, h.user.Name, s, port, p.Slug); err != nil {
 			h.log.Warn("local: couldn't make a session's link", "session", s.Name, "err", err)
 			link = ""
 		}
@@ -666,8 +663,10 @@ func SessionLink(user string, s coordinator.Session, port int, slug, code string
 // it: a link session's url, as it is; or, for a tunnel, a link to it at
 // the port it is served at, with a new one-time code. A session that
 // points nowhere yet, or whose process hasn't served it at a port yet, is
-// problems.SessionNotReady; one its process can't serve, as at a port
-// another program holds, the problem it said.
+// problems.SessionNotReady; one its process said it can't serve, the
+// problem it said; and one no process serves, as after the one that
+// served it ended, problems.SessionNotServed, which says how to serve it
+// again: it makes no code that nothing would redeem.
 func (h *SessionHost) Link(ctx context.Context, s coordinator.Session) (string, error) {
 	notReady := problems.SessionNotReady.Problem(problems.Params{"run": s.Run, "key": s.Key})
 	if s.Point == nil {
@@ -691,5 +690,11 @@ func (h *SessionHost) Link(ctx context.Context, s coordinator.Session) (string, 
 	if codes == nil {
 		return "", errors.New("local: the session host has no store before Attach")
 	}
-	return NewSessionLink(ctx, codes, h.keys, h.user, s, s.Port, p.Slug)
+	switch serving, err := codes.SessionServing(ctx, s.ID); {
+	case err != nil:
+		return "", err
+	case !serving:
+		return "", problems.SessionNotServed.Problem(problems.Params{"run": s.Run, "key": s.Key, "root": s.Root})
+	}
+	return NewSessionLink(ctx, codes, h.keys, h.user.Name, s, s.Port, p.Slug)
 }

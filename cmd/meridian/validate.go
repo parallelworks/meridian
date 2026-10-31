@@ -22,7 +22,6 @@ import (
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/format"
 	"github.com/parallelworks/meridian/internal/jsonvalue"
-	"github.com/parallelworks/meridian/internal/login"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -156,10 +155,9 @@ func compileWorkflow(ctx context.Context, c *cli, inputs *inputOptions, path str
 	if c.sources != nil {
 		sources = c.sources
 	}
-	user, _ := login.Name()
 	w.created, w.diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
 		Source: plan.Source{Location: workflowLocation(path)},
-		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: sources, Sessions: local.SessionNames{User: user},
+		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: sources, Sessions: local.SessionNames{User: local.UserLogin()},
 	})
 	if err != nil {
 		return nil, err

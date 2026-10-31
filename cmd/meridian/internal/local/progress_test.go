@@ -255,9 +255,9 @@ func TestProgressSession(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want := `session web of run 7: http://x.localhost:8000/me/session/alice/web-1/?meridian-code=c
+	want := `session web of run 7 is ready: http://x.localhost:8000/me/session/alice/web-1/?meridian-code=c
 session web of run 7 is ready: meridian session url 7 web
-session web of run 7: https://example.com/\x1b[2J
+session web of run 7 is ready: https://example.com/\x1b[2J
 `
 	if out.String() != want || errs.Len() != 0 {
 		t.Errorf("the sessions are said as\n%s\nwant\n%s", out.String(), want)

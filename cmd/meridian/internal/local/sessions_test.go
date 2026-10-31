@@ -26,11 +26,20 @@ import (
 )
 
 // testSessionStore is a store's sessions as a test keeps them: their
-// codes, and what a host records of how it serves each.
+// codes, what a host records of how it serves each, and which no process
+// serves.
 type testSessionStore struct {
 	mu     sync.Mutex
 	codes  map[string]bool
 	served []string
+	// unserved are the sessions no process serves, by their IDs.
+	unserved map[string]bool
+}
+
+func (s *testSessionStore) SessionServing(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.unserved[id], nil
 }
 
 func (s *testSessionStore) AddSessionCode(_ context.Context, id string, mac []byte, _ time.Duration) error {
@@ -107,7 +116,7 @@ func newTestSessionHost(t *testing.T) (*SessionHost, *testSessionStore, *[]strin
 		mu.Unlock()
 		return (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	}
-	h, err := NewSessionHost(cfg, "alice", []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, nil)
+	h, err := NewSessionHost(cfg, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +137,12 @@ func testSession(def map[string]any) coordinator.Session {
 
 // TestCheckSessions checks how meridian run checks and names a workflow's
 // sessions: by prompt-for-name's default, a literal one a URL's path holds,
-// or by key and random bits; never one meridian run can't serve; and those
-// of a workflow a step calls, which the coordinator names, it only checks.
+// or by key and random bits; never one meridian run can't serve, nor any
+// without a login name; and those of a workflow a step calls, which the
+// coordinator names, it only checks.
 func TestCheckSessions(t *testing.T) {
 	t.Parallel()
-	names, err := checkSessions("alice", map[string]any{
+	names, err := checkSessions(Login{Name: "alice"}, map[string]any{
 		"desktop": map[string]any{"prompt-for-name": map[string]any{"default": "my-desktop"}},
 		"Web UI!": map[string]any{},
 	}, false)
@@ -142,7 +152,7 @@ func TestCheckSessions(t *testing.T) {
 	if names["desktop"] != "my-desktop" || !regexp.MustCompile(`^web-ui-[a-z2-7]{8}$`).MatchString(names["Web UI!"]) {
 		t.Errorf("the sessions are named %v", names)
 	}
-	again, _ := checkSessions("alice", map[string]any{"Web UI!": map[string]any{}}, false)
+	again, _ := checkSessions(Login{Name: "alice"}, map[string]any{"Web UI!": map[string]any{}}, false)
 	if again["Web UI!"] == names["Web UI!"] {
 		t.Errorf("two runs' sessions are both named %q", again["Web UI!"])
 	}
@@ -152,28 +162,36 @@ func TestCheckSessions(t *testing.T) {
 	}{
 		{map[string]any{"detach": true}, problems.SessionFieldUnsupported},
 		{map[string]any{"openAI": true}, problems.SessionFieldUnsupported},
-		{map[string]any{"useCustomDomain": true}, problems.SessionFieldUnsupported},
 		{map[string]any{"prompt-for-name": map[string]any{}}, problems.SessionNameNeeded},
 		{map[string]any{"prompt-for-name": nil}, problems.SessionNameNeeded},
 		{map[string]any{"prompt-for-name": map[string]any{"default": "a/b"}}, problems.SessionNameNeeded},
 		{map[string]any{"prompt-for-name": map[string]any{"default": "${{ inputs.x }}"}}, problems.SessionNameNeeded},
 	} {
-		if _, err := checkSessions("alice", map[string]any{"s": tc.def}, false); !isKind(err, tc.kind) {
+		if _, err := checkSessions(Login{Name: "alice"}, map[string]any{"s": tc.def}, false); !isKind(err, tc.kind) {
 			t.Errorf("checkSessions(%v) = %v, want %s", tc.def, err, tc.kind.Code())
 		}
 	}
-	if _, err := checkSessions("a b", map[string]any{"s": map[string]any{}}, false); !isKind(err, problems.SessionUserUnsupported) {
+	if _, err := checkSessions(Login{Name: "a b"}, map[string]any{"s": map[string]any{}}, false); !isKind(err, problems.SessionUserUnsupported) {
 		t.Errorf("a login name a path can't hold = %v", err)
+	}
+	if _, err := checkSessions(Login{Err: errors.New("no such user")}, map[string]any{"s": map[string]any{}}, false); !isKind(err, problems.LoginNameUnknown) {
+		t.Errorf("no login name = %v", err)
+	}
+	// useCustomDomain asks nothing here, where each session has a host
+	// name of its own, as format 1 asks nothing where a platform has no
+	// domain for sessions.
+	if names, err := checkSessions(Login{Name: "alice"}, map[string]any{"s": map[string]any{"useCustomDomain": true}}, false); err != nil || names["s"] == "" {
+		t.Errorf("a session whose useCustomDomain is true = %v, %v", names, err)
 	}
 	// A called workflow's: prompt-for-name asks nothing, and detach: is
 	// refused all the same.
-	if names, err := checkSessions("alice", map[string]any{"s": map[string]any{"prompt-for-name": nil}}, true); err != nil || len(names) != 0 {
+	if names, err := checkSessions(Login{Name: "alice"}, map[string]any{"s": map[string]any{"prompt-for-name": nil}}, true); err != nil || len(names) != 0 {
 		t.Errorf("a called workflow's sessions = %v, %v", names, err)
 	}
-	if _, err := checkSessions("alice", map[string]any{"s": map[string]any{"detach": true}}, true); !isKind(err, problems.SessionFieldUnsupported) {
+	if _, err := checkSessions(Login{Name: "alice"}, map[string]any{"s": map[string]any{"detach": true}}, true); !isKind(err, problems.SessionFieldUnsupported) {
 		t.Errorf("a called workflow's detached session = %v", err)
 	}
-	if names, err := (SessionNames{User: "alice"}).Check(t.Context(), map[string]any{"s": map[string]any{}}); err != nil || names["s"] == "" {
+	if names, err := (SessionNames{User: Login{Name: "alice"}}).Check(t.Context(), map[string]any{"s": map[string]any{}}); err != nil || names["s"] == "" {
 		t.Errorf("SessionNames.Check = %v, %v", names, err)
 	}
 }
@@ -206,7 +224,9 @@ func TestSessionPoint(t *testing.T) {
 	}{
 		{map[string]any{"remotePort": float64(8888)}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321, false},
 		{map[string]any{"remotePort": "8888", "remoteHost": "elsewhere", "target": "user-workspace"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321, false},
-		{map[string]any{"remotePort": "8888", "target": "localhost", "localPort": "9000"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 9000, true},
+		// localPort, format 1 ignores.
+		{map[string]any{"remotePort": "8888", "target": "localhost", "localPort": "9000"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321, false},
+		{map[string]any{"remotePort": "8888", "localPort": "nonsense"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321, false},
 		{map[string]any{"remotePort": float64(80), "target": "hpc", "remoteHost": "node-1", "slug": "lab?x=1"}, `{"type":"tunnel","cluster":"hpc","remoteHost":"node-1","remotePort":80,"slug":"lab?x=1"}`, 4321, false},
 		{map[string]any{"remotePort": float64(80), "target": "hpc"}, `{"type":"tunnel","cluster":"hpc","remoteHost":"localhost","remotePort":80}`, 4321, false},
 		{map[string]any{"type": "link", "url": "https://example.com/x"}, `{"type":"link","url":"https://example.com/x"}`, 0, false},
@@ -229,18 +249,44 @@ func TestSessionPoint(t *testing.T) {
 		{map[string]any{"remotePort": float64(1.5)}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": "+80"}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": "-1"}, nil, problems.SessionPortInvalid},
-		{map[string]any{"remotePort": float64(1), "localPort": "0"}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": float64(1), "target": "nowhere"}, nil, problems.SessionTargetUnknown},
 		{map[string]any{"type": "link", "url": "ftp://example.com/"}, nil, problems.SessionURLInvalid},
 		{map[string]any{"type": "link", "url": "/relative"}, nil, problems.SessionURLInvalid},
 		{map[string]any{"remotePort": float64(1), "targetInfo": map[string]any{"name": "pod"}}, nil, problems.SessionUpdateUnsupported},
 		{map[string]any{"remotePort": float64(1), "openAI": true}, nil, problems.SessionUpdateUnsupported},
 		{map[string]any{"remotePort": float64(1), "apiKey": "k"}, nil, problems.SessionUpdateUnsupported},
-		{map[string]any{"remotePort": float64(1)}, map[string]any{"useTLS": true}, problems.SessionUpdateUnsupported},
+		{map[string]any{"remotePort": float64(1)}, map[string]any{"useTLS": true}, problems.SessionTLSUnsupported},
 	} {
 		if _, err := point(tc.with, tc.def); !isKind(err, tc.kind) {
 			t.Errorf("Point(%v) of %v = %v, want %s", tc.with, tc.def, err, tc.kind.Code())
 		}
+	}
+	// The session's own type is the step's, as format 1 gives a step that
+	// names the session: a link session's url, with no type of the
+	// step's, and a tunnel's port, whatever type the step gives.
+	if got, err := point(map[string]any{"url": "https://example.com/"}, map[string]any{"type": "link"}); err != nil || string(got.Point) != `{"type":"link","url":"https://example.com/"}` {
+		t.Errorf("a link session pointed without a type = %s, %v", got.Point, err)
+	}
+	if got, err := point(map[string]any{"type": "link", "url": "https://example.com/", "remotePort": float64(2)}, map[string]any{"type": "tunnel"}); err != nil || string(got.Point) != `{"type":"tunnel","remoteHost":"localhost","remotePort":2}` {
+		t.Errorf("a tunnel session pointed as a link = %s, %v", got.Point, err)
+	}
+	// A target's problem lists the clusters, or says there are none.
+	_, err := point(map[string]any{"remotePort": float64(1), "target": "nowhere"}, nil)
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Params["clusters"] != `"hpc"` || p.Params["listed"] != "true" {
+		t.Errorf("a target that names no cluster = %v", err)
+	}
+	bare, err := LoadConfig(configDir(t, nil), lookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	none, err := NewSessionHost(bare, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer none.Close()
+	_, err = none.Point(t.Context(), s, compile.SessionUpdate{Name: s.Name, With: map[string]any{"remotePort": float64(1), "target": "nowhere"}}, false)
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Params["listed"] != "false" {
+		t.Errorf("a target where clusters.yaml has none = %v", err)
 	}
 	// A tunnel to a cluster ignores useTLS, as format 1 does.
 	if _, err := point(map[string]any{"remotePort": float64(1), "target": "hpc"}, map[string]any{"useTLS": true}); err != nil {
@@ -369,10 +415,9 @@ func TestSessionHostServes(t *testing.T) {
 
 // TestSessionHostServesAgain checks a session a host takes over, as
 // another process stopped serving it: at its port, or, where another
-// program holds that now, at one the system picks, unless the step gave
-// it, which the store keeps; one it can't serve it says so, once, in the
-// store; a cluster's service it reaches through the cluster's host; and a
-// link session it says once, and again only where it points elsewhere.
+// program holds that now, at one the system picks, which the store keeps;
+// a cluster's service it reaches through the cluster's host; and a link
+// session it says once, and again only where it points elsewhere.
 func TestSessionHostServesAgain(t *testing.T) {
 	t.Parallel()
 	h, store, dials := newTestSessionHost(t)
@@ -391,37 +436,29 @@ func TestSessionHostServesAgain(t *testing.T) {
 
 	moved := testSession(map[string]any{})
 	moved.Point, moved.Port = []byte(fmt.Sprintf(`{"type":"tunnel","cluster":"hpc","remoteHost":"node-1","remotePort":%d}`, svcPort)), taken
-	given := testSession(map[string]any{})
-	given.ID, given.Key, given.Name = "given", "given", "given-1"
-	given.Point, given.Port, given.PortGiven = []byte(`{"type":"tunnel","remoteHost":"localhost","remotePort":1}`), taken, true
 	link := testSession(map[string]any{})
 	link.ID, link.Key, link.Name = "link", "docs", "docs-1"
 	link.Point = []byte(`{"type":"link","url":"https://example.com/a"}`)
-	h.Serve(t.Context(), []coordinator.Session{moved, given, link})
+	h.Serve(t.Context(), []coordinator.Session{moved, link})
 	records := store.records()
-	if len(records) != 2 || !strings.HasPrefix(records[0], "abc ") || records[0] == "abc "+strconv.Itoa(taken) ||
-		records[1] != "given "+string(problems.SessionLocalPortTaken.Code()) {
+	if len(records) != 1 || !strings.HasPrefix(records[0], "abc ") || records[0] == "abc "+strconv.Itoa(taken) {
 		t.Fatalf("the store keeps %q", records)
 	}
 	newPort, _ := strconv.Atoi(strings.TrimPrefix(records[0], "abc "))
 	// The store says so, as the coordinator gives it again: nothing moves,
 	// and nothing is said again.
 	moved.Port = newPort
-	given.Problem = problems.SessionLocalPortTaken.Problem(problems.Params{"port": strconv.Itoa(taken)})
 	for range 2 {
-		h.Serve(t.Context(), []coordinator.Session{moved, given, link})
+		h.Serve(t.Context(), []coordinator.Session{moved, link})
 	}
-	if again := store.records(); len(again) != 2 {
+	if again := store.records(); len(again) != 1 {
 		t.Errorf("the store keeps %q, said again", again)
-	}
-	if _, err := h.Link(t.Context(), given); !isKind(err, problems.SessionLocalPortTaken) {
-		t.Errorf("a link to a session that can't be served = %v", err)
 	}
 	if lines := said.lines(); len(lines) != 2 || lines[0] != "7 web " || lines[1] != "7 docs https://example.com/a" {
 		t.Errorf("the host said %q", lines)
 	}
 	link.Point = []byte(`{"type":"link","url":"https://example.com/b"}`)
-	h.Serve(t.Context(), []coordinator.Session{moved, given, link})
+	h.Serve(t.Context(), []coordinator.Session{moved, link})
 	if lines := said.lines(); len(lines) != 3 || lines[2] != "7 docs https://example.com/b" {
 		t.Errorf("pointed elsewhere, the link is said as %q", lines)
 	}
@@ -444,12 +481,13 @@ func TestSessionHostServesAgain(t *testing.T) {
 }
 
 // TestSessionHostLink checks the links meridian session url prints: none
-// for a session that points nowhere, or isn't served at a port yet; a link
+// for a session that points nowhere, or isn't served at a port yet, or
+// that its process can't serve, or that no process serves; a link
 // session's own url; and a tunnel's at its host name, its path and its
 // port, with what its slug says after it.
 func TestSessionHostLink(t *testing.T) {
 	t.Parallel()
-	h, _, _ := newTestSessionHost(t)
+	h, store, _ := newTestSessionHost(t)
 	s := testSession(map[string]any{})
 	if _, err := h.Link(t.Context(), s); !isKind(err, problems.SessionNotReady) {
 		t.Errorf("a link to a session that points nowhere = %v", err)
@@ -457,6 +495,30 @@ func TestSessionHostLink(t *testing.T) {
 	s.Point = []byte(`{"type":"tunnel","remoteHost":"localhost","remotePort":1}`)
 	if _, err := h.Link(t.Context(), s); !isKind(err, problems.SessionNotReady) {
 		t.Errorf("a link to a session served at no port yet = %v", err)
+	}
+	s.Port = 8000
+	s.Problem = problems.SessionLocalPortRefused.Problem(problems.Params{"port": "8000"})
+	if _, err := h.Link(t.Context(), s); !isKind(err, problems.SessionLocalPortRefused) {
+		t.Errorf("a link to a session its process can't serve = %v", err)
+	}
+	s.Problem = nil
+	// After the process that served it ended: no code nothing would
+	// redeem, but how to serve it again.
+	store.mu.Lock()
+	store.unserved = map[string]bool{s.ID: true}
+	store.mu.Unlock()
+	_, err := h.Link(t.Context(), s)
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionNotServed.Code() || p.Params["root"] != "7" {
+		t.Errorf("a link to a session no process serves = %v", err)
+	}
+	if len(store.codes) != 0 {
+		t.Errorf("a link to a session no process serves made a code")
+	}
+	store.mu.Lock()
+	store.unserved = nil
+	store.mu.Unlock()
+	if got, err := h.Link(t.Context(), s); err != nil || !strings.Contains(got, sessionproxy.CodeParam+"=") {
+		t.Errorf("a link to a session served = %q, %v", got, err)
 	}
 	s.Point = []byte(`{"type":"link","url":"https://example.com/"}`)
 	if got, err := h.Link(t.Context(), s); err != nil || got != "https://example.com/" {

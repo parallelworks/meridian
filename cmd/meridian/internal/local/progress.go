@@ -142,7 +142,7 @@ func (p *Progress) Session(run, key, link string) error {
 		_, err := fmt.Fprintf(p.out, "session %s of run %s is ready: meridian session url %s %s\n", key, run, run, key)
 		return err
 	}
-	_, err := fmt.Fprintf(p.out, "session %s of run %s: %s\n", key, run, problems.EscapeControl(link))
+	_, err := fmt.Fprintf(p.out, "session %s of run %s is ready: %s\n", key, run, problems.EscapeControl(link))
 	return err
 }
 

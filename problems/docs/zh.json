@@ -876,7 +876,7 @@
   },
   "session_field_unsupported": {
     "title": "meridian run 无法提供的会话",
-    "why": "meridian run 在其运行期间于本机的一个专用端口上提供会话。detach: true 要求会话比其运行更长久，这需要一个比命令更长久的协调器，即将来的 meridian serve。openAI: true 要求平台把会话注册为模型的端点，useCustomDomain: true 要求在专用域名上提供它：这里都没有。",
+    "why": "meridian run 在其运行期间于本机的一个专用端口上提供会话。detach: true 要求会话比其运行更长久，这需要一个比命令更长久的协调器，即将来的 meridian serve。openAI: true 要求平台把会话注册为模型的端点，这里没有平台。useCustomDomain: true 会被忽略，就像格式 1 在平台没有会话域名时那样：这里每个会话都有自己的主机名。",
     "fix": [
       "要用 meridian run 运行工作流，请去掉该字段或将其设为 false。"
     ]
@@ -890,9 +890,9 @@
   },
   "session_update_unsupported": {
     "title": "meridian run 无法执行的 update-session",
-    "why": "targetInfo 让会话指向一个 Kubernetes 资源，平台用它自己的凭据访问该资源；openAI 和 apiKey 把会话注册为模型的端点：meridian run 都不具备。会话的 useTLS 为 true、指向本机的隧道需要以 HTTPS 连接服务并检查其证书，meridian run 目前还做不到，也不会退回到 HTTP。指向集群的隧道会像格式 1 那样忽略 useTLS。",
+    "why": "targetInfo 让会话指向一个 Kubernetes 资源，平台用它自己的凭据访问该资源；openAI 和 apiKey 把会话注册为模型的端点：meridian run 都不具备。",
     "fix": [
-      "从 update-session 的 with: 中去掉该字段；若是 useTLS，请在本机的回环地址上以 HTTP 提供应用。"
+      "从 update-session 的 with: 中去掉该字段。"
     ]
   },
   "session_url_invalid": {
@@ -904,7 +904,7 @@
   },
   "session_port_invalid": {
     "title": "不是 1 到 65535 之间端口的值",
-    "why": "remotePort（服务的端口）和 localPort（在本机回环地址上提供会话所用的端口）都按格式 1 的读法，是 1 到 65535 之间的整数或其文本。隧道需要 remotePort。格式 1 接受更多形式，如 -1 或 +80，Meridian 会拒绝。",
+    "why": "remotePort（服务的端口）按格式 1 的读法，是 1 到 65535 之间的整数或其文本，隧道需要它。格式 1 接受更多形式，如 -1 或 +80，Meridian 会拒绝。",
     "fix": [
       "以 1 到 65535 之间的数字给出端口，例如 remotePort: 8888。"
     ]
@@ -914,6 +914,13 @@
     "why": "隧道的 target 是从哪里访问其服务：无、\"\"、localhost 或 user-workspace 表示 workspace，即本机；否则按 id 指定一个集群，clusters.yaml 中集群的 id 就是它的名称，由 ${{ inputs.<cluster>.id }} 给出。Meridian 通过集群的主机经 SSH 访问服务。",
     "fix": [
       "让 target 指向某个 compute-clusters 输入的 ${{ inputs.<cluster>.id }}，或把该集群加入 clusters.yaml。"
+    ]
+  },
+  "session_tls_unsupported": {
+    "title": "meridian run 尚无法访问的 TLS 会话",
+    "why": "会话的 useTLS 为 true、指向本机的隧道以 HTTPS 连接其服务。meridian run 目前还无法检查本机服务的证书，也不会改用普通 HTTP 访问它。指向集群的隧道会像格式 1 那样忽略 useTLS。",
+    "fix": [
+      "在本机的回环地址上以 HTTP 提供应用，并从会话中去掉 useTLS。"
     ]
   },
   "runs_on_invalid": {
@@ -2525,16 +2532,30 @@
   },
   "session_key_unknown": {
     "title": "没有该会话的运行",
-    "why": "meridian session 在运行的树中尚未结束的会话里，按工作流 sessions: 中的键查找运行的会话：会话随其树顶端的运行一起结束。",
+    "why": "meridian session 在运行于其树中的调用尚未结束的会话里，按工作流 sessions: 中的键查找运行的会话：会话随其树顶端的运行一起结束。消息列出了该运行拥有的键。",
     "fix": [
-      "运行 meridian status 查看该运行，并给出其某个会话的键。"
+      "给出该运行某个会话的键，即运行在提供会话时输出中所示的键。"
     ]
   },
   "session_not_ready": {
-    "title": "尚未指向任何地方的会话",
-    "why": "只有在使用 parallelworks/update-session 的步骤让会话指向某个服务之后，会话才会被提供，也才有链接。",
+    "title": "尚未提供的会话",
+    "why": "只有在使用 parallelworks/update-session 的步骤让会话指向某个服务，并且接管并提供它的进程为它在某个端口上监听之后，会话才会被提供，也才有链接。",
     "fix": [
       "等待 meridian run 显示的该步骤完成后再试。"
+    ]
+  },
+  "session_not_served": {
+    "title": "没有进程提供的会话",
+    "why": "会话由接管它的 meridian run、resume 或 cancel 在该进程存活期间提供。其链接的一次性代码由该进程兑换，因此在没有进程提供会话时，meridian session url 不会生成一个无人兑换的代码。",
+    "fix": [
+      "用会话所在树顶端的运行执行 meridian resume，让它重新提供其会话，然后再请求链接。"
+    ]
+  },
+  "login_name_unknown": {
+    "title": "运行 meridian 的用户没有登录名",
+    "why": "会话的路径是 /me/session/<user>/<name>/，其中 <user> 是运行 Meridian 的用户的登录名，工作流从 PW_USER 读取它。Meridian 从系统的用户数据库读取它，否则读取 $USER，但两者都没有找到。",
+    "fix": [
+      "以系统用户数据库中存在的用户身份运行 meridian，或将 USER 设为登录名。"
     ]
   },
   "source_server_unknown": {

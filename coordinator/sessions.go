@@ -688,6 +688,12 @@ func (c *Coordinator) SessionServed(ctx context.Context, id string, port int, p 
 	return c.store.Tx(ctx, func(tx *store.Tx) error { return tx.SessionServed(id, port, p) })
 }
 
+// SessionServing reports whether a process serves the session id now: one
+// that holds its lease (store.Store.ServeSession), this one or another.
+func (c *Coordinator) SessionServing(_ context.Context, id string) (bool, error) {
+	return c.store.SessionHeld(id)
+}
+
 // ResetSession replaces the salt of the session id, which signs out every
 // browser that holds its secret, and deletes its one-time codes. It holds
 // sessionsMu as it does, so that a look of ServeSessions's, and a step's

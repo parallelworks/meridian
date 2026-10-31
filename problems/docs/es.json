@@ -876,7 +876,7 @@
   },
   "session_field_unsupported": {
     "title": "Sesión que meridian run no puede servir",
-    "why": "meridian run sirve una sesión en esta máquina, mientras dura su ejecución, en un puerto propio. detach: true pide una sesión que sobrevive a su ejecución, lo que necesita un coordinador que sobreviva al comando, como será meridian serve. openAI: true pide a una plataforma registrar la sesión como el punto de acceso de un modelo, y useCustomDomain: true servirla en un dominio propio: ninguna de las dos está aquí.",
+    "why": "meridian run sirve una sesión en esta máquina, mientras dura su ejecución, en un puerto propio. detach: true pide una sesión que sobrevive a su ejecución, lo que necesita un coordinador que sobreviva al comando, como será meridian serve. openAI: true pide a una plataforma registrar la sesión como el punto de acceso de un modelo, lo que no está aquí. useCustomDomain: true lo ignora, como el formato 1 donde una plataforma no tiene dominio para sesiones: aquí cada sesión tiene un nombre de host propio.",
     "fix": [
       "Quita el campo, o ponlo a false, para ejecutar el flujo de trabajo con meridian run."
     ]
@@ -890,9 +890,9 @@
   },
   "session_update_unsupported": {
     "title": "update-session que meridian run no puede hacer",
-    "why": "targetInfo apunta una sesión a un recurso de Kubernetes, al que llega una plataforma con sus propias credenciales, y openAI y apiKey la registran como el punto de acceso de un modelo: meridian run no tiene ninguna de las dos cosas. Un túnel a esta máquina cuya sesión tiene useTLS: true necesita HTTPS hasta el servicio, comprobando su certificado, lo que meridian run aún no puede hacer, y no recurre a HTTP. Un túnel a un clúster ignora useTLS, como el formato 1.",
+    "why": "targetInfo apunta una sesión a un recurso de Kubernetes, al que llega una plataforma con sus propias credenciales, y openAI y apiKey la registran como el punto de acceso de un modelo: meridian run no tiene ninguna de las dos cosas.",
     "fix": [
-      "Quita el campo del with: de update-session, o, para useTLS, sirve la aplicación por HTTP en la dirección de bucle local de esta máquina."
+      "Quita el campo del with: de update-session."
     ]
   },
   "session_url_invalid": {
@@ -904,7 +904,7 @@
   },
   "session_port_invalid": {
     "title": "Puerto que no es uno de 1 a 65535",
-    "why": "remotePort, el puerto del servicio, y localPort, el puerto de las direcciones de bucle local de esta máquina en el que servir la sesión, son cada uno un número entero de 1 a 65535, o el texto de uno, como los lee el formato 1. Un túnel necesita remotePort. El formato 1 acepta más, como -1 o +80, que Meridian rechaza.",
+    "why": "remotePort, el puerto del servicio, es un número entero de 1 a 65535, o el texto de uno, como lo lee el formato 1, y un túnel lo necesita. El formato 1 acepta más, como -1 o +80, que Meridian rechaza.",
     "fix": [
       "Da el puerto como un número de 1 a 65535, como remotePort: 8888."
     ]
@@ -914,6 +914,13 @@
     "why": "El target de un túnel es desde dónde se llega a su servicio: el workspace, esta máquina, para ninguno, \"\", localhost o user-workspace; o un clúster, por su id, que, para un clúster de clusters.yaml, es su nombre, como lo da ${{ inputs.<clúster>.id }}. Meridian llega al servicio por SSH a través del host del clúster.",
     "fix": [
       "Apunta target a ${{ inputs.<clúster>.id }} de una entrada compute-clusters, o añade el clúster a clusters.yaml."
+    ]
+  },
+  "session_tls_unsupported": {
+    "title": "Sesión por TLS a la que meridian run aún no llega",
+    "why": "Un túnel a esta máquina cuya sesión tiene useTLS: true se sirve por HTTPS hasta su servicio. meridian run aún no puede comprobar el certificado de un servicio de esta máquina, y no llega a él por HTTP en su lugar. Un túnel a un clúster ignora useTLS, como el formato 1.",
+    "fix": [
+      "Sirve la aplicación por HTTP en la dirección de bucle local de esta máquina, y quita useTLS de la sesión."
     ]
   },
   "runs_on_invalid": {
@@ -2525,16 +2532,30 @@
   },
   "session_key_unknown": {
     "title": "Ejecución sin esa sesión",
-    "why": "meridian session encuentra la sesión de una ejecución por su clave en las sessions: del flujo de trabajo, entre las del árbol de la ejecución que no han terminado: una sesión termina con la ejecución de arriba de su árbol.",
+    "why": "meridian session encuentra la sesión de una ejecución por su clave en las sessions: del flujo de trabajo, entre las de la llamada de la ejecución en su árbol que no han terminado: una sesión termina con la ejecución de arriba de su árbol. El mensaje lista las claves que tiene la ejecución.",
     "fix": [
-      "Ejecuta meridian status para ver la ejecución, y da la clave de una de sus sesiones."
+      "Da la clave de una de las sesiones de la ejecución, como la dice la salida de la ejecución al servir la sesión."
     ]
   },
   "session_not_ready": {
-    "title": "Sesión que aún no apunta a ninguna parte",
-    "why": "Una sesión se sirve una vez que un paso que usa parallelworks/update-session la apunta a un servicio, y solo entonces tiene un enlace.",
+    "title": "Sesión que aún no se sirve",
+    "why": "Una sesión se sirve una vez que un paso que usa parallelworks/update-session la apunta a un servicio, y el proceso que la sirve, que la toma, escucha en un puerto para ella; solo entonces tiene un enlace.",
     "fix": [
       "Espera al paso, que muestra meridian run, y vuelve a pedirlo."
+    ]
+  },
+  "session_not_served": {
+    "title": "Sesión que ningún proceso sirve",
+    "why": "Una sesión la sirve el meridian run, resume o cancel que la tomó, mientras ese proceso vive. Ese proceso canjea el código de un solo uso de su enlace, así que meridian session url no crea ninguno mientras ningún proceso sirve la sesión, pues nada lo canjearía.",
+    "fix": [
+      "Ejecuta meridian resume con la ejecución de arriba del árbol de la sesión, que vuelve a servir sus sesiones, y después pide un enlace."
+    ]
+  },
+  "login_name_unknown": {
+    "title": "Sin nombre de inicio de sesión para quien ejecuta meridian",
+    "why": "La ruta de una sesión es /me/session/<usuario>/<nombre>/, donde <usuario> es el nombre de inicio de sesión del usuario que ejecuta Meridian, como lo leen los flujos de trabajo de PW_USER. Meridian lo lee de la base de datos de usuarios del sistema, o si no de $USER, y no encontró ninguno.",
+    "fix": [
+      "Ejecuta meridian como un usuario que tenga la base de datos de usuarios del sistema, o pon USER al nombre de inicio de sesión."
     ]
   },
   "source_server_unknown": {

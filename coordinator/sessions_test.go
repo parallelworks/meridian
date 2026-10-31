@@ -567,6 +567,9 @@ func TestSessionsTakenOver(t *testing.T) {
 		return nil
 	}
 	waitFor(t, func() bool { return served(hb, "one-1") != nil && served(hc, "two-1") != nil })
+	if serving, err := a.SessionServing(t.Context(), was["one-1"].ID); err != nil || !serving {
+		t.Errorf("a sees the session b serves as served: %t, %v", serving, err)
+	}
 
 	stopA := serving(a)
 	defer stopA()

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
@@ -28,8 +29,10 @@ signs out every browser that opened it, and makes the links printed before
 it worthless.
 
 It exits 0 once it has, and 2 for a run the store hasn't (run_not_found),
-or without such a session (session_key_unknown), for a session that points
-nowhere yet (session_not_ready), and for any other problem of its own.`
+or without such a session (session_key_unknown), for a session that isn't
+served yet (session_not_ready), or that no process serves, as after the
+meridian run that served it ended, which meridian resume serves again
+(session_not_served), and for any other problem of its own.`
 
 // runSession prints a link to a session of a run, or resets it.
 func runSession(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
@@ -67,6 +70,9 @@ func runSession(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) in
 		if err := coord.ResetSession(ctx, s.ID); err != nil {
 			return c.fail(err)
 		}
+		if _, err := fmt.Fprintf(c.stdout, "session %s of run %s has a new secret: every browser that opened it is signed out\n", key, id); err != nil {
+			return c.fail(err)
+		}
 		return exitOK
 	}
 	link, err := sessions.Link(ctx, s)
@@ -96,5 +102,7 @@ func runSessionOf(ctx context.Context, coord *coordinator.Coordinator, id, key s
 		}
 		keys = append(keys, s.Key)
 	}
-	return coordinator.Session{}, problems.SessionKeyUnknown.Problem(problems.Params{"run": id, "key": key, "keys": problems.QuoteAll(keys)})
+	return coordinator.Session{}, problems.SessionKeyUnknown.Problem(problems.Params{
+		"run": id, "key": key, "keys": problems.QuoteAll(keys), "listed": strconv.FormatBool(len(keys) > 0),
+	})
 }

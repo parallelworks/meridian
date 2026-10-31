@@ -175,7 +175,7 @@ func checkSessionServed(t *testing.T, env map[string]string, setUp func(*cli), a
 	if code, _ := sessionGet(t, sessionHTTP(t), first); code != http.StatusUnauthorized {
 		t.Errorf("a link used once answers another browser %d", code)
 	}
-	if r := session("reset", "1", "web"); r.code != exitOK || r.stdout != "" || r.stderr != "" {
+	if r := session("reset", "1", "web"); r.code != exitOK || r.stdout != "session web of run 1 has a new secret: every browser that opened it is signed out\n" || r.stderr != "" {
 		t.Fatalf("meridian session reset = %+v", r)
 	}
 	// Another process reset it: the run's own sees it as it next looks.
@@ -190,7 +190,7 @@ func checkSessionServed(t *testing.T, env map[string]string, setUp func(*cli), a
 		args []string
 		want string
 	}{
-		{[]string{"url", "1", "nothing"}, "session_key_unknown"},
+		{[]string{"url", "1", "nothing"}, `the sessions it has are "web"`},
 		{[]string{"url", "2", "web"}, "run_not_found"},
 		{[]string{"url", "1"}, "arguments_invalid"},
 	} {
@@ -209,7 +209,7 @@ func checkSessionServed(t *testing.T, env map[string]string, setUp func(*cli), a
 		conn.Close()
 		t.Error("once its run ended, the session's port still listens")
 	}
-	if r := session("url", "1", "web"); r.code != exitError || !strings.Contains(r.stderr, "session_key_unknown") {
+	if r := session("url", "1", "web"); r.code != exitError || !strings.Contains(r.stderr, "session_key_unknown") || !strings.Contains(r.stderr, "nor any other") {
 		t.Errorf("meridian session url of an ended session = %+v", r)
 	}
 }
@@ -260,8 +260,8 @@ func TestSessionLinks(t *testing.T) {
 			r := <-startCommand(t, env, onTerminal, "session", "url", "1", "web").done
 			link = strings.TrimSpace(r.stdout)
 		} else {
-			untilSaid(t, cmd, "session web of run 1: http://")
-			_, rest, _ := strings.Cut(cmd.stdout.String(), "session web of run 1: ")
+			untilSaid(t, cmd, "session web of run 1 is ready: http://")
+			_, rest, _ := strings.Cut(cmd.stdout.String(), "session web of run 1 is ready: ")
 			link, _, _ = strings.Cut(rest, "\n")
 		}
 		u, err := url.Parse(link)
