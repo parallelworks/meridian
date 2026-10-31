@@ -108,7 +108,8 @@ func (h *testHost) lastServed() []Session {
 	return h.served[len(h.served)-1]
 }
 
-// serveSessions has c serve its sessions until the test ends.
+// serveSessions has c serve its sessions until the test ends, once it
+// serves them (waitServing).
 func serveSessions(t *testing.T, c *Coordinator) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
@@ -119,6 +120,23 @@ func serveSessions(t *testing.T, c *Coordinator) {
 		if err := <-done; err != nil {
 			t.Error(err)
 		}
+	})
+	waitServing(t, c)
+}
+
+// waitServing waits until c's ServeSessions, which a test started, has
+// looked at the store once, as its test host was asked to serve what it
+// found. A step of c's points a session, and takes it to serve, only once
+// ServeSessions runs: a step that points one sooner leaves it to whichever
+// process's look finds it first, which in a test of several processes may
+// be another's.
+func waitServing(t *testing.T, c *Coordinator) {
+	t.Helper()
+	h := c.opts.SessionHost.(*testHost)
+	waitFor(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.served) > 0
 	})
 }
 
@@ -537,6 +555,7 @@ func TestSessionsTakenOver(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() { done <- c.ServeSessions(ctx) }()
+		waitServing(t, c)
 		return func() {
 			cancel()
 			if err := <-done; err != nil {
