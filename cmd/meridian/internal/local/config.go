@@ -640,9 +640,11 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]an
 // details a run passes to a workflow it calls, which is kept as it is. ""
 // is no value, list or not, and is kept. Any other value is
 // problems.InputNotList, with multi, or problems.InputNotText. Format 1's
-// run creation checked no shape, so a value of another one reached the run
-// as empty details; checking it is a bug fix to format 1, which ACTIVATE
-// takes too (docs/design.md, Bug fixes to format 1).
+// run creation checked no shape against multi, so a value of another one
+// reached the run as it was given, or resolved: a cluster's or a bucket's
+// details read from it were empty, and a name was its JSON text. Checking
+// it is a bug fix to format 1, which ACTIVATE takes too (docs/design.md,
+// Bug fixes to format 1).
 //
 // The types differ in two ways, which the callers keep. Only
 // compute-clusters, compute-resources and bucket read multi; every other

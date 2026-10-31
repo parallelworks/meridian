@@ -459,13 +459,17 @@ the SHA-256 hash of its content: 218 files.
   list resolves each name and keeps the rest as it is, as the details of
   clusters a caller resolved already, where ACTIVATE made each item that
   isn't text, or is `""`, null, so that they reached the called workflow
-  as `[null]`; and a bucket list takes only `pw://` URIs, as ACTIVATE
-  does, and mappings here ([Interfaces](#interfaces)). Format 1's run
-  creation checked no shape, so a value of another one reached the run as
-  it was given, or resolved: a read of a cluster's or a bucket's details,
-  as its `ip` or `uri`, from a list, or of a cluster's from a number or a
-  boolean, gave `""`, and a name's type gave a list's JSON text. ACTIVATE
-  takes the same fix as it creates a run. Of the 218 known workflows'
+  as `[null]`; and a bucket list takes only URIs, as ACTIVATE does but
+  for a bare name, and mappings here ([Interfaces](#interfaces)). Format
+  1's run creation checked no shape against `multi`, so a value of another
+  one reached the run as it was given, or resolved: a read of a cluster's
+  or a bucket's details, as its `ip` or `uri`, from a list, or of a
+  cluster's from a number or a boolean, gave `""`, and an input that takes
+  a name, such as a Slurm partition, given a list, gave its JSON text.
+  ACTIVATE takes the same fix as it creates a run, and with it gives a
+  cluster's or a bucket's input its default only for `""` and null, as
+  Meridian does, where it gave it for any value but text, a mapping among
+  them. Of the 218 known workflows'
   inputs of these types, 206 `compute-clusters`, 7 `compute-resources`,
   11 `bucket` and 315 of the others, none is `multi`, and no default is a
   list, a number or a boolean; and none of the 261 of their 270 calls
@@ -1016,13 +1020,14 @@ ACTIVATE's launch form and its backend do together:
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
   input of such a type that has a value is an error. Format 1 gives a run
-  the details of a cluster and of a bucket for its name; every other type's
-  value is the name as it was given, text or a mapping, of the shape a bug
-  fix checks ([Bug fixes to format 1](#bug-fixes-to-format-1)), whose name
-  nothing checks as the run is created: a platform's form lists the names to choose from,
-  as a cluster's partitions, and the scheduler, or the command the workflow
-  gives the name to, checks it as the run uses it. The meridian command's
-  resolver gives these names so ([Interfaces](#interfaces)).
+  the details of a cluster and of a bucket for its name; every other
+  type's value is the name as it was given, text or a mapping, of the
+  shape a bug fix checks ([Bug fixes to format 1](#bug-fixes-to-format-1)),
+  whose name nothing checks as the run is created: a platform's form lists
+  the names to choose from, as a cluster's partitions, and the scheduler,
+  or the command the workflow gives the name to, checks it as the run uses
+  it. The meridian command's resolver gives these names so
+  ([Interfaces](#interfaces)).
 - **What waits for Start.** A default that reads something not known when
   the run is created, such as `env` or a secret variable, isn't evaluated
   until then: its input isn't among the plan's values, and Start, which
