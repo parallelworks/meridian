@@ -448,14 +448,38 @@ the SHA-256 hash of its content: 218 files.
   keys the inner group dropped. None of the 218 known workflows has a group
   with `flatten`, which format 1 adds
   ([The workflow format](#the-workflow-format)).
-- **A `compute-clusters` input given a list keeps what in it isn't a
-  name**, where ACTIVATE made each item that isn't text, or is `""`, null:
-  so the details of clusters that a workflow passes to one it calls, which
-  it resolved already, reached the called workflow as `[null]`. Only a
-  name is resolved; the rest of a list is kept as it is, as a value that
-  isn't a list is. ACTIVATE takes the same fix. None of the 211
-  `compute-clusters` inputs of the known workflows is `multi`, the form
-  that takes a list.
+- **A platform input's value is of its type's shape**: with `multi`, a
+  list, and otherwise text or a mapping, the details a run passes to a
+  workflow it calls; `""` is no value. A value of another shape is
+  `input_not_text`, or `input_not_list` with `multi`. Only
+  `compute-clusters`, `compute-resources` and `bucket` read `multi`; a
+  scheduler's partitions, accounts, QoS and queues, Kubernetes clusters,
+  namespaces and volume claims, and an organization's groups take text or
+  a mapping whatever it says. A list's items are its type's: a cluster
+  list resolves each name and keeps the rest as it is, as the details of
+  clusters a caller resolved already, where ACTIVATE made each item that
+  isn't text, or is `""`, null, so that they reached the called workflow
+  as `[null]`; and a bucket list takes only URIs, as ACTIVATE does but
+  for a bare name, and mappings here ([Interfaces](#interfaces)). Format
+  1's run creation checked no shape against `multi`, so a value of another
+  one reached the run as it was given, or resolved: a read of a cluster's
+  or a bucket's details, as its `ip` or `uri`, from a list, or of a
+  cluster's from a number or a boolean, gave `""`, and an input that takes
+  a name, such as a Slurm partition, given a list, gave its JSON text.
+  ACTIVATE takes the same fix as it creates a run. Both check the shape
+  of the value the run reads, a default included; but a default written
+  as an expression ACTIVATE checks only as it evaluates it, later, where
+  Meridian checks what it gives as it compiles. None of the known
+  workflows' inputs of these types has one. And ACTIVATE's fix
+  gives a `compute-clusters`, `compute-resources` or `bucket` input its
+  default, when that is non-empty text, only for `""` and null, where its
+  fallback gave it for any value but text, a mapping among them. Meridian
+  does the same for these three types' null, and gives every type's `""`
+  its default, whatever that is. Of the 218 known workflows'
+  inputs of these types, 206 `compute-clusters`, 7 `compute-resources`,
+  11 `bucket` and 315 of the others, none is `multi`, and no default is a
+  list, a number or a boolean; and none of the 261 of their 270 calls
+  whose called workflow is known gives one a list, a number or a boolean.
 - **A `compute-resources` input names a cluster as a `compute-clusters`
   one does**: a name, or a `pw://` reference, becomes the cluster's
   details, where ACTIVATE's run handler resolved a name only for
@@ -1002,12 +1026,14 @@ ACTIVATE's launch form and its backend do together:
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
   input of such a type that has a value is an error. Format 1 gives a run
-  the details of a cluster and of a bucket for its name; every other type's
-  value is the name as it was given, text or a mapping, which nothing checks
-  as the run is created: a platform's form lists the names to choose from,
-  as a cluster's partitions, and the scheduler, or the command the workflow
-  gives the name to, checks it as the run uses it. The meridian command's
-  resolver gives these names so ([Interfaces](#interfaces)).
+  the details of a cluster and of a bucket for its name; every other
+  type's value is the name as it was given, text or a mapping, of the
+  shape a bug fix checks ([Bug fixes to format 1](#bug-fixes-to-format-1)),
+  whose name nothing checks as the run is created: a platform's form lists
+  the names to choose from, as a cluster's partitions, and the scheduler,
+  or the command the workflow gives the name to, checks it as the run uses
+  it. The meridian command's resolver gives these names so
+  ([Interfaces](#interfaces)).
 - **What waits for Start.** A default that reads something not known when
   the run is created, such as `env` or a secret variable, isn't evaluated
   until then: its input isn't among the plan's values, and Start, which
@@ -1948,16 +1974,18 @@ in four ways:
 - **A bare name, and `pw://name`, aren't a bucket** (`bucket_uri_invalid`).
   ACTIVATE reads each as one of the caller's own buckets, by the run's
   user's platform username, which a run here doesn't have.
-- **A bucket input's mapping is kept as given**, as its details.
-  ACTIVATE refuses one among a root run's submitted inputs, unless the
-  input's non-empty default takes its place, so that no credential is made
-  from details the caller wrote. Inputs can't tell a root's input from a
-  called workflow's, which is given its caller's details so; and here no
-  credential is made from a mapping.
-- **A called workflow's input of a platform's type is resolved**, as a
-  root's is. ACTIVATE resolves only the root's submitted inputs, so a
-  caller whose `with:` gives a bucket's `pw://` URI, or a cluster's name,
-  gives the called workflow that text there, and its details here.
+- **A bucket input's mapping is kept as given**, as its details, and so
+  is one in a bucket list. ACTIVATE refuses one among a root run's
+  submitted inputs, unless the input's non-empty default takes its place,
+  so that no credential is made from details the caller wrote. Inputs
+  can't tell a root's input from a called workflow's, which is given its
+  caller's details so; and here no credential is made from a mapping.
+- **A called workflow's input of a platform's type is resolved**, and its
+  shape checked, as a root's is ([Bug fixes to format 1](#bug-fixes-to-format-1)).
+  ACTIVATE resolves and checks only a root run's submitted inputs, as it
+  creates the run, so a caller whose `with:` gives a bucket's `pw://` URI,
+  or a cluster's name, gives the called workflow that text there, and its
+  details here.
 - **A bucket's details are its `type`, `name`, `user` and `uri`.**
   ACTIVATE's hold its `csp` and `id` too, and its `bucketName` and
   `region` once it is provisioned, which only the platform's record of it

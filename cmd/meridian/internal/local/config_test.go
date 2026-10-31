@@ -426,7 +426,7 @@ func TestResolveInput(t *testing.T) {
 // organization group's, gives its value as it was given, as format 1
 // does: a name, "", or a mapping, as a run passes the value it has to a
 // workflow it calls; and refuses any other value as input_not_text, as
-// format 1 does.
+// the bug fix to format 1 does (docs/design.md, Bug fixes to format 1).
 func TestResolveInputPassesNamesThrough(t *testing.T) {
 	c := load(t, nil, nil)
 	mapping := map[string]any{"name": "debug"}
@@ -446,9 +446,13 @@ func TestResolveInputPassesNamesThrough(t *testing.T) {
 				t.Errorf("ResolveInput(%s, %v): %v", typ, v, p.Params)
 			}
 		}
-		_, err := c.ResolveInput(t.Context(), typ, nil, []any{"debug"})
-		if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != `["debug"]` {
-			t.Errorf("ResolveInput(%s) of a list: %v", typ, p.Params)
+		// A list too, whatever multi says: multi is read for none of these
+		// types.
+		for _, def := range []map[string]any{nil, {"multi": true}} {
+			_, err := c.ResolveInput(t.Context(), typ, def, []any{"debug"})
+			if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != `["debug"]` {
+				t.Errorf("ResolveInput(%s) of a list with %v: %v", typ, def, p.Params)
+			}
 		}
 	}
 }

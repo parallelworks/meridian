@@ -377,18 +377,34 @@ func (r *inputResolver) liveRows() []*field { return r.rows }
 // of its options, or the text of its default when that is an expression,
 // which a form sends when it can't evaluate the default itself. A null
 // submitted for an input, or an input in a group, is its value, as
-// ACTIVATE keeps it: it takes no default, nor is it required; in a list's
-// row, null is no value, as ACTIVATE fills in a row's.
+// ACTIVATE keeps it: it takes no default, nor is it required; but for a
+// cluster's or a bucket's input of a run no step calls, whose default is
+// text but "", null is no value (nullDefaulted); and in a list's row, null
+// is no value, as ACTIVATE fills in a row's.
 func (r *inputResolver) missing(f *field) bool {
 	v, ok := jsonptr.Lookup(r.values, f.path)
 	if !ok {
 		return true
 	}
 	if v == nil {
-		return f.in != nil
+		return f.in != nil || r.nullDefaulted(f)
 	}
 	if s, isString := v.(string); isString && s != "" && s == f.def["default"] && strings.Contains(s, "${{") {
 		return true
 	}
 	return v == "" && !f.findOptions().empty
+}
+
+// nullDefaultedTypes are the input types whose null nullDefaulted gives
+// the default of.
+var nullDefaultedTypes = map[string]bool{"compute-clusters": true, "compute-resources": true, "bucket": true}
+
+// nullDefaulted reports whether a null submitted for f takes its default:
+// for a compute-clusters, compute-resources or bucket input of a run no
+// step calls, whose default is text but "", as ACTIVATE's run creation
+// gives such an input its default for null as for "", before it resolves
+// it. A called workflow's is given as its caller's with: gives it.
+func (r *inputResolver) nullDefaulted(f *field) bool {
+	d, _ := f.def["default"].(string)
+	return r.opts.Parent == nil && nullDefaultedTypes[f.typ] && d != ""
 }

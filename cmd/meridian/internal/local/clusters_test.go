@@ -182,18 +182,22 @@ func TestResolveClusters(t *testing.T) {
 			t.Errorf("ResolveInput(hpc) with %v = %v, %v", definition, got, err)
 		}
 	}
-	// "" stays "", and what isn't a name stays as it is: as the details a
-	// run passes on to a workflow it calls, which it resolved already.
+	// "" stays "", and a mapping stays as it is: as the details a run
+	// passes on to a workflow it calls, which it resolved already.
 	details := map[string]any{"name": "hpc", "ip": "elsewhere"}
-	for _, v := range []any{"", details, 3.0, true} {
-		if got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, v); err != nil || !reflect.DeepEqual(got, v) {
-			t.Errorf("ResolveInput(%v) = %v, %v, want it as it is", v, got, err)
+	multi := map[string]any{"multi": true}
+	for _, tc := range []struct {
+		def map[string]any
+		v   any
+	}{{nil, ""}, {nil, details}, {multi, ""}} {
+		if got, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v); err != nil || !reflect.DeepEqual(got, tc.v) {
+			t.Errorf("ResolveInput(%v) with %v = %v, %v, want it as it is", tc.v, tc.def, got, err)
 		}
 	}
-	// A list resolves each of its names, and keeps the rest of it as it is,
-	// where format 1 makes each of them null (docs/design.md, Bug fixes to
-	// format 1).
-	got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, []any{"lab", "", details, "workspace", nil})
+	// With multi, a list resolves each of its names, and keeps the rest of
+	// it as it is, where format 1 makes each of them null (docs/design.md,
+	// Bug fixes to format 1).
+	got, err := c.ResolveInput(t.Context(), "compute-clusters", multi, []any{"lab", "", details, "workspace", nil})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,16 +206,38 @@ func TestResolveClusters(t *testing.T) {
 		!reflect.DeepEqual(list[2], details) || !reflect.DeepEqual(list[3], workspace) || list[4] != nil {
 		t.Errorf("ResolveInput of a list = %v", got)
 	}
+	// A value of another shape is refused, as the bug fix to format 1
+	// refuses it (docs/design.md, Bug fixes to format 1): without multi,
+	// what is neither text nor a mapping, a list among it; with multi, what
+	// isn't a list.
+	for _, tc := range []struct {
+		def  map[string]any
+		v    any
+		kind *problems.Kind
+	}{
+		{nil, 3.0, problems.InputNotText},
+		{nil, true, problems.InputNotText},
+		{nil, []any{"hpc"}, problems.InputNotText},
+		{multi, "hpc", problems.InputNotList},
+		{multi, details, problems.InputNotList},
+		{multi, 3.0, problems.InputNotList},
+	} {
+		_, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v)
+		if p := kindtest.Want(t, err, tc.kind); p.Params["value"] != problems.Show(tc.v) {
+			t.Errorf("ResolveInput(%v) with %v names the value %v", tc.v, tc.def, p.Params["value"])
+		}
+	}
 	for _, tc := range []struct {
 		name  string
+		def   map[string]any
 		value any
 	}{
-		{"unknown", "cpu"},
-		{"an unknown name in a list", []any{"hpc", "cpu"}},
-		{"a pw URI", "pw://alice/hpc"},
+		{"unknown", nil, "cpu"},
+		{"an unknown name in a list", multi, []any{"hpc", "cpu"}},
+		{"a pw URI", nil, "pw://alice/hpc"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := c.ResolveInput(t.Context(), "compute-clusters", nil, tc.value)
+			_, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.value)
 			p := kindtest.Want(t, err, problems.ClusterUnknown)
 			if p.Params["clusters"] != `"gpu.box", "hpc", "lab"` {
 				t.Errorf("the clusters listed are %v", p.Params["clusters"])

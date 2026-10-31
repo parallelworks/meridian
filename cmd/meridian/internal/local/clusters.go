@@ -127,35 +127,22 @@ func (c *Config) ClusterHost(name string) (string, bool) {
 }
 
 // resolveClusters gives the value of a compute-clusters input, or a
-// compute-resources one, as format 1 resolves one: the workspace's name,
-// or a cluster's of the clusters file, or each of a list of them, becomes
-// its details, whatever the input's definition says, as its
-// include-workspace, provider and csp only choose what a form lists. "",
-// and any other value, as the details a run passes to a workflow it
-// calls, are kept as they are, in a list too, since only a name is
-// resolved. Another name is problems.ClusterUnknown, which lists the
-// clusters, or problems.ClustersNone when the file has none.
-func (c *Config) resolveClusters(value any) (any, error) {
-	switch v := value.(type) {
-	case string:
-		return c.resolveCluster(v)
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			name, ok := item.(string)
-			if !ok {
-				out[i] = item
-				continue
-			}
-			r, err := c.resolveCluster(name)
-			if err != nil {
-				return nil, err
-			}
-			out[i] = r
+// compute-resources one, whose definition is def, as format 1 resolves
+// one: the workspace's name, or a cluster's of the clusters file, becomes
+// its details, and with multi true, each of a list of them does, of the
+// shape the bug fix to format 1 checks (resolveEach), as the input's
+// include-workspace, provider and csp only choose what a form lists. "", a mapping, as the details a run passes to
+// a workflow it calls, and what of a list isn't a name, are kept as they
+// are, since only a name is resolved. Another name is
+// problems.ClusterUnknown, which lists the clusters, or
+// problems.ClustersNone when the file has none.
+func (c *Config) resolveClusters(def map[string]any, value any) (any, error) {
+	return resolveEach(value, def["multi"] == true, c.resolveCluster, func(item any) (any, error) {
+		if name, ok := item.(string); ok {
+			return c.resolveCluster(name)
 		}
-		return out, nil
-	}
-	return value, nil
+		return item, nil
+	})
 }
 
 // resolveCluster gives the details of the cluster name names, or "" for "".

@@ -88,6 +88,69 @@ func TestPlatformInputs(t *testing.T) {
 	}
 }
 
+// TestNullTakesPlatformDefault checks that a null submitted for a
+// cluster's or a bucket's input of a run no step calls takes the input's
+// default, when that is text but "", as ACTIVATE's run creation gives it,
+// and as "" does; and that another type's null, one whose default is "",
+// and a called workflow's stay null.
+func TestNullTakesPlatformDefault(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+        default: lab
+      resources:
+        type: compute-resources
+        default: lab
+      bucket:
+        type: bucket
+        default: pw://alice/data
+      blank:
+        type: compute-clusters
+        default: ""
+      part:
+        type: slurm-partitions
+        resource: ${{ inputs.cluster }}
+        default: ${{ 'debug' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	details := resolverFunc(func(_ context.Context, typ string, _ map[string]any, v any) (any, error) {
+		return map[string]any{"type": typ, "name": v}, nil
+	})
+	nulls := map[string]any{"cluster": nil, "resources": nil, "bucket": nil, "blank": nil, "part": nil}
+	inputs, diags := resolveInputs(t, doc, nulls, compile.Options{Inputs: details})
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	want := map[string]any{
+		"cluster":   map[string]any{"type": "compute-clusters", "name": "lab"},
+		"resources": map[string]any{"type": "compute-resources", "name": "lab"},
+		"bucket":    map[string]any{"type": "bucket", "name": "pw://alice/data"},
+		"blank":     nil,
+		"part":      nil,
+	}
+	if !reflect.DeepEqual(inputs.Values, want) {
+		t.Errorf("at a run no step calls, the nulls give %v, want %v", inputs.Values, want)
+	}
+	inputs, diags = resolveInputs(t, doc, map[string]any{"cluster": ""}, compile.Options{Inputs: details})
+	if len(diags) != 0 || !reflect.DeepEqual(inputs.Values["cluster"], want["cluster"]) {
+		t.Errorf("a cluster's \"\" gives %v, %v", inputs.Values["cluster"], diags)
+	}
+	inputs, diags = resolveInputs(t, doc, nulls, compile.Options{Inputs: details, Parent: &compile.Parent{Run: "1", Job: "main", Root: "1", Depth: 1}})
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	for _, name := range []string{"cluster", "resources", "bucket"} {
+		if v, ok := inputs.Values[name]; !ok || v != nil {
+			t.Errorf("a called workflow's null %s gives %v", name, v)
+		}
+	}
+}
+
 // A refusal of a value in a group or a list whose condition reads a
 // variable or a password, which the plan holds out of its values, doesn't
 // show it, as one of an input whose own condition reads one doesn't.
