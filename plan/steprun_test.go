@@ -175,3 +175,29 @@ func TestReadsSteps(t *testing.T) {
 		t.Errorf("a step run is given %+v, want %+v", got, want)
 	}
 }
+
+// TestSameLogin checks when a step's ssh: says what its job's does: when
+// they name the same host and login, as ACTIVATE keys its connections,
+// with null and a key that isn't there as "", whatever else they say.
+func TestSameLogin(t *testing.T) {
+	t.Parallel()
+	job := map[string]any{"remoteHost": "cluster", "remoteUser": "alice", "disconnect-timeout": "5m"}
+	for _, tc := range []struct {
+		name string
+		step map[string]any
+		same bool
+	}{
+		{"the same", map[string]any{"remoteHost": "cluster", "remoteUser": "alice", "disconnect-timeout": "5m"}, true},
+		{"another disconnect-timeout", map[string]any{"remoteHost": "cluster", "remoteUser": "alice"}, true},
+		{"empty and null jump node", map[string]any{"remoteHost": "cluster", "remoteUser": "alice", "jumpNodeHost": "", "jumpNodeUser": nil}, true},
+		{"another host", map[string]any{"remoteHost": "login2", "remoteUser": "alice"}, false},
+		{"the host with its port", map[string]any{"remoteHost": "cluster:22", "remoteUser": "alice"}, false},
+		{"another user", map[string]any{"remoteHost": "cluster", "remoteUser": "bob"}, false},
+		{"no user", map[string]any{"remoteHost": "cluster"}, false},
+		{"a jump node", map[string]any{"remoteHost": "cluster", "remoteUser": "alice", "jumpNodeHost": "bastion"}, false},
+	} {
+		if got := plan.SameLogin(plan.DataOf(tc.step), plan.DataOf(job)); got != tc.same {
+			t.Errorf("%s: same is %t, want %t", tc.name, got, tc.same)
+		}
+	}
+}

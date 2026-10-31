@@ -31,11 +31,8 @@ import (
 // what it doesn't read never makes the request too large; and the strings
 // the worker masks, which the step run's masks too.
 func (a *attempt) stepRunRequest(rs *plan.ReadyStep, try int, cleanup bool, state plan.JobState, first *plan.ReadyStep) *workerapi.StepRunRequest {
-	st := workerapi.StepRunState{Cancelled: state.Cancelled}
+	st := workerapi.StepRunState{Cancelled: state.Cancelled, Steps: workerapi.StepRunResults(a.job.StepRunReads(rs.Index, cleanup, state.Steps))}
 	st.JobRetry, st.JobAttempt = a.jobCounters()
-	for _, r := range a.job.StepRunReads(rs.Index, cleanup, state.Steps) {
-		st.Steps = append(st.Steps, workerapi.StepRunResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs})
-	}
 	if first != nil {
 		st.IfAlways = first.IfAlways
 		if first.Retry != nil {
@@ -252,11 +249,7 @@ func (a *attempt) runAsStepRun(ctx context.Context, jobDiags problems.Diagnostic
 		}
 		return ended(plan.OutcomeCancelled, -1, nil, nil)
 	}
-	results := make([]plan.StepResult, len(sr.State.Steps))
-	for k, r := range sr.State.Steps {
-		results[k] = plan.StepResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
-	}
-	state := a.state(results, sr.State.Cancelled, nil)
+	state := a.state(sr.State.PlanSteps(), sr.State.Cancelled, nil)
 	id := a.job.Steps[i].ID
 	if sr.Cleanup {
 		id = ""

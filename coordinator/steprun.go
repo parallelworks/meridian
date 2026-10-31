@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -187,7 +186,7 @@ func (c *Coordinator) triedBefore(ctx context.Context, hosts *stepHosts, attempt
 	switch {
 	case err != nil:
 		return err
-	case diags.HasErrors(), before == nil && hosts.job != nil, before != nil && !sameHost(before, hosts.job):
+	case diags.HasErrors(), before == nil && hosts.job != nil, before != nil && (hosts.job == nil || !plan.SameLogin(before.SSH, hosts.job.SSH)):
 		return fmt.Errorf("%w: try %d without a step run of try %d, which its ssh: puts elsewhere than its job", errNotStepRun, try, try-1)
 	}
 	return nil
@@ -231,24 +230,6 @@ func (c *Coordinator) stepHostsOf(ctx context.Context, run *store.Run, key strin
 // password, and its problems.
 func (h *stepHosts) target(ctx context.Context, index, try int) (*plan.Inline, bool, problems.Diagnostics, error) {
 	return h.p.StepTarget(ctx, h.name, index, try, h.in)
-}
-
-// sameHost reports whether a, a step's ssh:, names the host and login of
-// b, its job's, by which the job's worker runs the step in its job, as
-// format 1 reuses the job's connection: the same remoteHost, remoteUser,
-// jumpNodeHost and jumpNodeUser, as text, as the worker compares them.
-func sameHost(a, b *plan.Inline) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	am, _ := a.SSH.Get().(map[string]any)
-	bm, _ := b.SSH.Get().(map[string]any)
-	for _, k := range []string{"remoteHost", "remoteUser", "jumpNodeHost", "jumpNodeUser"} {
-		if expr.Text(am[k]) != expr.Text(bm[k]) {
-			return false
-		}
-	}
-	return true
 }
 
 // sameTarget reports whether a, the host a step's worker says its ssh:
