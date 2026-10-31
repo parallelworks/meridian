@@ -118,6 +118,10 @@
   "session_user_unsupported": "登录名“{user}”无法原样放入 URL 路径，因此 Meridian 无法在工作流根据 PW_USER 构造的路径 /me/session/{user}/… 上提供会话。",
   "session_local_port_taken": "127.0.0.1 的端口 {port} 已被占用，因此 Meridian 无法在那里提供会话。",
   "session_local_port_refused": "本机不允许 Meridian 在 127.0.0.1 的端口 {port} 上监听，因此 Meridian 无法在那里提供会话。",
+  "session_name_taken": "另一个运行的会话名为“{name}”且尚未结束，因此此运行无法创建同名的会话。",
+  "session_name_empty": "update-session 的 name 为空，因此它没有指定任何会话。",
+  "session_unknown": "没有尚未结束的会话“{name}”，因此 update-session 无法指向它。",
+  "session_not_permitted": "会话“{name}”属于另一个运行，此运行没有 permissions: ['*'] 就不能指向它。",
 
   "runs_on_invalid": "runs-on 的值必须是执行组的名称，或指定执行组、环境或计算目标的映射，而不是 {value}。",
   "resources_invalid": "{key, select, cpu {resources 中的 CPU 必须是核心数，例如 4、0.5 或 500m，而不是 {value}。} memory {resources 中的内存必须是字节数，例如 8Gi 或 512Mi，而不是 {value}。} gpu {resources 中的 GPU 必须是整数，而不是 {value}。} other {resources 中“{key}”的值 {value} 无效。}}",

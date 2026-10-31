@@ -77,6 +77,11 @@ type Options struct {
 	Variables compile.Variables
 	Inputs    compile.InputResolver
 	Sessions  compile.Sessions
+	// SessionHost serves the store's sessions where the coordinator runs.
+	// With one, and no Sessions, the coordinator provides Sessions itself,
+	// keeping the sessions in the store, which ServeSessions has the host
+	// serve. Nil means none.
+	SessionHost SessionHost
 	// Env are the variables a platform gives every job's steps, by name,
 	// as format 1's PW_USER, which each claim gives the worker
 	// (workerapi.Claim.Env), in every run the coordinator works, whoever
@@ -192,6 +197,9 @@ type Coordinator struct {
 	store  *store.Store
 	sealer *seal.Sealer
 	plans  *planCache
+	// sessionsWake tells ServeSessions that the store's sessions may have
+	// changed in this process.
+	sessionsWake chan struct{}
 	// inserter inserts runs' workflows, and served works their jobs while
 	// Serve runs.
 	inserter *hopper.Client[*sql.Tx]
@@ -346,7 +354,10 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, seenFailed: map[string]int{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
-		outlives: map[string]bool{}, checkoutWaits: checkoutWaits,
+		outlives: map[string]bool{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
+	}
+	if opts.SessionHost != nil && opts.Sessions == nil {
+		c.opts.Sessions = sessionProvider{c}
 	}
 	c.wakersCtx, c.stopWakers = context.WithCancel(context.WithoutCancel(ctx))
 	if opts.ReadOnly {

@@ -846,6 +846,34 @@
       "Da a localPort un puerto de 1024 a 65535, o quítalo, para que Meridian elija uno."
     ]
   },
+  "session_name_taken": {
+    "title": "Nombre de sesión que tiene otra sesión",
+    "why": "El nombre de una sesión es su ruta, /me/session/<usuario>/<nombre>/, y aquello por lo que update-session la nombra, así que dos sesiones que no han terminado no tienen el mismo nombre. El nombre es uno que eligió el flujo de trabajo, como el valor por defecto de prompt-for-name, que también eligió otra ejecución suya, que sigue en marcha.",
+    "fix": [
+      "Termina la otra ejecución, con meridian cancel, o nombra la sesión de otra forma."
+    ]
+  },
+  "session_name_empty": {
+    "title": "update-session sin el nombre de una sesión",
+    "why": "Un paso que usa parallelworks/update-session apunta la sesión que nombra el name de su with:, como ${{ sessions.<clave> }} da una de las de la ejecución. Su name estaba vacío, o faltaba, como cuando lee una entrada o una salida que no tiene valor.",
+    "fix": [
+      "Da a name el nombre de una sesión, como ${{ sessions.<clave> }}, con la clave de una de las sessions: del flujo de trabajo."
+    ]
+  },
+  "session_unknown": {
+    "title": "No existe esa sesión",
+    "why": "Un paso que usa parallelworks/update-session apunta una sesión que creó el árbol de su ejecución, como la crearon sus sessions:, que termina cuando termina la raíz del árbol. Esa sesión no está: el nombre no es el de ninguna, o la ejecución que la creó ha terminado.",
+    "fix": [
+      "Nombra una sesión de la propia ejecución, como la da ${{ sessions.<clave> }}."
+    ]
+  },
+  "session_not_permitted": {
+    "title": "Sesión que la ejecución no puede apuntar",
+    "why": "Como decide la plataforma del formato 1, una ejecución puede apuntar una sesión que creó su propio árbol, y también un flujo de trabajo al que llama; una cuyo flujo de trabajo tiene '*' en permissions: actúa como la persona que la ejecuta, y puede apuntar cualquier sesión suya. Esta sesión es de otra ejecución, y el árbol de esta ejecución no pide '*'.",
+    "fix": [
+      "Apunta una sesión que creó el propio árbol de la ejecución, como la da ${{ sessions.<clave> }}, o da al flujo de trabajo de arriba del árbol permissions: ['*'], si ha de actuar como tú."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",

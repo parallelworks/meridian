@@ -118,6 +118,10 @@
   "session_user_unsupported": "로그인 이름 ‘{user}’은(는) URL 경로에 그대로 넣을 수 없으므로, Meridian은 워크플로가 PW_USER로 만드는 경로 /me/session/{user}/…에서 세션을 제공할 수 없습니다.",
   "session_local_port_taken": "127.0.0.1의 포트 {port}가 사용 중이므로, Meridian은 그곳에서 세션을 제공할 수 없습니다.",
   "session_local_port_refused": "이 컴퓨터가 Meridian이 127.0.0.1의 포트 {port}에서 수신 대기하는 것을 허용하지 않으므로, Meridian은 그곳에서 세션을 제공할 수 없습니다.",
+  "session_name_taken": "다른 실행의 세션 이름이 ‘{name}’이고 아직 끝나지 않았으므로, 이 실행은 그 이름의 세션을 만들 수 없습니다.",
+  "session_name_empty": "update-session의 name이 비어 있으므로, 아무 세션도 가리키지 않습니다.",
+  "session_unknown": "끝나지 않은 세션 ‘{name}’이(가) 없으므로, update-session이 그것을 향하게 할 수 없습니다.",
+  "session_not_permitted": "세션 ‘{name}’은(는) 다른 실행의 것이며, 이 실행은 permissions: ['*'] 없이 그것을 향하게 할 수 없습니다.",
 
   "runs_on_invalid": "runs-on 값은 {value} 값이 아니라 실행 그룹의 이름이거나, 실행 그룹, 환경 또는 컴퓨팅 대상을 지정하는 매핑이어야 합니다.",
   "resources_invalid": "{key, select, cpu {resources의 CPU는 {value} 값이 아니라 4, 0.5, 500m 같은 코어 수여야 합니다.} memory {resources의 메모리는 {value} 값이 아니라 8Gi, 512Mi 같은 바이트 수여야 합니다.} gpu {resources의 GPU는 {value} 값이 아니라 정수여야 합니다.} other {resources의 ‘{key}’ 값({value})이 올바르지 않습니다.}}",

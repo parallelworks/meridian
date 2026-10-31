@@ -549,6 +549,10 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	if err := tx.childEnded(n); err != nil {
 		return err
 	}
+	// A tree's sessions end with its root, which owns them.
+	if err := tx.endSessions(n); err != nil {
+		return err
+	}
 	tx.ended = append(tx.ended, id)
 	if err := tx.deleteRecords(n); err != nil {
 		return err

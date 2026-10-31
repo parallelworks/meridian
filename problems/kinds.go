@@ -254,7 +254,13 @@ var (
 // login name of the user who runs Meridian, as it is; port a port of
 // 127.0.0.1, as text.
 var (
-	SessionUserUnsupported  = define(Error, "session_user_unsupported", "Login name a session's path can't hold", "user")
+	SessionUserUnsupported = define(Error, "session_user_unsupported", "Login name a session's path can't hold", "user")
+	// name is a session's name, as a run's sessions: named it, or as
+	// update-session's with: gives it.
+	SessionNameTaken        = define(Error, "session_name_taken", "Session name another session has", "name")
+	SessionNameEmpty        = define(Error, "session_name_empty", "update-session without a session's name")
+	SessionUnknown          = define(Error, "session_unknown", "No such session", "name")
+	SessionNotPermitted     = define(Error, "session_not_permitted", "Session the run may not point", "name")
 	SessionLocalPortTaken   = define(Error, "session_local_port_taken", "Session's port in use", "port")
 	SessionLocalPortRefused = define(Error, "session_local_port_refused", "Session's port this machine won't listen on", "port")
 )
