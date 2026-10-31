@@ -301,7 +301,7 @@ func (p *Proxy) Close() error {
 // a session that a step points again: every request after goes there, and
 // no connection to where it pointed is used again. Those idle close at
 // once, and those of requests going on, as a WebSocket's, close as they
-// end, as format 1's platform keeps a transport for each target.
+// end.
 func (p *Proxy) Repoint(dial DialFunc) {
 	p.mu.Lock()
 	old := p.target
