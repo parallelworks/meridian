@@ -2684,6 +2684,14 @@
       "Comprueba que ssh -W <dirección> <host> conecta, desde la misma máquina y como el mismo usuario."
     ]
   },
+  "ssh_tcp_connect_failed": {
+    "title": "Host que no pudo conectar con una dirección para Meridian",
+    "why": "Meridian llega a una dirección a través de un host como lo hacen ssh -L y ssh -W: por su conexión SSH con el host, pide al sshd del host que conecte con la dirección (direct-tcpip). sshd lo intentó y no pudo: nada escucha en la dirección, su nombre no se resuelve en el host, el host no llega a ella, o sshd no puede abrir otra conexión ahora. El mensaje muestra lo que dijo sshd.",
+    "fix": [
+      "Comprueba que lo que debería escuchar en la dirección se está ejecutando, y escucha en la dirección y el puerto que dio el flujo de trabajo, tal como los ve el host.",
+      "Comprueba que ssh -W <dirección> <host> conecta, desde la misma máquina y como el mismo usuario."
+    ]
+  },
   "ssh_tcp_address_invalid": {
     "title": "Dirección con la que Meridian no pide a un host que conecte",
     "why": "Meridian llega a una dirección a través de un host pidiendo al sshd del host que conecte con ella (direct-tcpip, como hace ssh -L). La dirección viene de un flujo de trabajo, como el remoteHost y el remotePort de una sesión, así que Meridian solo la pide en una forma que el host no pueda leer como algo más que una dirección: el nombre de un host, de letras, dígitos, -, _ y puntos, que no empiece por -, o una dirección IPv4 o IPv6 sin corchetes; y un puerto de 1 a 65535. El mensaje muestra el valor con sus caracteres de control escapados, como \\n.",

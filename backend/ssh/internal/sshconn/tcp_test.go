@@ -91,11 +91,17 @@ func TestDialTCP(t *testing.T) {
 			t.Errorf("the host connected to %v, want %v", got, want)
 		}
 	})
-	t.Run("nothing listens", func(t *testing.T) {
-		_, c, _ := start(t)
-		_, err := c.DialTCP(t.Context(), "127.0.0.1", closedPort(t))
-		if !errors.Is(err, sshconn.ErrTCPConnectFailed) || errors.Is(err, sshconn.ErrTCPForwardingRefused) {
-			t.Errorf("an address nothing listens on gave %v, want ErrTCPConnectFailed", err)
+	t.Run("can't connect", func(t *testing.T) {
+		_, c, port := start(t)
+		for _, tc := range []struct {
+			host string
+			port int
+		}{{"127.0.0.1", closedPort(t)}, {"no-such-host.invalid", port}} {
+			_, err := c.DialTCP(t.Context(), tc.host, tc.port)
+			te, ok := errors.AsType[*sshconn.TCPError](err)
+			if !ok || te.Refused || te.Said == "" || !errors.Is(err, sshconn.ErrTCPConnectFailed) || errors.Is(err, sshconn.ErrTCPForwardingRefused) {
+				t.Errorf("%s port %d gave %#v, want ErrTCPConnectFailed with what the host said", tc.host, tc.port, err)
+			}
 		}
 		if err := c.Err(); err != nil {
 			t.Errorf("the host's answer closed the connection: %v", err)
@@ -141,7 +147,7 @@ func TestDialTCPRefused(t *testing.T) {
 	h.knownHosts(s.KnownHosts(""))
 	c := dial(t, h.dialer(), sshconn.Target{Host: s.Addr()})
 	_, err := c.DialTCP(t.Context(), "127.0.0.1", sshtest.Echo(t))
-	if !errors.Is(err, sshconn.ErrTCPForwardingRefused) {
+	if te, ok := errors.AsType[*sshconn.TCPError](err); !ok || !te.Refused || !errors.Is(err, sshconn.ErrTCPForwardingRefused) || errors.Is(err, sshconn.ErrTCPConnectFailed) {
 		t.Errorf("a host that won't forward gave %v, want ErrTCPForwardingRefused", err)
 	}
 	if out := run(t, c, "echo up"); out != "up\n" {

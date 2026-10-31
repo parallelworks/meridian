@@ -24,9 +24,36 @@ var ErrTCPForwardingRefused = errors.New("sshconn: the host refused to forward a
 
 // ErrTCPConnectFailed is the error of a host that answered that it
 // couldn't connect to an address for the connection (DialTCP), as where
-// nothing listens there, or the host can't resolve its name: the host
-// answered, so the connection is up.
+// nothing listens there, or the host can't resolve its name, or that it
+// can't now (resource shortage): the host answered, so the connection is
+// up.
 var ErrTCPConnectFailed = errors.New("sshconn: the host couldn't connect to the address")
+
+// A TCPError is a host's answer that it won't, or couldn't, connect to an
+// address for the connection (DialTCP): a refusal, which is
+// ErrTCPForwardingRefused, or else a failure, which is
+// ErrTCPConnectFailed. Reason is the answer's reason, as RFC 4254 names
+// it, and Said what the host said of it, as it said it, which can be
+// anything, and is escaped only in Error.
+type TCPError struct {
+	Refused bool
+	Reason  string
+	Said    string
+}
+
+func (e *TCPError) Error() string {
+	why := ErrTCPConnectFailed
+	if e.Refused {
+		why = ErrTCPForwardingRefused
+	}
+	return fmt.Sprintf("%v: %s: %s", why, e.Reason, escape(e.Said))
+}
+
+// Is reports whether the answer is target's: ErrTCPForwardingRefused for a
+// refusal, ErrTCPConnectFailed for a failure.
+func (e *TCPError) Is(target error) bool {
+	return target == ErrTCPForwardingRefused && e.Refused || target == ErrTCPConnectFailed && !e.Refused //nolint:errorlint // the sentinels themselves
+}
 
 // DialTCP asks the host to connect to host at port, and to carry what that
 // connection carries over this one (direct-tcpip), as ssh -L and ssh -W
@@ -35,9 +62,12 @@ var ErrTCPConnectFailed = errors.New("sshconn: the host couldn't connect to the 
 //
 // It returns the connection, which closes once ctx is done, or this
 // connection closes, as well as with its Close: ctx bounds its life,
-// where a net.Dialer's bounds only the dial. A host that refuses is
-// ErrTCPForwardingRefused, and one that couldn't connect
-// ErrTCPConnectFailed, each with what the host said, escaped.
+// where a net.Dialer's bounds only the dial. Its deadlines can't be set,
+// as x/crypto/ssh's channels' can't, so ctx is what bounds it. A host's
+// answer that it won't, or couldn't, connect is a *TCPError: one that
+// refuses, as administratively prohibited, or that knows no direct-tcpip
+// channel, is ErrTCPForwardingRefused; any other answer, as connect
+// failed, or resource shortage, is ErrTCPConnectFailed.
 //
 // It waits, while MaxTCPConns of the connection's are open, for one to
 // close, and for the host's answer, each only until ctx is done, or the
@@ -79,11 +109,8 @@ func (c *Conn) DialTCP(ctx context.Context, host string, port int) (net.Conn, er
 	}
 	release()
 	if oe, ok := errors.AsType[*ssh.OpenChannelError](err); ok {
-		why := ErrTCPConnectFailed
-		if oe.Reason == ssh.Prohibited || oe.Reason == ssh.UnknownChannelType {
-			why = ErrTCPForwardingRefused
-		}
-		return nil, fmt.Errorf("%w: %s: %s", why, oe.Reason, escape(oe.Message))
+		refused := oe.Reason == ssh.Prohibited || oe.Reason == ssh.UnknownChannelType
+		return nil, &TCPError{Refused: refused, Reason: oe.Reason.String(), Said: oe.Message}
 	}
 	return nil, err
 }

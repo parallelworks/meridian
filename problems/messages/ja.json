@@ -376,6 +376,7 @@
   "ssh_host_helper_failed": "{host} 上の Meridian の補助プログラム meridian host は、{op} に応答する前に停止しました: {reason}。",
   "ssh_forwarding_refused": "{host} の sshd は、そこにある Meridian のワーカーのために {path} で待ち受けないため、ワーカーはコーディネーターに到達できません。",
   "ssh_tcp_forwarding_refused": "{host} の sshd は Meridian のために {address} へ接続しないため、Meridian はそのホストを通じてそのアドレスに到達できません。",
+  "ssh_tcp_connect_failed": "{host} の sshd は Meridian のために {address} へ接続できませんでした: {reason}。",
   "ssh_tcp_address_invalid": "Meridian は「{value}」のポート {port} へ接続するようホストに求めません。受け付けるのは、ホストの名前か IP アドレスだけと、1 から 65535 までのポートです。",
   "ssh_host_release_mismatch": "{host} 上の Meridian の補助プログラム meridian host はリリース {release} で、コーディネーターのリリース {expected} ではないため、Meridian はそれを操作しません。",
   "ssh_placement_elsewhere": "Meridian の {host} への接続は、ワーカーを配置したノードではなく別のノードに届くため、ワーカーがまだ動いているかどうかを判断できません。",

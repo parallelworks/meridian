@@ -2312,6 +2312,13 @@
       "Check that ssh -W <address> <host> connects, from the same machine and user."
     ]
   },
+  "ssh_tcp_connect_failed": {
+    "why": "Meridian reaches an address through a host as ssh -L and ssh -W do: over its SSH connection to the host, it asks the host's sshd to connect to the address (direct-tcpip). sshd tried and couldn't: nothing listens at the address, its name doesn't resolve on the host, the host can't reach it, or sshd can't open another connection now. The message shows what sshd said.",
+    "fix": [
+      "Check that what should listen at the address runs, and listens at the address and port the workflow gave, as the host sees them.",
+      "Check that ssh -W <address> <host> connects, from the same machine and user."
+    ]
+  },
   "ssh_tcp_address_invalid": {
     "why": "Meridian reaches an address through a host by asking the host's sshd to connect to it (direct-tcpip, as ssh -L does). The address comes from a workflow, as a session's remoteHost and remotePort do, so Meridian asks for one only in a form the host can't read as more than an address: a host's name, of letters, digits, -, _ and dots, that doesn't start with -, or an IPv4 or IPv6 address without brackets; and a port from 1 to 65535. The message shows the value with its control characters escaped, as \\n.",
     "fix": [

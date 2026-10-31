@@ -2684,6 +2684,14 @@
       "在同一台机器上以同一用户运行 ssh -W <address> <host>，确认能够连接。"
     ]
   },
+  "ssh_tcp_connect_failed": {
+    "title": "无法为 Meridian 连接某个地址的主机",
+    "why": "Meridian 像 ssh -L 和 ssh -W 那样通过主机到达一个地址：通过它与主机的 SSH 连接，请主机的 sshd 连接该地址（direct-tcpip）。sshd 尝试了但没能连上：该地址上没有任何程序在监听，该名称在主机上无法解析，主机无法到达它，或者 sshd 现在无法再打开连接。消息会显示 sshd 所说的内容。",
+    "fix": [
+      "确认本应在该地址监听的程序正在运行，并且从主机看来，它在工作流给出的地址和端口上监听。",
+      "在同一台机器上以同一用户运行 ssh -W <address> <host>，确认能够连接。"
+    ]
+  },
   "ssh_tcp_address_invalid": {
     "title": "Meridian 不会让主机连接的地址",
     "why": "Meridian 通过请主机的 sshd 连接一个地址来经由主机到达它（direct-tcpip，与 ssh -L 相同）。地址来自工作流，例如会话的 remoteHost 和 remotePort，因此 Meridian 只以主机无法读成不只是地址的形式请求连接：由字母、数字、-、_ 和点组成且不以 - 开头的主机名称，或不带方括号的 IPv4 或 IPv6 地址；以及 1 到 65535 之间的端口。消息会把值中的控制字符转义显示，例如 \\n。",

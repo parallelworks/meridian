@@ -15,7 +15,6 @@ import (
 	"github.com/parallelworks/foundation/problem"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
 	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/internal/leaktest"
 	"github.com/parallelworks/meridian/internal/sshtest"
@@ -121,8 +120,8 @@ func TestDialTCPJump(t *testing.T) {
 
 // TestDialTCPRefused checks that a host whose sshd won't connect to an
 // address is ssh_tcp_forwarding_refused, which names the host and the
-// address; and that one that couldn't connect is an error that says so,
-// and no problem of the workflow's.
+// address; and that one that couldn't connect is ssh_tcp_connect_failed,
+// which names them too, and says what the host said, as it said it.
 func TestDialTCPRefused(t *testing.T) {
 	leaktest.Check(t)
 	r := connectRig(t, func(o *sshtest.Options) { o.RefuseForwards = true })
@@ -140,18 +139,17 @@ func TestDialTCPRefused(t *testing.T) {
 	closedPort := ln.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // a TCP listener's
 	_ = ln.Close()
 	_, err = open.d.DialTCP(t.Context(), open.m, "127.0.0.1", closedPort)
-	if !errors.Is(err, sshconn.ErrTCPConnectFailed) {
-		t.Errorf("an address nothing listens on gave %v", err)
-	}
-	if _, ok := errors.AsType[*problem.Problem](err); ok {
-		t.Errorf("an address nothing listens on gave the problem %v", err)
+	p = kindtest.Want(t, err, problems.SSHTCPConnectFailed).Params
+	reason, _ := p["reason"].(string)
+	if p["host"] != open.server.Addr() || p["address"] != net.JoinHostPort("127.0.0.1", strconv.Itoa(closedPort)) || !strings.Contains(reason, "refused") {
+		t.Errorf("an address nothing listens on gave the params %v", p)
 	}
 }
 
 // TestDialTCPAddress checks which hosts and ports DialTCP asks a host to
 // connect to: a name, or an IP address, and a port from 1 to 65535. Any
-// other is ssh_tcp_address_invalid, with the host escaped, before anything
-// connects.
+// other is ssh_tcp_address_invalid, with the host as it was given, which
+// its message escapes, before anything connects.
 func TestDialTCPAddress(t *testing.T) {
 	leaktest.Check(t)
 	r := connectRig(t)
@@ -171,8 +169,8 @@ func TestDialTCPAddress(t *testing.T) {
 		{"", 80, ""},
 		{"-oProxyCommand=x", 80, "-oProxyCommand=x"},
 		{"node 1", 80, "node 1"},
-		{"node\n1", 80, `node\n1`},
-		{"node\x00", 80, `node\x00`},
+		{"node\n1", 80, "node\n1"},
+		{"node\x00", 80, "node\x00"},
 		{"node.", 80, "node."},
 		{".node", 80, ".node"},
 		{"a..b", 80, "a..b"},
@@ -192,6 +190,11 @@ func TestDialTCPAddress(t *testing.T) {
 		if p["value"] != tc.want || p["port"] != strconv.Itoa(tc.port) {
 			t.Errorf("%q port %d: the problem's params are %v", tc.host, tc.port, p)
 		}
+	}
+	// The message escapes the host's control characters.
+	_, err := r.d.DialTCP(t.Context(), r.m, "node\n1", 80)
+	if d := kindtest.Want(t, err, problems.SSHTCPAddressInvalid).Detail; !strings.Contains(d, `node\n1`) || strings.Contains(d, "\n") {
+		t.Errorf("the message is %q", d)
 	}
 	if got := r.server.Logins(); len(got) != 0 {
 		t.Errorf("the driver logged in to the host as %v, for addresses it refuses", got)

@@ -43,8 +43,11 @@ func Path() string { return os.Getenv(EnvSSHD) }
 
 // Options are what a Server's sshd offers and accepts.
 type Options struct {
-	// Authorized are the keys the test's user may log in with.
+	// Authorized are the keys the test's user may log in with, each with
+	// KeyOptions, the options of its line in authorized_keys, as
+	// no-port-forwarding or restrict, or none for "".
 	Authorized []ssh.PublicKey
+	KeyOptions string
 	// Env is what sshd sets in each session's environment (SetEnv), over
 	// what it sets itself, HOME among them.
 	Env []string
@@ -54,8 +57,11 @@ type Options struct {
 	// TCPForwarding is sshd's AllowTcpForwarding, as yes, local, remote
 	// or no, or its default, yes, for "", and PermitOpen the addresses
 	// it forwards TCP connections to, as host:port, or any for nil.
-	TCPForwarding string
-	PermitOpen    []string
+	// DisableForwarding refuses to forward anything (DisableForwarding
+	// yes).
+	TCPForwarding     string
+	PermitOpen        []string
+	DisableForwarding bool
 	// KeyExchanges and Ciphers are what sshd offers (KexAlgorithms,
 	// Ciphers), or its defaults for nil.
 	KeyExchanges []string
@@ -102,6 +108,9 @@ func New(t testing.TB, opts Options) *Server {
 	}
 	var authorized bytes.Buffer
 	for _, k := range opts.Authorized {
+		if opts.KeyOptions != "" {
+			authorized.WriteString(opts.KeyOptions + " ")
+		}
 		authorized.Write(ssh.MarshalAuthorizedKey(k))
 	}
 	addr := freeAddr(t)
@@ -182,6 +191,9 @@ func configOf(opts Options, addr, hostKey, authorized, pidFile string) []byte {
 	}
 	if len(opts.PermitOpen) > 0 {
 		line("PermitOpen %s", strings.Join(opts.PermitOpen, " "))
+	}
+	if opts.DisableForwarding {
+		line("DisableForwarding yes")
 	}
 	if len(opts.KeyExchanges) > 0 {
 		line("KexAlgorithms %s", strings.Join(opts.KeyExchanges, ","))

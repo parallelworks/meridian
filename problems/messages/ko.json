@@ -376,6 +376,7 @@
   "ssh_host_helper_failed": "{host}에 있는 Meridian의 보조 프로그램 meridian host가 {op}에 응답하기 전에 멈췄습니다: {reason}.",
   "ssh_forwarding_refused": "{host}의 sshd가 그곳의 Meridian 워커를 위해 {path}에서 듣지 않으므로, 워커가 코디네이터에 닿을 수 없습니다.",
   "ssh_tcp_forwarding_refused": "{host}의 sshd가 Meridian을 위해 {address}에 연결하지 않으므로, Meridian은 그 호스트를 거쳐 그 주소에 닿을 수 없습니다.",
+  "ssh_tcp_connect_failed": "{host}의 sshd가 Meridian을 위해 {address}에 연결하지 못했습니다: {reason}.",
   "ssh_tcp_address_invalid": "Meridian은 ‘{value}’의 포트 {port}에 연결하라고 호스트에 요청하지 않습니다. Meridian은 호스트의 이름이나 IP 주소만, 그리고 1부터 65535까지의 포트를 받습니다.",
   "ssh_host_release_mismatch": "{host}에 있는 Meridian의 보조 프로그램 meridian host는 코디네이터의 릴리스 {expected}가 아니라 릴리스 {release}이므로, Meridian은 그것을 구동하지 않습니다.",
   "ssh_placement_elsewhere": "Meridian의 {host} 연결이 워커를 배치한 노드가 아닌 다른 노드에 닿으므로, 워커가 아직 실행 중인지 알 수 없습니다.",

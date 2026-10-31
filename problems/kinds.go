@@ -614,10 +614,12 @@ var (
 	// path is the socket on the host that the coordinator asked sshd to
 	// listen on for the host's workers.
 	SSHForwardingRefused = define(Error, "ssh_forwarding_refused", "Host that won't forward a socket to the coordinator", "host", "path")
-	// address is what the host was asked to connect to, as host:port;
-	// value and port a host and a port, as they were given, which
-	// Meridian asks no host to connect to.
+	// address is what the host was asked to connect to, as host:port, and
+	// reason what the host said of why it couldn't; value and port a host
+	// and a port, as they were given, which Meridian asks no host to
+	// connect to.
 	SSHTCPForwardingRefused = define(Error, "ssh_tcp_forwarding_refused", "Host that won't connect to an address for Meridian", "host", "address")
+	SSHTCPConnectFailed     = define(Error, "ssh_tcp_connect_failed", "Host that couldn't connect to an address for Meridian", "host", "address", "reason")
 	SSHTCPAddressInvalid    = define(Error, "ssh_tcp_address_invalid", "Address Meridian doesn't ask a host to connect to", "value", "port")
 )
 
