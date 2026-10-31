@@ -246,7 +246,7 @@ func TestSSHStepRunStopped(t *testing.T) {
 			h := newSSHHost(t, env)
 			running := startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", strings.Replace(sshWaiting, "STOP", tc.stop, 1)))
 			if tc.stop == "" {
-				waitUntil(t, "the step to wait on the host", func() bool { return strings.Contains(running.stdout.String(), "| waiting") })
+				untilSaid(t, running, "| waiting")
 				if err := meridianProcess(t, env, "cancel", "1").cmd.Wait(); err != nil {
 					t.Fatal(err)
 				}
@@ -326,7 +326,7 @@ jobs:
           echo waiting
           sleep 600
 `))
-	waitUntil(t, "the job's second step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 1| waiting") })
+	untilSaid(t, running, "main step 1| waiting")
 	if err := meridianProcess(t, env, "cancel", "1").cmd.Wait(); err != nil {
 		t.Fatal(err)
 	}
