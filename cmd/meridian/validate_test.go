@@ -727,6 +727,47 @@ jobs:
 	}
 }
 
+// TestValidateBucket checks that a bucket input takes a bucket's
+// pw://user/name URI, whose uri a workflow reads, and refuses a name
+// alone, which a run here has no platform user to read as theirs, and an
+// input that asks for the bucket's credentials.
+func TestValidateBucket(t *testing.T) {
+	parallel(t)
+	env := emptyEnv(t)
+	workflow := writeFile(t, "w.yaml", `on:
+  execute:
+    inputs:
+      data:
+        type: bucket
+jobs:
+  main:
+    steps:
+      - run: pw buckets cp "${{ inputs.data.uri }}/input.tgz" .
+`)
+	if r := runCLI(t, env, "", "validate", "--start", "--input", "data=pw://alice/data", workflow); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate with a bucket's URI = %+v", r)
+	}
+	r := runCLI(t, env, "", "validate", "--start", "--input", "data=data", workflow)
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "(bucket_uri_invalid)") || !strings.Contains(r.stdout, "pw://user/bucket") {
+		t.Errorf("meridian validate with a bucket's name alone = %+v", r)
+	}
+	credentials := writeFile(t, "c.yaml", `on:
+  execute:
+    inputs:
+      data:
+        type: bucket
+        generateCredentials: true
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.data.uri }}
+`)
+	r = runCLI(t, env, "", "validate", "--start", "--input", "data=pw://alice/data", credentials)
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "(bucket_credentials_need_platform)") {
+		t.Errorf("meridian validate of a bucket with generateCredentials = %+v", r)
+	}
+}
+
 // TestValidateDevZero checks that a stream that never ends is read only to
 // the limit.
 func TestValidateDevZero(t *testing.T) {

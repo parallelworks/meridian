@@ -1868,7 +1868,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; the platform's other resources, as its regions, come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
@@ -1878,9 +1878,11 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
 
 A name the local Inputs gives as it was given means what it means on a
-platform: a Kubernetes cluster's is the name the platform knows it by. A
-step that gives one to the platform's own CLI, as `pw kube auth` does in
-every known workflow with such an input, needs that CLI installed and
+platform: a Kubernetes cluster's is the name the platform knows it by,
+and a bucket's URI the one the platform reaches it by. A step that gives
+one to the platform's own CLI, as `pw kube auth` does in every known
+workflow with a Kubernetes input, and `pw buckets cp` in every one that
+requires a bucket, needs that CLI installed and
 signed in to the platform as it runs, standalone as on the platform:
 Meridian gives the step the name, and doesn't stand in for that CLI.
 

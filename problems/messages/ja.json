@@ -221,6 +221,8 @@
   "execution_group_unknown": "入力「{input}」が指定している実行グループ {value} は、グループ {groups} のいずれでもありません。",
   "cluster_unknown": "入力「{input}」が指定しているクラスター {value} は、workspace でも、クラスター {clusters} のいずれでもありません。",
   "clusters_none": "入力「{input}」が指定しているクラスター {value} は workspace ではなく、ここには他のクラスターがありません。",
+  "bucket_uri_invalid": "入力「{input}」は pw://user/bucket のようなバケットの pw:// URI を受け取ります。{value} ではありません。",
+  "bucket_credentials_need_platform": "入力「{input}」はバケットの資格情報を求めていますが、それを作れるのはプラットフォームだけです。",
   "source_ref_invalid": "uses:「{ref}」は、github/owner/repository@revision のような Git リポジトリ内のワークフローへの参照ではありません。",
   "source_on_platform": "uses:「{ref}」はプラットフォームが保存するワークフローを指定しており、そのプラットフォームしか読み込めません。",
   "source_revision_not_found": "Git はリポジトリ {repo} のリビジョン「{revision}」を見つけられませんでした: {reason}。コミットは完全な SHA で指定します。",
