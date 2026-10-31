@@ -264,9 +264,12 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     ([The `ssh` backend](#the-ssh-backend));
   - a step whose `ssh:` puts it on another host than its job's, which runs
     there as a run of its own, with a placement for each try, an
-    `OUTPUTS` of its own and its own log, and runs in the run's default
-    group where its `ssh:` is null in a job on a host; and such a step
-    whose `ssh:` reads what only its job's worker knows, which fails
+    `OUTPUTS` of its own and its own log; one whose `ssh:` is null, or
+    gives no `remoteHost`, in a job on a host, which runs in the run's
+    default group; one whose `ssh:` reads what only its job's worker
+    knows, which fails; a calling step's own `ssh:`, which is refused;
+    and an action the coordinator performs with an `ssh:` of its own,
+    which connects to no host
     ([Steps on another host](#steps-on-another-host)).
 
 ### Conformance
@@ -2704,7 +2707,8 @@ Where format 1 does otherwise, none of it in the known workflows:
   later optimization could place a job whose steps all name one host on
   that host, once for the job, at the cost that a host that can't be
   reached fails the job as it is placed, before a step's `retry:` could
-  try another.
+  try another. It needs every step's `ssh:` known at Ready, as all the
+  known ones are.
 - **`OUTPUTS` starts empty on the host**, so the step doesn't read what
   its job's earlier steps wrote there, and a step that writes it with
   `>` doesn't erase that, as format 1's copy back does. All 9 of the
@@ -4013,11 +4017,12 @@ coordinator say to each other.
   claim holds what masks what it inherits, needs version 3; any other,
   version 1. A later
   worker, in an attempt an earlier coordinator serves at an earlier
-  version, fails such a step (`uses_not_supported`), rather than run it
-  otherwise. The same problem fails, as it runs, a step that has no pin:
-  a checkout of a run created before checkouts were pinned, which the
-  coordinator fails, and a call of a workflow of one created before calls
-  were, which the worker fails.
+  version, fails such a step (`uses_not_supported`, or for a step on
+  another host `step_ssh_not_supported` or `step_off_job_host`), rather
+  than run it otherwise. The same problem fails, as it runs, a step that
+  has no pin: a checkout of a run created before checkouts were pinned,
+  which the coordinator fails, and a call of a workflow of one created
+  before calls were, which the worker fails.
 - **What a body carries of a run is the plan's.** The run's values, the
   job Ready evaluated and the results of the jobs it needs are encoded at
   the run's plan version, and a change to one of their types raises the
@@ -4247,17 +4252,19 @@ own runs.
   `remoteHost` runs it there too, with a note in its log, as format 1 does
   (`ssh_host_empty`). A step whose `ssh:` names a host of its own runs
   there as a run of its own, and so does one whose `ssh:` is null, or
-  gives no `remoteHost`, in a job on a host ([Steps on another
-  host](#steps-on-another-host)). In an attempt of version 2 of the
-  worker API or earlier, as a worker or a coordinator of an older release
-  serves, such a step fails instead, rather than run on the wrong host:
-  one off its job's host (`step_off_job_host`), and one whose `ssh:` names
-  a host of its own (`step_ssh_not_supported`). A step whose `ssh:` names
-  the same host and login as its job's, as a step that repeats its job's
-  `remoteHost` does, runs where its job runs: the same `remoteHost`,
-  `remoteUser`, `jumpNodeHost` and `jumpNodeUser`, by which format 1 keys
-  the connections it reuses, with
-  null and none as `""`, whatever else it says, such as its
+  gives no `remoteHost`, in a job on a host, but a step that calls a
+  workflow, which is refused, and one that uses an action the
+  coordinator performs other than checkout, which runs in its job ([Steps
+  on another host](#steps-on-another-host)). In an attempt of version 2
+  of the worker API or earlier, as a worker or a coordinator of an older
+  release serves, such a step fails instead, rather than run on the
+  wrong host: one off its job's host (`step_off_job_host`), and one whose
+  `ssh:` names a host of its own (`step_ssh_not_supported`). A step whose
+  `ssh:` names the same host and login as its job's, as a step that
+  repeats its job's `remoteHost` does, runs where its job runs: the same
+  `remoteHost`, `remoteUser`, `jumpNodeHost` and `jumpNodeUser`, by which
+  format 1 keys the connections it reuses, with null and none as `""`,
+  whatever else it says, such as its
   `disconnect-timeout`. `host:22` isn't `host`, as format 1 connects to
   `host:port` as it is and reads `host` through the user's `ssh_config`.
   All 536 jobs' `ssh:` mappings in the known workflows read `remoteHost`
@@ -4367,7 +4374,9 @@ actions](#built-in-actions)). A step on another host with `ssh:`, and one
 whose `ssh:` is null, or gives no `remoteHost`, on a worker that a job's
 `ssh:` placed on a host, runs there as a run of its own, from version 3
 of the worker API, and fails in an attempt of an earlier version ([Steps
-on another host](#steps-on-another-host)). A step that `uses:` a
+on another host](#steps-on-another-host)), but a step that calls a
+workflow, which is refused, and one that uses an action the coordinator
+performs other than checkout, which runs in its job. A step that `uses:` a
 workflow runs it as a run of its own ([Workflows a step
 calls](#workflows-a-step-calls)), whose
 directory its `clean-on-retry:` cleans on the machine the run started
@@ -4757,9 +4766,11 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   names one, runs there as a run of its own ([Steps on another
   host](#steps-on-another-host)), which differs from ACTIVATE's run of it
   as that section says, and fails (`step_ssh_not_supported`) only in an
-  attempt of an earlier version of the worker API. ACTIVATE runs it
-  there, over its job's connection, but for a step that calls a workflow,
-  whose child it runs where its caller runs, which Meridian refuses.
+  attempt of an earlier version of the worker API. ACTIVATE connects to
+  that host itself, over a connection of its own from where the run
+  started, and runs the step there, but for a step that calls a
+  workflow, whose child it runs where its caller runs, which Meridian
+  refuses.
 - **A step off its job's host.** In a job on a host, a step whose `ssh:`
   is null, or gives no `remoteHost`, runs as a run of its own in the
   run's default group ([Steps on another host](#steps-on-another-host)),
