@@ -685,6 +685,16 @@ type StepRunState struct {
 	JobAttempt int `json:"jobAttempt,omitzero"`
 }
 
+// PlanSteps returns the state's steps as the job's state holds them
+// (plan.JobState.Steps).
+func (s StepRunState) PlanSteps() []plan.StepResult {
+	out := make([]plan.StepResult, len(s.Steps))
+	for i, r := range s.Steps {
+		out[i] = plan.StepResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
+	}
+	return out
+}
+
 // A StepRunResult is how a step of a job ended, as a later step of it
 // reads it (plan.StepResult). Every member is of version 3.
 type StepRunResult struct {
@@ -692,6 +702,19 @@ type StepRunResult struct {
 	Outputs        map[string]string `json:"outputs,omitzero"`
 	CleanupOutcome plan.Outcome      `json:"cleanupOutcome,omitzero"`
 	CleanupOutputs map[string]string `json:"cleanupOutputs,omitzero"`
+}
+
+// StepRunResults returns steps, the results of a job's steps, as a
+// StepRunState holds them: nil for none, which a state leaves out.
+func StepRunResults(steps []plan.StepResult) []StepRunResult {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]StepRunResult, len(steps))
+	for i, r := range steps {
+		out[i] = StepRunResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
+	}
+	return out
 }
 
 // A Tree is what an attempt of a child run has of its tree (Claim.Tree):

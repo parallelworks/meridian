@@ -82,14 +82,7 @@ func (k childAPI) StepRunEnd(ctx context.Context, id string) (*workerapi.StepRun
 // gives them, whatever req says.
 func (c *Coordinator) stepRunState(ctx context.Context, a *store.Attempt, j *plan.Job, req *workerapi.StepRunRequest) (workerapi.StepRunState, error) {
 	st := req.State
-	results := make([]plan.StepResult, len(st.Steps))
-	for i, r := range st.Steps {
-		results[i] = plan.StepResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
-	}
-	st.Steps = make([]workerapi.StepRunResult, len(results))
-	for i, r := range j.StepRunReads(req.Step, req.Cleanup, results) {
-		st.Steps[i] = workerapi.StepRunResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
-	}
+	st.Steps = workerapi.StepRunResults(j.StepRunReads(req.Step, req.Cleanup, st.PlanSteps()))
 	st.JobAttempt = a.Number
 	err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
