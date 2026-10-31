@@ -3,7 +3,8 @@ description: >-
   targetInfo, case aside, as Go's encoding/json decodes them into its
   fields: Name is name and localport is localPort, so neither is unknown,
   and Name counts as the name it needs. local_port is no key of it, and is
-  ignored with a warning.
+  ignored with a warning. ACTIVATE's editor schema flags the variants,
+  but its run reads them.
 source: ACTIVATE's update-session action
 expect:
   diagnostics:

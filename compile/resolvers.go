@@ -193,7 +193,8 @@ type SessionUpdate struct {
 // what it asks, but for its Name and With, which UpdateSession takes from
 // with, the step's with: as it was evaluated, its name, read as text, and
 // the rest, each key as format 1 reads it, case aside (foldKeys); and path
-// is the step's in the workflow, at which its problems are. It returns them: none when the session was updated;
+// is the step's in the workflow, at which its problems are. It returns
+// them: none when the session was updated;
 // resolver_missing where s is nil, as a feature whose interface is
 // missing fails, but only as the step runs, which an if: may skip; and a
 // refusal of s's, as Update gives it, as of a session the run may not

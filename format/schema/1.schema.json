@@ -725,6 +725,7 @@
                     "then": {
                       "properties": {
                         "with": {
+                          "$comment": "A run reads these keys, and those of targetInfo, whatever their case, as Go's encoding/json decodes them into fields: Name is name, and counts as the name required. This schema names each in one case only.",
                           "required": ["name"],
                           "properties": {
                             "name": { "description": "Session name" },
