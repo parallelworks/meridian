@@ -834,9 +834,10 @@
   },
   "session_local_port_taken": {
     "title": "Puerto de la sesión en uso",
-    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina, uno que elige el sistema. Un proceso que toma una sesión, como después de que terminara el meridian run que la servía, la sirve en el puerto en que se servía antes, y, donde otro programa lo tiene ahora, en otro; este es el puerto que encontró en uso.",
+    "why": "Meridian sirve cada sesión en un puerto propio de las direcciones de bucle local de esta máquina, 127.0.0.1 y [::1], el mismo puerto en ambas, uno que elige el sistema. Un proceso que toma una sesión, como después de que terminara el meridian run que la servía, la sirve en el puerto en que se servía antes, y, donde otro programa lo tiene ahora, en otro. Donde el sistema eligió el puerto, cada puerto que eligió, tantas veces como Meridian lo pidió, era de otro programa en [::1], así que Meridian no sirve la sesión en ninguno.",
     "fix": [
-      "Nada: Meridian sirve la sesión en otro puerto, que da meridian session url."
+      "Para un puerto en que se servía antes la sesión: nada, ya que Meridian sirve la sesión en otro puerto, que da meridian session url.",
+      "Para un puerto que eligió el sistema: busca qué tiene puertos en [::1], como muestra ss -ltn, detenlo y vuelve a ejecutar meridian resume."
     ]
   },
   "session_local_port_refused": {

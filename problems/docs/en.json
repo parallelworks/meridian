@@ -716,9 +716,10 @@
     ]
   },
   "session_local_port_taken": {
-    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address, one the system picks. A process that takes a session over, as after the meridian run that served it ended, serves it at the port it was served at before, and, where another program holds that now, at another; this is the port it found taken.",
+    "why": "Meridian serves each session on a port of its own of this machine's loopback addresses, 127.0.0.1 and [::1], the same port of both, one the system picks. A process that takes a session over, as after the meridian run that served it ended, serves it at the port it was served at before, and, where another program holds that now, at another. Where the system picked the port, every port it picked, as many times as Meridian asked, was another program's on [::1], so Meridian serves the session at none.",
     "fix": [
-      "Nothing: Meridian serves the session at another port, which meridian session url gives."
+      "For a port the step's session was served at before: nothing, since Meridian serves the session at another port, which meridian session url gives.",
+      "For a port the system picked: find what holds ports on [::1], as ss -ltn shows, stop it, and run meridian resume again."
     ]
   },
   "session_local_port_refused": {
