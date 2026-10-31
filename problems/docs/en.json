@@ -2063,7 +2063,7 @@
     ]
   },
   "session_unreachable": {
-    "why": "Meridian serves a session by passing each request on to the address the workflow pointed it at: over SSH, through its cluster's host, or on this machine. That address didn't answer: the service hasn't started yet, has stopped, listens at another address, or the host wouldn't connect to it, or too many of the session's connections are still opening.",
+    "why": "Meridian serves a session by passing each request on to the address the workflow pointed it at: over SSH, through its cluster's host, or on this machine. That address didn't answer: the service hasn't started yet, has stopped, listens at another address, or the host wouldn't connect to it.",
     "fix": [
       "Wait for the service to start, and load the page again.",
       "Check the run, with meridian status and meridian logs."
@@ -2073,7 +2073,7 @@
     "why": "A session has at most so many connections to its service open, or opening, at once, a quarter of what Meridian opens over its connection to the service's host, so that one session's pages, or a browser that retries a service that doesn't answer, can't take what the host's other sessions need. A request waits ten seconds at most for one. Each of the session's pages that keeps a connection open, as a WebSocket, holds one as long as it is open.",
     "fix": [
       "Close pages of the session that you don't use, and load the page again.",
-      "Check that the session's service answers, with meridian status and meridian logs: dials to one that doesn't hold their places until they give up."
+      "Check that the session's service answers, with meridian status and meridian logs: dials to a service that doesn't answer hold their places until they give up."
     ]
   },
   "session_unauthorized": {
@@ -2095,7 +2095,7 @@
     ]
   },
   "session_host_refused": {
-    "why": "Each session is served at a host name of its own, <label>.localhost, whose label is 128 random bits, which a browser resolves to this machine's loopback address. A browser sends a cookie to its host alone, whatever the port, so no other server on this machine, at 127.0.0.1 or localhost, nor another session, gets the session's cookie, and its pages' storage is the session's alone. Meridian answers only requests addressed to that name: one to 127.0.0.1, localhost, or a name made to resolve to 127.0.0.1 (DNS rebinding), it refuses. Chrome and Firefox resolve any name under localhost to this machine themselves, and so do curl and systemd's resolver; a browser that doesn't can't open the session, and Meridian doesn't serve it at 127.0.0.1 instead.",
+    "why": "Each session is served at a host name of its own, <label>.localhost, whose label is 128 random bits, which a browser resolves to this machine's loopback address. A browser sends a cookie to its host alone, whatever the port, so no request to another name, as 127.0.0.1, localhost or another session's, carries the session's cookie, and its pages' storage is the session's alone; and the session's port listens on both of this machine's loopback addresses, 127.0.0.1 and [::1], where it has IPv6, so no other program can answer at the session's name and port. Meridian answers only requests addressed to that name: one to 127.0.0.1, localhost, or a name made to resolve to 127.0.0.1 (DNS rebinding), it refuses. Chrome and Firefox resolve any name under localhost to this machine themselves, and so do curl and systemd's resolver; a browser that doesn't can't open the session, and Meridian doesn't serve it at 127.0.0.1 instead.",
     "fix": [
       "Open the session at the address meridian session url prints, in a browser that resolves names under localhost, as Chrome and Firefox do, or through ssh -L to it."
     ]

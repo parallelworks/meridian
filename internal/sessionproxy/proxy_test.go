@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -61,6 +62,9 @@ func service(t *testing.T, h http.Handler) string {
 	l := loopback(t)
 	if h == nil {
 		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if rp := r.URL.Query().Get("rp"); rp != "" {
+				w.Header().Set("Referrer-Policy", rp)
+			}
 			switch r.URL.Path {
 			case "/ws":
 				if r.Header.Get("Upgrade") != "websocket" {
@@ -179,9 +183,8 @@ func newRig(t *testing.T, h http.Handler, with ...func(*Config)) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.addr = l.Addr().String()
-	_, port, _ := net.SplitHostPort(r.addr)
-	r.host = net.JoinHostPort(r.p.Host(), port)
+	r.addr = net.JoinHostPort("127.0.0.1", strconv.Itoa(l.Port()))
+	r.host = net.JoinHostPort(r.p.Host(), strconv.Itoa(l.Port()))
 	served := make(chan error, 1)
 	go func() { served <- r.p.Serve(l) }()
 	t.Cleanup(func() {
@@ -876,9 +879,14 @@ func TestListen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	a := l.Addr().(*net.TCPAddr) //nolint:forcetypeassert // a TCP listener's
-	if !a.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+	a := l.v4.Addr().(*net.TCPAddr) //nolint:forcetypeassert // a TCP listener's
+	if !a.IP.Equal(net.IPv4(127, 0, 0, 1)) || a.Port != l.Port() {
 		t.Errorf("Listen listens on %v", a)
+	}
+	if l.v6 != nil {
+		if b := l.v6.Addr().(*net.TCPAddr); !b.IP.Equal(net.IPv6loopback) || b.Port != a.Port { //nolint:forcetypeassert // a TCP listener's
+			t.Errorf("Listen listens on %v, and %v", a, b)
+		}
 	}
 	_, err = Listen(t.Context(), a.Port)
 	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionLocalPortTaken.Code() || p.Params["port"] != strconv.Itoa(a.Port) {
@@ -899,9 +907,94 @@ func TestListen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Serve(anyAddress{}); err == nil {
+	if err := p.Serve(&Listener{v4: anyAddress{}}); err == nil {
 		t.Error("Serve took a listener on every address")
 	}
+}
+
+// ipv6 skips a test where this machine has no IPv6 loopback.
+func ipv6(t *testing.T) {
+	t.Helper()
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback here: %v", err)
+	}
+	_ = l.Close()
+}
+
+// TestListenIPv6 checks that a session's port is [::1]'s too, which a
+// browser can try first for the session's host name: another program that
+// holds [::1] at the port makes it one in use, rather than leaving it the
+// session's first request, its code and its cookie; and the session is
+// served over [::1] as over 127.0.0.1.
+func TestListenIPv6(t *testing.T) {
+	ipv6(t)
+	held, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::1]:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	port := held.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // a TCP listener's
+	_, err = Listen(t.Context(), port)
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionLocalPortTaken.Code() || p.Params["port"] != strconv.Itoa(port) {
+		t.Errorf("a port another program holds on [::1] gave %v", err)
+	}
+
+	r := newRig(t, nil)
+	cookie := r.login()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+net.JoinHostPort("::1", strings.Split(r.host, ":")[1])+prefix+"/x", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = r.host
+	req.Header.Set("Cookie", cookie)
+	resp, err := r.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("over [::1], the session answered %s", resp.Status)
+	}
+}
+
+// TestListenPicksBoth checks how Listen picks a port: one the system picks
+// on 127.0.0.1 that another program holds on [::1] is let go, and another
+// picked, until one is free on both; and where the system has no IPv6
+// loopback, which no program can listen on either, 127.0.0.1 alone does.
+func TestListenPicksBoth(t *testing.T) {
+	defer func(f func(context.Context, string, string) (net.Listener, error)) { listen = f }(listen)
+	real := listen
+	var v6Tries int
+	refuse := syscall.EADDRINUSE
+	listen = func(ctx context.Context, network, address string) (net.Listener, error) {
+		if network == "tcp6" {
+			v6Tries++
+			if refuse == syscall.EADDRNOTAVAIL || v6Tries < 3 {
+				return nil, &net.OpError{Op: "listen", Net: network, Err: refuse}
+			}
+		}
+		return real(ctx, network, address)
+	}
+	ipv6(t)
+	l, err := Listen(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.v6 == nil || v6Tries != 3 {
+		t.Errorf("after two ports taken on [::1], Listen tried %d, and listens on [::1]: %v", v6Tries, l.v6 != nil)
+	}
+	_ = l.Close()
+
+	refuse = syscall.EADDRNOTAVAIL
+	l, err = Listen(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.v6 != nil {
+		t.Error("without IPv6 loopback, Listen listens on [::1]")
+	}
+	_ = l.Close()
 }
 
 // anyAddress is a listener that says it listens on every address, which
@@ -1036,6 +1129,12 @@ func TestRepointInFlight(t *testing.T) {
 
 	newer := service(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "new") }))
 	r.p.Repoint(func(ctx context.Context) (net.Conn, error) { return (&net.Dialer{}).DialContext(ctx, "tcp4", newer) })
+	// A request between Repoint and the slow one's end, which a transport
+	// that the old service and the new shared would take for one to keep
+	// its connections idle for again.
+	if got := get("/between"); got != "new" {
+		t.Errorf("a request after Repoint, as one to the old service went on, answered %q", got)
+	}
 	close(release)
 	if got := <-slow; got != "old" {
 		t.Errorf("the request going on as the session was pointed elsewhere answered %q", got)
@@ -1071,8 +1170,9 @@ func TestOriginNull(t *testing.T) {
 // them, which it signs none of.
 func TestIdentityHeaders(t *testing.T) {
 	r := newRig(t, nil)
-	header := http.Header{"Cookie": {r.login()}}
-	for _, h := range identityHeaders {
+	header := http.Header{"Cookie": {r.login()}, "X-Kept": {"kept"}}
+	names := []string{"X-PW-User", "X-PW-User-Token", "X-PW-Subject", "X-PW-ImpersonatedBy", "X-PW-Impersonated-By", "x-pw-anything"}
+	for _, h := range names {
 		header.Set(h, "forged")
 	}
 	resp, body := r.do("GET", prefix+"/x", header)
@@ -1080,10 +1180,13 @@ func TestIdentityHeaders(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &s); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatal(resp.Status, err)
 	}
-	for _, h := range identityHeaders {
+	for _, h := range names {
 		if v := s.Header.Values(h); len(v) != 0 {
 			t.Errorf("the service got %s: %q", h, v)
 		}
+	}
+	if s.Header.Get("X-Kept") != "kept" {
+		t.Errorf("another header didn't reach the service: %v", s.Header)
 	}
 }
 
@@ -1095,5 +1198,20 @@ func TestUnauthorizedScheme(t *testing.T) {
 	resp, _ := r.do("GET", prefix+"/x", nil)
 	if got := resp.Header.Get("WWW-Authenticate"); resp.StatusCode != http.StatusUnauthorized || got != `Meridian-Link realm="`+prefix+`/"` {
 		t.Errorf("%s, WWW-Authenticate %q", resp.Status, got)
+	}
+}
+
+// TestReferrerPolicy checks that the browser gets a service's answer that
+// sets no Referrer-Policy with same-origin, so that the session's host
+// name, whose label no other site is to learn, goes in no Referer to
+// another; and one the service sets as it set it.
+func TestReferrerPolicy(t *testing.T) {
+	r := newRig(t, nil)
+	header := http.Header{"Cookie": {r.login()}}
+	if resp, _ := r.do("GET", prefix+"/x", header); resp.Header.Get("Referrer-Policy") != "same-origin" {
+		t.Errorf("an answer without a policy reached the browser with %q", resp.Header.Get("Referrer-Policy"))
+	}
+	if resp, _ := r.do("GET", prefix+"/x?rp=no-referrer", header); resp.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Errorf("the service's policy reached the browser as %q", resp.Header.Get("Referrer-Policy"))
 	}
 }

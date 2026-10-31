@@ -108,6 +108,10 @@ const (
 // platform asks a tunnel's service, whatever its address.
 const upstreamHost = "localhost"
 
+// platformHeaders is what the names of format 1's platform's own headers
+// start with, as Go writes a header's name.
+const platformHeaders = "X-Pw-"
+
 // Config is what a Proxy serves.
 type Config struct {
 	// User and Name are the login name of the user who runs Meridian and
@@ -172,8 +176,11 @@ type Proxy struct {
 // those of the requests that go on close as they end.
 type target struct {
 	transport *http.Transport
-	inflight  atomic.Int64
-	retired   atomic.Bool
+	// dial connects to where the session points, which the transport's
+	// connections are dialed with, as it is when each is.
+	dial     atomic.Pointer[DialFunc]
+	inflight atomic.Int64
+	retired  atomic.Bool
 }
 
 // retireAfter is how long after the last request through a retired
@@ -244,15 +251,28 @@ func (p *Proxy) Host() string { return HostOf(p.cfg.Label) }
 // at: <label>.localhost.
 func HostOf(label string) string { return label + ".localhost" }
 
-// Serve serves the session on l, which must listen on 127.0.0.1 alone
-// (Listen), until Close.
-func (p *Proxy) Serve(l net.Listener) error {
-	if a, ok := l.Addr().(*net.TCPAddr); !ok || !a.IP.IsLoopback() {
-		return fmt.Errorf("sessionproxy: %v isn't this machine's loopback address, which alone serves a session", l.Addr())
+// Serve serves the session on l, which listens on this machine's loopback
+// addresses alone (Listen), on each of them alike, until Close.
+func (p *Proxy) Serve(l *Listener) error {
+	ls := l.listeners()
+	for _, l := range ls {
+		if a, ok := l.Addr().(*net.TCPAddr); !ok || !a.IP.IsLoopback() {
+			return fmt.Errorf("sessionproxy: %v isn't this machine's loopback address, which alone serves a session", l.Addr())
+		}
 	}
-	err := p.server.Serve(l)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+	errs := make(chan error, len(ls))
+	for _, l := range ls {
+		go func() {
+			err := p.server.Serve(l)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			}
+			errs <- err
+		}()
+	}
+	var err error
+	for range ls {
+		err = errors.Join(err, <-errs)
 	}
 	return err
 }
@@ -296,11 +316,14 @@ func (p *Proxy) Repoint(dial DialFunc) {
 
 // newTarget returns a target that dial connects to.
 func (p *Proxy) newTarget(dial DialFunc) *target {
-	return &target{transport: &http.Transport{
-		DialContext:        func(ctx context.Context, _, _ string) (net.Conn, error) { return p.dialService(ctx, dial) },
+	t := &target{}
+	t.dial.Store(&dial)
+	t.transport = &http.Transport{
+		DialContext:        func(ctx context.Context, _, _ string) (net.Conn, error) { return p.dialService(ctx, *t.dial.Load()) },
 		DisableCompression: true,
 		IdleConnTimeout:    idleTimeout,
-	}}
+	}
+	return t
 }
 
 // switching is the proxy's RoundTripper: each request goes through the
@@ -606,17 +629,15 @@ func (p *Proxy) placed(conn net.Conn, release func()) *placedConn {
 	return c
 }
 
-// identityHeaders are the headers with which format 1's platform tells a
-// session's service who asks: Meridian sets none of them, and passes on
-// none a browser sent, which a service might trust.
-var identityHeaders = []string{"X-PW-User", "X-PW-User-Token", "X-PW-Subject", "X-PW-Impersonated-By"}
-
 // rewrite makes what goes to the service of what the browser sent: its
 // path without the session's, as format 1's platform passes a tunnel's on,
 // which X-Forwarded-Prefix says; its query without a code; its cookies
 // without the proxy's; the service's host; X-Forwarded-For, -Host and
-// -Proto as the proxy saw them, over any the browser sent; and none of
-// the headers format 1's platform says who asks with (identityHeaders).
+// -Proto as the proxy saw them, over any the browser sent; and none of the
+// headers format 1's platform tells a service who asks with, which all
+// start X-PW-, nor any other of the platform's headers: Meridian sets none
+// of them, and passes on none a browser sent, which a service might
+// trust.
 func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 	in, out := pr.In, pr.Out
 	out.URL.Scheme, out.URL.Host, out.Host = "http", upstreamHost, upstreamHost
@@ -631,8 +652,10 @@ func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 			out.Header.Add("Cookie", kept)
 		}
 	}
-	for _, h := range identityHeaders {
-		out.Header.Del(h)
+	for name := range out.Header {
+		if strings.HasPrefix(http.CanonicalHeaderKey(name), platformHeaders) {
+			delete(out.Header, name)
+		}
 	}
 	pr.SetXForwarded()
 	out.Header.Set("X-Forwarded-Prefix", p.prefix)
@@ -641,10 +664,16 @@ func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 // modify makes what goes to the browser of what the service answered: a
 // Location that leaves the session's path put back under it; each cookie
 // held to the session's path, without a domain, and none of the proxy's
-// own names; and no Clear-Site-Data, which, as every port of 127.0.0.1
-// shares its cookies, would sign the browser out of every session.
+// own names; no Clear-Site-Data, which, as every port of 127.0.0.1
+// shares its cookies, would sign the browser out of every session; and,
+// where the service sets no Referrer-Policy, same-origin, so that the
+// session's host name, whose label no other site is to learn, goes in no
+// Referer to another.
 func (p *Proxy) modify(resp *http.Response) error {
 	h := resp.Header
+	if h.Get("Referrer-Policy") == "" {
+		h.Set("Referrer-Policy", "same-origin")
+	}
 	if loc := h.Get("Location"); loc != "" {
 		h.Set("Location", p.location(loc))
 	}

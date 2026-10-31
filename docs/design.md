@@ -5502,18 +5502,21 @@ their workers store them.
 
 ### Serving a session
 
-A run's session is served on this machine, on a port of its own of
-127.0.0.1, at a host name of its own, `<label>.localhost`, whose label is
-128 random bits, kept with the session, at the path format 1's platform
-serves it at, `/me/session/<user>/<name>/` (`internal/sessionproxy`).
+A run's session is served on this machine, on a port of its own of its
+loopback addresses, at a host name of its own, `<label>.localhost`, whose
+label is 128 random bits, kept with the session, at the path format 1's
+platform serves it at, `/me/session/<user>/<name>/`
+(`internal/sessionproxy`).
 Nothing provides Sessions to `meridian run` yet; this is what will serve
 them.
 
 - **The host name.** A browser sends a cookie to its host alone, whatever
   the port, and keeps a host's storage, and service workers, apart from
-  another's: so no other server on this machine, at 127.0.0.1 or
-  `localhost`, nor another session, gets a session's cookie, or its
-  pages' storage. The port answers only a request addressed to its
+  another's: so no request to another name, as 127.0.0.1, `localhost` or
+  another session's, carries a session's cookie, or reaches its pages'
+  storage; and a service's own responses that set no `Referrer-Policy`
+  get `same-origin`, so the label goes in no `Referer` to another site.
+  The port answers only a request addressed to its
   session's name, at any port, as `ssh -L` to another one gives it: one
   to 127.0.0.1, `localhost`, another session's name, or a name a page
   made resolve to 127.0.0.1 (DNS rebinding), it refuses
@@ -5529,13 +5532,21 @@ them.
   it, and every cookie it sets is held to it, without a `Domain`. `<user>`
   is the login name of the user who runs Meridian, the same bytes as the
   `PW_USER` that workflows build the path from (`internal/login`), so a
-  name a URL's path would escape, any outside letters, digits, `.`, `_`
-  and `-`, can't be served (`session_user_unsupported`). `/` and the path
+  name a URL's path would escape, any outside letters, digits, `.`, `_`,
+  `-`, `@` and `~`, as SSSD's `user@domain`, and `.` and `..`, can't be
+  served (`session_user_unsupported`). `/` and the path
   without its slash lead to the path; anything else on the port is
   nothing (`session_not_here`).
-- **The port** listens on 127.0.0.1 alone, never on another address,
-  which another machine reaches through `ssh -L`: `update-session`'s
-  `localPort`, or one the system picks. One in use, or one the system
+- **The port** listens on both of this machine's loopback addresses,
+  127.0.0.1 and `[::1]`, the same port of both, and never on another
+  address, which another machine reaches through `ssh -L`:
+  `update-session`'s `localPort`, or one the system picks that is free on
+  both. A browser resolves `<label>.localhost` to both, and can try
+  `[::1]` first, as curl and Chrome do: a program that listened there at
+  the session's port would get its first request, with its code, or its
+  cookie. `[::1]` is left out only where the system has no IPv6 loopback,
+  as it says by refusing the address, or the family, where no program can
+  listen on it either. A port in use on either address, or one the system
   won't give, is a problem of its own (`session_local_port_taken`,
   `session_local_port_refused`); Meridian doesn't take another, which the
   workflow can't tell the user.
@@ -5597,16 +5608,18 @@ Where format 1's platform serves a session otherwise:
 
 - **Where.** It serves it over HTTPS, at the platform's host, behind the
   platform's login, and its path redirects go through its login (307);
-  Meridian serves it over HTTP, on this machine's loopback address, at a
+  Meridian serves it over HTTP, on this machine's loopback addresses, at a
   host name of the session's own, behind a link's code and a cookie
-  (401), and sends `X-Forwarded-Proto: http`. `/` and the path without its
-  slash are 302s here, where the platform gives 301.
+  (401), and sends `X-Forwarded-Proto: http`. The path without its slash
+  is a 302 here, where the platform gives 301; `/` is the platform's own
+  page there, and leads to the session here.
 - **Location.** Both put a path the service gives under `/` back under
   the session's path. Meridian leaves one already under it, a relative
-  one (`./x`, `?q`, `#f`, an empty one), and one at another host as they
-  are, and puts one at `localhost` without a port, the host the service
-  was asked for, under the session's path; the platform reads relative
-  ones against the prefix, and puts other hosts' at its own.
+  one, and one at another host as they are, and puts one at `localhost`
+  without a port, the host the service was asked for, under the session's
+  path; the platform reads `./…`, `.`, `?…`, `#…` and an empty one
+  against the prefix, though not `x` or `../x`, and puts other hosts' at
+  its own.
 - **Cookies.** The platform keeps a cookie's `Domain`, holds it to the
   session's path without its slash, and drops none; Meridian removes
   `Domain`, holds it to the path with its slash, and drops those named as
@@ -5615,7 +5628,8 @@ Where format 1's platform serves a session otherwise:
   Meridian passes on, and sets `X-PW-User` and a signed token of who
   asks, which Meridian doesn't: both remove the browser's.
 - **Paths.** Meridian passes an escaped path on as the browser escaped
-  it, as `%2F`, under the session's.
+  it, as `%2F`, under the session's; the platform decodes it, and `%2F`
+  reaches the service as `/`.
 - **Answers.** The platform answers a service that doesn't send its
   headers within 30 seconds with 502; Meridian waits as long as the
   service takes, as a long poll can. Its own answers are JSON there, and
