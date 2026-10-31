@@ -262,6 +262,8 @@ func TestResolveClusters(t *testing.T) {
 		{nil, map[string]any{"ip": "elsewhere"}, false, "pw://alice/<name>"},
 		{multi, []any{"pw://alice/hpc", details}, false, "pw://alice/hpc"},
 		{multi, []any{"pw://alice/hpc", 3.0}, true, "pw://alice/<name>"},
+		{multi, []any{"pw://alice/hpc", ""}, false, "pw://alice/<name>"},
+		{multi, []any{"pw://alice/hpc", nil}, false, "pw://alice/<name>"},
 	} {
 		_, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v, tc.called)
 		p := kindtest.Want(t, err, problems.ClusterURIRequired)

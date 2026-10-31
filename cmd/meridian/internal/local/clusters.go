@@ -133,27 +133,31 @@ func (c *Config) ClusterHost(name string) (string, bool) {
 // a list of them, of the shape the bug fix to format 1 checks
 // (resolveEach), becomes the cluster's details, whatever the input's
 // include-workspace, provider and csp say, as they only choose what a form
-// lists. "" and null are no value, and are kept. A called workflow's
-// input, called, also takes a cluster's details, a mapping, as its caller
-// passes those it has, which are kept as they are; a run's own takes only
-// the URI, as a platform's form gives it, so a mapping there, or any other
-// value of a list, is problems.ClusterURIRequired.
+// lists. "" is no value, and is kept. A called workflow's input, called,
+// also takes a cluster's details, a mapping, as its caller passes those it
+// has, which are kept as they are, and an item of a list that is "" or
+// null; a run's own takes only the URI, as a platform's form gives it, so
+// a mapping there, or any other item of a list, "" and null among them,
+// as ACTIVATE refuses them, is problems.ClusterURIRequired.
 func (c *Config) resolveClusters(def map[string]any, value any, called bool) (any, error) {
 	return resolveEach(value, def["multi"] == true, func(v any) (any, error) {
+		// An item of a list that is "" or null; the input's own "" is kept
+		// before (resolveEach).
+		empty := v == nil || v == ""
 		switch v := v.(type) {
-		case nil:
-			return nil, nil
 		case string:
-			if v == "" {
-				return v, nil
+			if !empty {
+				return c.resolveCluster(v)
 			}
-			return c.resolveCluster(v)
 		case map[string]any:
 			if called {
 				return v, nil
 			}
 			name, _ := v["name"].(string)
 			return nil, c.uriRequired(v, name)
+		}
+		if empty && called {
+			return v, nil
 		}
 		return nil, c.uriRequired(v, "")
 	})

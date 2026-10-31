@@ -475,10 +475,12 @@ the SHA-256 hash of its content: 218 files.
   text. A cluster list resolves each URI and, at a called workflow's
   input, keeps details, where ACTIVATE made each item that isn't text,
   or is `""`, null, so that they reached the called workflow as
-  `[null]`. ACTIVATE takes the same fix as it creates a run. Both check
-  the value the run reads, a default included; but a default written as
-  an expression ACTIVATE checks only as it evaluates it, later, where
-  Meridian checks what it gives as it compiles. And ACTIVATE's fix gives
+  `[null]`; a run's own list refuses an item that is `""` or null, as
+  ACTIVATE does. ACTIVATE takes the same fix as it creates a run. Both
+  check the value the run reads, a default included, but for one written
+  as an expression: ACTIVATE refuses a run that leaves one of these inputs
+  to an expression default, where Meridian evaluates it and checks what it
+  gives. None of the known workflows has one. And ACTIVATE's fix gives
   these three types' input its default, when that is non-empty text,
   only for `""` and null, where its fallback gave it for any value but
   text, a mapping among them; Meridian does the same for their null, and
