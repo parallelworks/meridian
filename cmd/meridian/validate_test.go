@@ -529,6 +529,39 @@ func TestValidateChecksConfig(t *testing.T) {
 	}
 }
 
+// TestRunMappedWorkflow checks that meridian runs a step's call of a
+// workflow a platform stores that sources.yaml maps to a workflow in Git:
+// validate pins it, run runs it as a run of its own, under format 1's name
+// for it, its slug, and status shows that run's workflow by both names;
+// and that a workflow it doesn't map is refused as the run is created.
+func TestRunMappedWorkflow(t *testing.T) {
+	flowsRepo(t, map[string]string{"flows/tools.yaml": "jobs:\n  greet:\n    steps:\n      - run: echo \"hello from $PW_WORKFLOW_NAME\"\n"})
+	env := runEnv(t)
+	config := env[local.EnvConfigDir]
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mapping := "workflows:\n  marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: flows/tools.yaml}\n"
+	if err := os.WriteFile(filepath.Join(config, local.SourcesFile), []byte(mapping), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := writeFile(t, "w.yaml", "jobs:\n  main:\n    steps:\n      - uses: marketplace/tools@v1.2\n")
+	if r := runCLI(t, env, "", "validate", workflow); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate of a mapped call = %+v", r)
+	}
+	if r := runTest(t, env, nil, workflow); r.code != exitOK || !strings.Contains(r.stdout, "| hello from tools\n") {
+		t.Errorf("meridian run of a mapped call = %+v", r)
+	}
+	if r := commandTest(t, env, "status", "2"); r.code != exitOK ||
+		!strings.Contains(r.stdout, "workflow: marketplace/tools/v1.2 → github.com/acme/flows@main:flows/tools.yaml\n") {
+		t.Errorf("meridian status of the mapped call's run = %+v", r)
+	}
+	unmapped := writeFile(t, "u.yaml", "jobs:\n  main:\n    steps:\n      - uses: marketplace/other/v1\n")
+	if r := runCLI(t, env, "", "validate", unmapped); r.code != exitInvalid || !strings.Contains(r.stdout, "u.yaml:4:15: error:") || !strings.Contains(r.stdout, "(source_on_platform)") {
+		t.Errorf("meridian validate of a call that isn't mapped = %+v", r)
+	}
+}
+
 // flowsRepo makes a Git repository of files, by their paths in it, a
 // script among them executable, on its branch main, which Git reaches for github.com's acme/flows, and for each
 // of hosts' as acme/flows there: a workflow that uses: names, which

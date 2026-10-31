@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,7 +57,9 @@ const waitDelay = time.Second
 // that holds it, gitlab.com by default, by its name, with no port, which
 // must be one the user registered (NewSources): otherwise a workflow could
 // have git, with the user's configuration and credentials, reach a server
-// of its choosing.
+// of its choosing. A reference to a workflow a platform stores,
+// marketplace/... or workflow/..., names one here only where the user maps
+// it to one of those (Workflows), which is then read as that one is.
 //
 // Resolve pins the reference to the commit its revision names now and to
 // the SHA-256 digest of the file's text there, and Read reads it again by
@@ -108,6 +111,8 @@ type Sources struct {
 	// servers are the GitLab servers, besides gitlab.com, that a
 	// reference's $host can name.
 	servers map[string]bool
+	// workflows map workflows a platform stores to workflows in Git.
+	workflows Workflows
 
 	mu    sync.Mutex
 	repos map[string]chan struct{}
@@ -126,8 +131,9 @@ var _ compile.Sources = (*Sources)(nil)
 // the cache directory, which must be readable only by its user, as
 // Dirs.EnsureCache makes it, and which reaches the GitLab servers, besides
 // gitlab.com, that servers names, as Config.GitLabServers gives them, and
-// no others.
-func NewSources(dir string, servers []string) *Sources {
+// no others; and which reads the workflows a platform stores that
+// workflows maps, as Config.Workflows gives them, and no others.
+func NewSources(dir string, servers []string, workflows Workflows) *Sources {
 	s := &Sources{
 		dir:       filepath.Join(dir, SourcesDir),
 		git:       "git",
@@ -135,6 +141,7 @@ func NewSources(dir string, servers []string) *Sources {
 		repoURL:   func(repo string) string { return repo },
 		protocols: []string{"https", "ssh"},
 		servers:   map[string]bool{},
+		workflows: maps.Clone(workflows),
 		repos:     map[string]chan struct{}{},
 	}
 	for _, server := range servers {
@@ -146,6 +153,9 @@ func NewSources(dir string, servers []string) *Sources {
 // A sourceRef is a reference to a workflow in a Git repository, as
 // parseRef reads it.
 type sourceRef struct {
+	// from is the reference, as Normal reads it, to the workflow a
+	// platform stores that the user mapped to this one (Workflows), or "".
+	from string
 	// kind is github or gitlab, and host its server.
 	kind, host string
 	// repo is the repository, as owner/name, or a GitLab project's path,
@@ -162,6 +172,125 @@ var hosts = map[string]string{"github": "github.com", "gitlab": "gitlab.com"}
 
 // platformRefs start the references to workflows a platform stores.
 var platformRefs = []string{"marketplace/", "workflow/"}
+
+// onPlatform reports whether uses names a workflow a platform stores.
+func onPlatform(uses string) bool {
+	return slices.ContainsFunc(platformRefs, func(p string) bool { return strings.HasPrefix(uses, p) })
+}
+
+// Workflows map the workflows a platform stores, as sources.yaml's
+// workflows do, to workflows in Git repositories, each by its reference,
+// as Normal reads it: marketplace/<slug>/<version> or workflow/<name>,
+// one workflow; or marketplace/<slug>/{version}, each version of the slug
+// that no key of its own names but latest, which is the item's latest as
+// its platform decides it, so only a key of its own maps it. The workflow
+// in Git is a reference as a step writes one, its uses:, and its $yaml and
+// $host as Path and Host, which a slug's mapping can write the version in,
+// as {version}: in its Path, and in its uses:'s revision, after its @.
+type Workflows map[string]plan.SourceRef
+
+// VersionTemplate is what stands for a marketplace workflow's version in a
+// slug's mapping (Workflows).
+const VersionTemplate = "{version}"
+
+// versionPattern is a version a slug's mapping takes: letters, digits, .,
+// _, + and -, not first a dot, which could name a parent directory or a
+// hidden file, nor a hyphen, which git could take for an option.
+var versionPattern = regexp.MustCompile(`^[A-Za-z0-9_+][A-Za-z0-9._+-]*$`)
+
+// MappingKey reads key, a key of sources.yaml's workflows: the reference
+// to the workflow a platform stores that it maps, as Normal reads it, and
+// whether it is a slug's, which maps each of its versions. It reports
+// whether key is one: a reference to a marketplace workflow by its slug
+// and version, or to a saved workflow by its name, in which nothing holds
+// a brace but a slug's whole version, {version}.
+func MappingKey(key string) (normal string, slug, ok bool) {
+	normal = plan.SourceRef{Uses: key}.Normal().Uses
+	if item, isItem := strings.CutPrefix(normal, "marketplace/"); isItem {
+		name, version, _ := strings.Cut(item, "/")
+		slug = version == VersionTemplate
+		return normal, slug, name != "" && !strings.ContainsAny(name, "{}") && (slug || !strings.ContainsAny(version, "{}"))
+	}
+	name, isSaved := strings.CutPrefix(normal, "workflow/")
+	return normal, false, isSaved && name != "" && !strings.ContainsAny(name, "{}")
+}
+
+// MappingInvalid returns what of to, a workflow in Git that a key of
+// sources.yaml's workflows maps a workflow a platform stores to, a slug's
+// if slug, isn't what a step's reference to one is: platform, for another
+// workflow a platform stores; template, for a version template where it
+// can't be; uses, yaml or host, for what format 1, and these Sources,
+// refuse of a reference's uses:, $yaml or $host; or "" for none. A slug's
+// mapping is checked with a version in its template's place.
+func MappingInvalid(to plan.SourceRef, slug bool) string {
+	if onPlatform(to.Uses) {
+		return "platform"
+	}
+	if !strings.HasPrefix(to.Uses, "github/") && !strings.HasPrefix(to.Uses, "gitlab/") {
+		return "uses"
+	}
+	name, rev, _ := strings.Cut(to.Uses, "@")
+	if strings.Contains(name, VersionTemplate) || strings.Contains(to.Host, VersionTemplate) ||
+		!slug && (strings.Contains(rev, VersionTemplate) || strings.Contains(to.Path, VersionTemplate)) {
+		return "template"
+	}
+	if slug {
+		to = withVersion(to, "0")
+	}
+	_, err := parseRef(to)
+	p, ok := errors.AsType[*problem.Problem](err)
+	switch {
+	case err == nil:
+		return ""
+	case ok && p.Code == problems.SourceWithInvalid.Code() && p.Params["key"] == "$yaml":
+		return "yaml"
+	case ok && p.Code == problems.SourceWithInvalid.Code():
+		return "host"
+	}
+	return "uses"
+}
+
+// withVersion returns to, a slug's mapping, for version: with version for
+// {version} in its Path and in its uses:'s revision.
+func withVersion(to plan.SourceRef, version string) plan.SourceRef {
+	if name, rev, ok := strings.Cut(to.Uses, "@"); ok {
+		to.Uses = name + "@" + strings.ReplaceAll(rev, VersionTemplate, version)
+	}
+	to.Path = strings.ReplaceAll(to.Path, VersionTemplate, version)
+	return to
+}
+
+// target returns the workflow in Git that w maps ref, to a workflow a
+// platform stores, to, and ref as Normal reads it, which w maps by. One
+// that w doesn't map names no workflow here: SourceOnPlatform. Of a slug's
+// mapping, the version is the uses:'s, which, as it is the workflow's
+// text, must be one versionPattern takes, and give a reference parseRef
+// takes, before anything reads it (SourceVersionInvalid); and the latest,
+// which only the platform knows, isn't one (SourceLatestNotMapped).
+func (w Workflows) target(ref plan.SourceRef) (plan.SourceRef, string, error) {
+	from := ref.Normal().Uses
+	if to, ok := w[from]; ok {
+		return to, from, nil
+	}
+	if item, ok := strings.CutPrefix(from, "marketplace/"); ok {
+		slug, version, _ := strings.Cut(item, "/")
+		if to, ok := w["marketplace/"+slug+"/"+VersionTemplate]; ok {
+			if version == plan.LatestVersion {
+				return plan.SourceRef{}, "", notFound(problems.SourceLatestNotMapped, problems.Params{"ref": ref.Uses, "key": from})
+			}
+			invalid := notFound(problems.SourceVersionInvalid, problems.Params{"ref": ref.Uses, "version": version})
+			if !versionPattern.MatchString(version) {
+				return plan.SourceRef{}, "", invalid
+			}
+			to = withVersion(to, version)
+			if _, err := parseRef(to); err != nil {
+				return plan.SourceRef{}, "", invalid
+			}
+			return to, from, nil
+		}
+	}
+	return plan.SourceRef{}, "", notFound(problems.SourceOnPlatform, problems.Params{"ref": ref.Uses})
+}
 
 // commitPattern is a full commit's name, as git writes it.
 var commitPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -221,7 +350,7 @@ func notFound(k *problems.Kind, params problems.Params) error {
 // source_ref_invalid for the rest.
 func parseRef(ref plan.SourceRef) (sourceRef, error) {
 	uses := ref.Uses
-	if slices.ContainsFunc(platformRefs, func(p string) bool { return strings.HasPrefix(uses, p) }) {
+	if onPlatform(uses) {
 		return sourceRef{}, notFound(problems.SourceOnPlatform, problems.Params{"ref": uses})
 	}
 	invalid := func() (sourceRef, error) {
@@ -273,13 +402,23 @@ func parseRef(ref plan.SourceRef) (sourceRef, error) {
 	return sourceRef{kind: kind, host: host, repo: name, path: norm.Path, rev: rev}, nil
 }
 
-// parse reads a reference, as parseRef does, and refuses one on a GitLab
-// server the user didn't register.
+// parse reads a reference, as parseRef does, a workflow a platform stores
+// as the workflow in Git the user maps it to (Workflows), and refuses one on
+// a GitLab server the user didn't register.
 func (s *Sources) parse(ref plan.SourceRef) (sourceRef, error) {
+	var from string
+	if onPlatform(ref.Uses) {
+		to, normal, err := s.workflows.target(ref)
+		if err != nil {
+			return sourceRef{}, err
+		}
+		ref, from = to, normal
+	}
 	r, err := parseRef(ref)
 	if err != nil {
 		return sourceRef{}, err
 	}
+	r.from = from
 	if r.host != hosts[r.kind] && !s.servers[r.host] {
 		return sourceRef{}, notFound(problems.SourceServerUnknown, problems.Params{"server": r.host})
 	}
@@ -291,13 +430,19 @@ func (s *Sources) parse(ref plan.SourceRef) (sourceRef, error) {
 // has one, and after a colon, the workflow's file, as in
 // gitlab.com/group/project@main:dir/workflow.yaml. Neither a repository's
 // names nor a revision hold an @ or a colon, so where each part ends is
-// plain, a GitLab project in subgroups' too.
+// plain, a GitLab project in subgroups' too. A workflow a platform stores,
+// which the user mapped to this one, is named by both, the one a uses:
+// names first, as in marketplace/tools/v1 → github.com/acme/flows:tools.yaml.
 func (r sourceRef) location() string {
 	loc := r.host + "/" + r.repo
 	if r.rev != "" {
 		loc += "@" + r.rev
 	}
-	return loc + ":" + r.path
+	loc += ":" + r.path
+	if r.from != "" {
+		return r.from + " → " + loc
+	}
+	return loc
 }
 
 // repoName is the repository as a problem shows it: its server and name.

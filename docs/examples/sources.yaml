@@ -1,0 +1,51 @@
+# sources.yaml, in Meridian's config directory (~/.config/meridian on
+# Linux, ~/Library/Application Support/Meridian on macOS): where the
+# workflows a step's uses: names are, besides github.com and gitlab.com.
+# Only you may change it.
+#
+# gitlab-servers are the GitLab servers, besides gitlab.com, that a step's
+# with: $host can name, each a host name with no port. Git reaches them
+# with your credentials.
+
+gitlab-servers:
+  - git.example.com
+
+# workflows map the workflows a platform stores, which a uses: names as
+# marketplace/<slug>/<version> or workflow/<name>, to workflows in Git,
+# which meridian then reads, pins and caches as it does a github/ or
+# gitlab/ one. A mapping is your word that the name is that workflow.
+#
+# Each key is such a uses:, as format 1 reads it: marketplace/tools@v1.2
+# and marketplace/tools/v1.2 are one, and marketplace/tools is
+# marketplace/tools/latest. Each value names a workflow in Git as a step
+# does:
+#   uses  required: github/<owner>/<repository>[@<revision>], or
+#         gitlab/<group>/<project>[@<revision>].
+#   yaml  optional: the workflow's file in the repository; workflow.yaml
+#         if it names none.
+#   host  optional: a GitLab project's server, one of gitlab-servers;
+#         gitlab.com if it names none.
+
+workflows:
+  marketplace/tools/v1.2:
+    uses: github/acme/flows@main
+    yaml: flows/tools.yaml
+
+  # Every version of a slug, but latest: {version} is the version the uses:
+  # names, in yaml and after the uses's @. A version is letters, digits,
+  # ., _, + and -, not first . or -.
+  marketplace/tools/{version}:
+    uses: github/acme/flows@release-{version}
+    yaml: flows/tools.yaml
+
+  # marketplace/tools, with no version, names the item's latest, which
+  # only its platform knows: this is your choice of it.
+  marketplace/tools/latest:
+    uses: github/acme/flows@main
+    yaml: flows/tools.yaml
+
+  # A workflow you saved on a platform, by its name.
+  workflow/nightly:
+    uses: gitlab/team/pipelines
+    host: git.example.com
+    yaml: nightly.yaml

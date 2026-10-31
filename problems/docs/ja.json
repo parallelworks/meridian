@@ -1584,10 +1584,26 @@
   },
   "source_on_platform": {
     "title": "プラットフォームが保存するワークフロー",
-    "why": "marketplace/ または workflow/ で始まる uses: は、ACTIVATE などのプラットフォームが保持するワークフローを指定します。Meridian 単体では、ワークフローを Git リポジトリから読み込みます。",
+    "why": "marketplace/ または workflow/ で始まる uses: は、ACTIVATE などのプラットフォームが保持するワークフローを指定します。Meridian 単体では、ワークフローを Git リポジトリから読み込み、プラットフォームが保存するワークフローは、あなたが対応付けた場合にだけ読み込みます。sources.yaml の workflows がそうした uses: を Git リポジトリのワークフローに対応付けると、それが github/ や gitlab/ の uses: と同じように読み込まれ、固定されます。",
     "fix": [
-      "使用するワークフローを保存しているプラットフォームでワークフローを実行してください。",
-      "または、github/<オーナー>/<リポジトリ>@<リビジョン> のように Git リポジトリでワークフローを指定し、ファイルを with: $yaml で指定してください。"
+      "sources.yaml の workflows で、uses: をキーとして、ワークフローを Git のワークフローに対応付けてください。例: marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}",
+      "または、uses: 自体で github/<オーナー>/<リポジトリ>@<リビジョン> のように Git リポジトリでワークフローを指定し、ファイルを with: $yaml で指定してください。"
+    ]
+  },
+  "source_version_invalid": {
+    "title": "対応付けで使えないマーケットプレイスのワークフローのバージョン",
+    "why": "sources.yaml の workflows で、キー marketplace/<slug>/{version} はマーケットプレイスのワークフローのスラッグのすべてのバージョンを対応付けます。yaml の中と uses の @ の後にある {version} は、uses: が指定するバージョンを表します。バージョンはワークフロー自身のテキストなので、Git が何かを読む前に、英字、数字、.、_、+、- だけからなり、. や - で始まらず、それから得られるリビジョンとファイルが uses: で指定できるものでなければなりません。これにより、リポジトリの外のファイルを指したり、オプションとして読まれたりすることを防ぎます。",
+    "fix": [
+      "v1.2 のように、対応付けで使えるバージョンを指定してください。",
+      "または、そのバージョンを独自のキー marketplace/<slug>/<バージョン> で sources.yaml の workflows に対応付けてください。"
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "対応付けられていないマーケットプレイスのワークフローの最新バージョン",
+    "why": "marketplace/<slug> または marketplace/<slug>/latest の uses: は、プラットフォームが決めるアイテムの最新バージョンを指定します。sources.yaml のスラッグの対応付け marketplace/<slug>/{version} にはそれがどれかわからないため、Meridian は最新を独自のキー marketplace/<slug>/latest でだけ対応付けます。これはあなたが選んだワークフローであり、アイテムの最も高いバージョンではありません。",
+    "fix": [
+      "メッセージが示すキー marketplace/<slug>/latest を sources.yaml の workflows に追加し、最新とみなすワークフローに対応付けてください。",
+      "または、marketplace/<slug>/<バージョン> のように uses: でバージョンを指定してください。"
     ]
   },
   "source_revision_not_found": {
@@ -1879,6 +1895,27 @@
     "fix": [
       "キーに合わせて値を修正してください。",
       "ポート、ログインするユーザー、踏み台ホスト、IPv6 アドレスなど、それ以上が必要なホストには、ssh_config で定義したエイリアスを指定してください。"
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "プラットフォームが保存するワークフロー以外の対応付け",
+    "why": "sources.yaml の workflows の各キーは、プラットフォームが保存するワークフローを指定する uses: です。marketplace/<slug>/<バージョン> はマーケットプレイスのワークフローの 1 つのバージョン、marketplace/<slug>/{version} は独自のキーで対応付けられていないそのスラッグの各バージョン、workflow/<名前> は保存されたワークフローを指定します。バージョンのテンプレートはバージョン全体であり、キーのほかの部分には波かっこを含められません。",
+    "fix": [
+      "marketplace/tools/v1.2、marketplace/tools/{version}、workflow/nightly のように、uses: と同じ形でキーを書いてください。"
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "同じワークフローの 2 つの対応付け",
+    "why": "sources.yaml の workflows の 2 つのキーが、フォーマット 1 が uses: を読むとおり、同じワークフローを指定しています。marketplace/<slug>@<バージョン> と marketplace/<slug>/<バージョン> は同じもので、marketplace/<slug> と marketplace/<slug>/latest も同じです。実行がどちらの対応付けを読むのかが明らかではありません。",
+    "fix": [
+      "どちらか一方だけを残してください。"
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "Git のワークフロー以外への対応付け",
+    "why": "sources.yaml の workflows の各対応付けは、ステップの uses: と同じように Git リポジトリのワークフローを指定します。uses は github/<オーナー>/<リポジトリ>[@<リビジョン>] または gitlab/<グループ>/<プロジェクト>[@<リビジョン>]、yaml はそのファイルで、ほかを指定しなければ workflow.yaml、host は GitLab プロジェクトのサーバーで、gitlab-servers に登録されている必要があります。Git はどの uses: と同じくあなたの認証情報でそれに到達するので、プラットフォームが保存する別のワークフローや URL は指定できません。対応付けにバージョンを {version} として書けるのはスラッグのキー marketplace/<slug>/{version} だけで、その yaml の中と uses の @ の後に書きます。",
+    "fix": [
+      "{uses: github/acme/flows@main, yaml: flows/tools.yaml} のように、ステップが Git のワークフローを指定するのと同じ形で対応付けを書いてください。"
     ]
   },
   "key_file_invalid": {

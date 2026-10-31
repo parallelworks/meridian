@@ -1362,10 +1362,24 @@
     ]
   },
   "source_on_platform": {
-    "why": "A uses: that starts with marketplace/ or workflow/ names a workflow that a platform, such as ACTIVATE, keeps. Meridian on its own reads workflows from Git repositories.",
+    "why": "A uses: that starts with marketplace/ or workflow/ names a workflow that a platform, such as ACTIVATE, keeps. Meridian on its own reads workflows from Git repositories, and reads one a platform stores only through a mapping of yours: sources.yaml's workflows map such a uses: to a workflow in a Git repository, which is then read, and pinned, as a github/ or gitlab/ uses: is.",
     "fix": [
-      "Run the workflow on the platform that stores the workflow it uses.",
-      "Or name the workflow by its Git repository, as github/<owner>/<repository>@<revision>, with its file in with: $yaml."
+      "Map the workflow in sources.yaml's workflows, by the uses: as its key, to the workflow in Git: for example, marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}.",
+      "Or name the workflow by its Git repository in the uses: itself, as github/<owner>/<repository>@<revision>, with its file in with: $yaml."
+    ]
+  },
+  "source_version_invalid": {
+    "why": "In sources.yaml's workflows, a key marketplace/<slug>/{version} maps every version of a marketplace workflow's slug: {version}, in its yaml and after its uses's @, stands for the version a uses: names. The version is the workflow's own text, so before Git reads anything it must be letters, digits, ., _, + and - only, not starting with . or -, and the revision and the file it gives must be ones a uses: can name, so that it can't name a file outside the repository or be read as an option.",
+    "fix": [
+      "Name a version the mapping takes, such as v1.2.",
+      "Or map that version with a key of its own, marketplace/<slug>/<version>, in sources.yaml's workflows."
+    ]
+  },
+  "source_latest_not_mapped": {
+    "why": "A uses: of marketplace/<slug>, or of marketplace/<slug>/latest, names the item's latest version, which its platform decides. A slug's mapping in sources.yaml, marketplace/<slug>/{version}, can't know which that is, so Meridian maps the latest only through a key of its own, marketplace/<slug>/latest: your choice of the workflow, not the item's highest version.",
+    "fix": [
+      "Add the key the message names, marketplace/<slug>/latest, to sources.yaml's workflows, mapped to the workflow you take to be the latest.",
+      "Or name a version in the uses:, as marketplace/<slug>/<version>."
     ]
   },
   "source_revision_not_found": {
@@ -1617,6 +1631,24 @@
     "fix": [
       "Correct the value as its key needs.",
       "For a host that needs more, such as a port, a user to log in as, a jump host or an IPv6 address, name an alias that your ssh_config defines."
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "why": "Each key of sources.yaml's workflows is a uses: that names a workflow a platform stores: marketplace/<slug>/<version>, one version of a marketplace workflow; marketplace/<slug>/{version}, each version of its slug that no key of its own maps; or workflow/<name>, a saved workflow. A version template is the whole version, and no other part of a key holds a brace.",
+    "fix": [
+      "Write the key as a uses: writes it, such as marketplace/tools/v1.2, marketplace/tools/{version} or workflow/nightly."
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "why": "Two keys of sources.yaml's workflows name the same workflow, as format 1 reads a uses:: marketplace/<slug>@<version> and marketplace/<slug>/<version> are one, and so are marketplace/<slug> and marketplace/<slug>/latest. Which of their mappings a run would read isn't plain.",
+    "fix": [
+      "Keep one of the two."
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "why": "Each mapping of sources.yaml's workflows names a workflow in a Git repository as a step's uses: does: uses, as github/<owner>/<repository>[@<revision>] or gitlab/<group>/<project>[@<revision>]; yaml, its file, workflow.yaml unless it names another; and host, a GitLab project's server, which gitlab-servers must register. Git reaches it with your credentials, as for any uses:, so it can't name another workflow a platform stores, or a URL. Only a slug's key, marketplace/<slug>/{version}, can write the version in its mapping, as {version}, in its yaml and after its uses's @.",
+    "fix": [
+      "Write the mapping as a step names a workflow in Git, such as {uses: github/acme/flows@main, yaml: flows/tools.yaml}."
     ]
   },
   "key_file_invalid": {

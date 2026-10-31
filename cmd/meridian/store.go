@@ -58,7 +58,7 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 		c.ssh(&opts)
 	}
 	ssh := backendssh.New(opts)
-	var trees coordinator.Trees = &cacheSources{dirs: dirs, servers: cfg.GitLabServers()}
+	var trees coordinator.Trees = &cacheSources{dirs: dirs, servers: cfg.GitLabServers(), workflows: cfg.Workflows()}
 	if c.trees != nil {
 		trees = c.trees
 	}

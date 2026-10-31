@@ -1878,7 +1878,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
-| Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
+| Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later; a workflow a platform stores, where `sources.yaml` maps it to one in Git |
 | Trees | The trees of the commits checkouts were pinned to, which the coordinator serves to their steps' workers | The copies of the repositories that Sources pinned them from, in Meridian's cache directory |
 | Sessions | Interactive sessions a workflow serves, which it makes and updates | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
@@ -1996,7 +1996,9 @@ slash, or, without one, its first `@`, and is `latest` when there is none,
 so that `marketplace/m@v1` and `marketplace/m/v1` are one; a `workflow/`
 one, a saved workflow's name, as it is written; and neither with its
 `$yaml` or `$host`, which ACTIVATE ignores and the schema warns of. A
-platform reads the normal reference as the same item.
+platform reads the normal reference as the same item, and the local
+Sources reads one only where the user's `sources.yaml` maps it to a
+workflow in Git ([The `meridian` command](#the-meridian-command)).
 Two steps whose references read the same are pinned once, to one commit,
 however they write it. A pinned workflow keeps its reference beside its
 commit and digest (`Source.Ref`), so Sources reads it again by it, and gives
@@ -5097,6 +5099,45 @@ host itself.
   the user's credentials, so a workflow can't name a server of its own,
   and at HTTPS's port, or at another that Git's own `url.<base>.insteadOf`
   rewrites the server's address to.
+
+  It holds `workflows` too, which map workflows a platform stores to
+  workflows in Git, so that a `uses:` of `marketplace/` or `workflow/`
+  runs without the platform
+  ([`docs/examples/sources.yaml`](examples/sources.yaml)):
+
+  - **Each key** is such a `uses:`, as format 1 reads it
+    ([Workflows a step calls](#workflows-a-step-calls)):
+    `marketplace/<slug>/<version>`, `workflow/<name>`, or
+    `marketplace/<slug>/{version}`, which maps each version of the slug
+    that no key of its own maps. Two keys that read the same, as
+    `marketplace/tools@v1` and `marketplace/tools/v1`, are refused
+    (`workflow_mapping_repeated`), as is a key that names no such workflow
+    (`workflow_mapping_key_invalid`).
+  - **Each value** names a workflow in Git as a step does: `uses`, a
+    `github/` or `gitlab/` reference, `yaml`, its file, and `host`, a GitLab
+    project's server, which `gitlab-servers` must register, all checked as
+    a step's are; never another workflow a platform stores, or a URL
+    (`workflow_mapping_invalid`).
+  - **A slug's mapping** writes the version as `{version}`, in its `yaml`
+    and after its `uses`'s `@`, and nowhere else. The version is the
+    workflow's text, so before Git runs it must be letters, digits, `.`,
+    `_`, `+` and `-`, not first `.` or `-`, and give a revision and a file
+    that a `uses:` could name (`source_version_invalid`).
+  - **`latest`**, which a `uses:` without a version names, is the item's
+    latest as its platform decides it, which a slug's mapping can't know:
+    only a key of its own, `marketplace/<slug>/latest`, maps it, as the
+    user's choice of the workflow, not the item's highest version
+    (`source_latest_not_mapped`, which names the key).
+  - **A mapped workflow** is pinned, read again by its pin, and kept in the
+    cache as a `github/` or `gitlab/` one is, through its mapping, and its
+    remote context is its repository's. Its location names both, the one
+    the `uses:` names first, as
+    `marketplace/tools/v1.2 → github.com/acme/flows@main:tools.yaml`,
+    wherever a run's workflow is shown: `meridian status`, a chain of
+    calls, and the file a called workflow's problems are in.
+  - **A mapping is the user's word** that the name is that workflow: the
+    platform's own item may be another. A `uses:` it doesn't map is
+    `source_on_platform`.
 - **`clusters.yaml`** holds the clusters a `compute-clusters` input can
   name, each by its name, with its `host`, and, if it gives one, its
   `scheduler`, `slurm` or `pbs`
