@@ -643,6 +643,76 @@ func TestHello(t *testing.T) {
 	r.probe()
 }
 
+// heldSh runs sh as the test's server runs it, /bin/sh -s, with the script
+// it reads first; but for meridian host find, it holds the request it reads
+// next, once it has added it to $HELD_LOG, until $HELD_RELEASE is there.
+const heldSh = `#!/bin/sh
+IFS= read -r script
+case $script in
+*" host find")
+	{
+		printf '%s\n' "$script"
+		IFS= read -r req
+		printf '%s\n' "$req" >>"$HELD_LOG"
+		while [ ! -e "$HELD_RELEASE" ]; do sleep 0.05; done
+		printf '%s\n' "$req"
+		cat
+	} | /bin/sh "$@"
+	;;
+*)
+	{
+		printf '%s\n' "$script"
+		cat
+	} | /bin/sh "$@"
+	;;
+esac
+`
+
+// TestSentOnce checks that a request the driver has sent is never sent
+// again, over the connection made again, though the connection drops
+// before its answer, as one whose host restarted its sshd: the host may
+// have done what it asked, and a second request could do it twice. run
+// gives the error, which isn't one of a request unsent.
+func TestSentOnce(t *testing.T) {
+	dir := t.TempDir()
+	sh, held, release := filepath.Join(dir, "sh"), filepath.Join(dir, "held"), filepath.Join(dir, "release")
+	if err := os.WriteFile(sh, []byte(heldSh), 0o700); err != nil { //nolint:gosec // a shell, which runs
+		t.Fatal(err)
+	}
+	r := newRig(t, func(o *sshtest.Options) {
+		o.Sh = sh
+		o.Env = append(o.Env, "HELD_LOG="+held, "HELD_RELEASE="+release)
+	})
+	t.Cleanup(func() { write(t, release, nil) })
+	r.probe()
+	// The connection drops once the host has read find's request, before
+	// it can answer.
+	dropped := make(chan struct{})
+	go func() {
+		defer close(dropped)
+		for {
+			if data, _ := os.ReadFile(held); len(data) > 0 {
+				r.server.Drop()
+				return
+			}
+			select {
+			case <-t.Context().Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	_, _, err := r.d.Find(ctx(t, 15*time.Second), r.m, "attempt-1")
+	<-dropped
+	if _, unsent := errors.AsType[*unsentError](err); err == nil || unsent {
+		t.Errorf("find, dropped once its request was sent, gives %v", err)
+	}
+	data, _ := os.ReadFile(held)
+	if n := strings.Count(string(data), "\n"); n != 1 {
+		t.Errorf("the host read %d requests to find, want 1:\n%s", n, data)
+	}
+}
+
 // TestOutage checks that over a connection that drops, stalls, or whose
 // sessions are refused, Check says Unknown, never that the worker is lost,
 // and Cancel withdraws nothing; and that once the host answers again, the
