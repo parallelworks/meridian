@@ -45,87 +45,38 @@ func (a *attempt) stepRunRequest(rs *plan.ReadyStep, try int, cleanup bool, stat
 			ssh = rs.SSH
 		}
 	}
-	masked := slices.Compact(slices.Sorted(slices.Values(slices.Concat(a.masked, a.secrets))))
-	if len(masked) > 0 && masked[0] == "" {
-		masked = masked[1:]
-	}
-	return &workerapi.StepRunRequest{Step: rs.Index, Try: try, Cleanup: cleanup, SSH: ssh, State: st, Masked: masked}
+	return &workerapi.StepRunRequest{Step: rs.Index, Try: try, Cleanup: cleanup, SSH: ssh, State: st, Masked: compactMasks(a.masked, a.secrets)}
 }
 
 // An elsewhere is how a step run that a step's try, or its cleanup, asked
-// for ended, as runElsewhere ran it: the stop the worker sent it, if it
-// did; its end, nil if there is none; the problems its end gave, which
-// leave the step's retry: and ignore-errors: to say what follows, as a
-// command's exit status does; and the problems of the try itself, which
-// fail the step.
-type elsewhere struct {
-	cause    stopCause
-	end      *workerapi.StepRun
-	acted    problems.Diagnostics
-	tryDiags problems.Diagnostics
-}
+// for ended, as runElsewhere ran it (askedRun).
+type elsewhere = askedRun[*workerapi.StepRun]
 
 // runElsewhere runs a try of a step, or its cleanup, whose log is key, as
-// a step run, as req asks for it, as runChild runs a child: what s watches
-// stops it from its start; a try stopped before it asked asks for none;
-// and it waits for the step run's end, stopping it as s asks (awaitRun).
-// The step's log holds note, if there is one, and the problems the end
-// gave, and nothing else: the step's own log is its step run's. A
-// coordinator that answers that the attempt no longer holds its job halts
-// it.
+// a step run, as req asks for it, as askRun runs it, as runChild runs a
+// child. The step's log holds note, if there is one, and the problems the
+// end gave, and nothing else: the step's own log is its step run's.
 func (a *attempt) runElsewhere(ctx context.Context, key logKey, req *workerapi.StepRunRequest, s stops, note *problems.Diagnostic) elsewhere {
 	path := a.job.Steps[key.step].Path
-	stopping, unwatch := a.watch(s)
-	defer unwatch()
-	requestFailed := func(err error, what string) elsewhere {
-		if errors.Is(err, errFenced) || errors.Is(err, errUnauthorized) {
-			a.halt(err)
-			return elsewhere{cause: stopHalted}
-		}
-		if a.halted.fired() {
-			return elsewhere{cause: stopHalted}
-		}
-		a.log.Error("a step's request for its step run failed", "step", key.step, "try", key.try, "request", what, "error", a.mask.Mask(err.Error()))
-		d := a.at(problems.StepRunRequestFailed, path, problems.Params{"reason": requestFailure(err)})
-		return elsewhere{tryDiags: append(problems.Diagnostics{d}, a.writeLog(key, noted(note, problems.Diagnostics{d}))...)}
-	}
-	select {
-	case stop := <-stopping:
-		// Stopped before it asked: it asks for none.
-		if stop.cause == stopHalted {
-			return elsewhere{cause: stopHalted}
-		}
-		return elsewhere{cause: stop.cause, tryDiags: a.writeLog(key, noted(note, nil))}
-	default:
-	}
-	end, err := a.client.stepRun(ctx, req)
-	if err != nil {
-		return requestFailed(err, "step run")
-	}
-	var cause stopCause
-	if !end.Ended {
-		cause, end, err = awaitRun(ctx, a, key, "step run", stopping,
-			func(ctx context.Context) (*workerapi.StepRun, bool, error) {
-				end, err := a.client.stepRunEnd(ctx, req.Step, req.Try, req.Cleanup)
-				return end, err == nil && end.Ended, err
-			},
-			func(ctx context.Context, reason plan.Reason) error {
-				return a.client.stopStepRun(ctx, &workerapi.StepRunStop{Step: req.Step, Try: req.Try, Cleanup: req.Cleanup, Reason: reason})
-			})
-		switch {
-		case cause == stopHalted:
-			return elsewhere{cause: stopHalted}
-		case err != nil:
-			return requestFailed(err, "end")
-		}
-	}
-	if end.Run == "" && end.Outcome == plan.OutcomeCancelled {
-		// The coordinator didn't make the step run, as the worker would
-		// have stopped the step had it read the attempt's control first:
-		// the try ends as that stop ends it, as runChild's does.
-		cause = a.heedNotMade(end.Reason)
-	}
-	return elsewhere{cause: cause, end: end, acted: end.Diagnostics, tryDiags: a.writeLog(key, noted(note, end.Diagnostics))}
+	return askRun(ctx, a, key, s, note, runAsk[*workerapi.StepRun]{
+		what: "step run",
+		ask: func(ctx context.Context) (*workerapi.StepRun, error) {
+			return a.client.stepRun(ctx, req)
+		},
+		poll: func(ctx context.Context) (*workerapi.StepRun, bool, error) {
+			end, err := a.client.stepRunEnd(ctx, req.Step, req.Try, req.Cleanup)
+			return end, err == nil && end.Ended, err
+		},
+		stop: func(ctx context.Context, reason plan.Reason) error {
+			return a.client.stopStepRun(ctx, &workerapi.StepRunStop{Step: req.Step, Try: req.Try, Cleanup: req.Cleanup, Reason: reason})
+		},
+		failed: func(reason string) problems.Diagnostic {
+			return a.at(problems.StepRunRequestFailed, path, problems.Params{"reason": reason})
+		},
+		end: func(e *workerapi.StepRun) runEnd {
+			return runEnd{ended: e.Ended, run: e.Run, outcome: e.Outcome, reason: e.Reason, diags: e.Diagnostics}
+		},
+	})
 }
 
 // heedNotMade returns why a step's try, whose run the coordinator didn't

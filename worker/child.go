@@ -40,14 +40,10 @@ func childRequest(rs *plan.ReadyStep, try int, vars map[string]string, masked []
 			env[name] = v
 		}
 	}
-	masked = slices.Compact(slices.Sorted(slices.Values(masked)))
-	if len(masked) > 0 && masked[0] == "" {
-		masked = masked[1:]
-	}
 	return &workerapi.ChildRequest{
 		Step: rs.Index, Try: try, With: rs.With, Env: env,
 		WithPrivate: rs.WithPrivate, WithSecrets: rs.WithSecrets, EnvPrivate: rs.EnvPrivate, EnvSecrets: rs.EnvSecrets,
-		Masked: masked, WorkingDirectory: rs.WorkingDirectory,
+		Masked: compactMasks(masked), WorkingDirectory: rs.WorkingDirectory,
 	}
 }
 
@@ -77,91 +73,172 @@ type called struct {
 
 // runChild runs a try of the step rs, whose uses: names a workflow, whose
 // log is key, as a run of its own (docs/design.md, Workflows a step
-// calls). What s watches stops the try from its start, as a command's: a
-// timer of the step's runs from then. It makes the child's directory,
-// cleaned first when clean is set where it may be (makeChildDir), asks
-// the coordinator for the child with exactly what childRequest builds, of
-// Step's env and vars, the variables the worker defines for the step, and
-// waits for the child's end, heartbeating, as the attempt does throughout
-// (awaitChild).
-// A try stopped before it asked asks for no child. The step's log holds
-// note, if there is one, and the problems the coordinator gave of a child
-// it didn't make, and nothing else: the child's logs are its own run's. A
-// coordinator that answers that the attempt no longer holds its job halts
-// it.
+// calls), as askRun runs it: what s watches stops the try from its start,
+// as a command's: a timer of the step's runs from then. It makes the
+// child's directory first, cleaned first when clean is set where it may
+// be (makeChildDir), asks the coordinator for the child with exactly what
+// childRequest builds, of Step's env and vars, the variables the worker
+// defines for the step, and waits for the child's end, heartbeating, as
+// the attempt does throughout. The step's log holds note, if there is
+// one, and the problems the coordinator gave of a child it didn't make,
+// and nothing else: the child's logs are its own run's.
 func (a *attempt) runChild(ctx context.Context, key logKey, rs *plan.ReadyStep, s stops, note *problems.Diagnostic, vars map[string]string, clean bool) called {
 	path := a.job.Steps[key.step].Path
+	c := askRun(ctx, a, key, s, note, runAsk[*workerapi.Child]{
+		what: "child",
+		prepare: func() *problems.Diagnostic {
+			dir := plan.ChildDir(a.claim.RunDir, rs.WorkingDirectory, a.job.Key, key.step)
+			if err := a.makeChildDir(dir, clean); err != nil {
+				d := a.at(problems.ChildDirUnusable, path, problems.Params{"dir": dir, "reason": err.Error()})
+				return &d
+			}
+			return nil
+		},
+		ask: func(ctx context.Context) (*workerapi.Child, error) {
+			return a.client.child(ctx, childRequest(rs, key.try, vars, slices.Concat(a.masked, a.secrets)))
+		},
+		poll: func(ctx context.Context) (*workerapi.Child, bool, error) {
+			child, err := a.client.childEnd(ctx, key.step, key.try)
+			return child, err == nil && child.Ended, err
+		},
+		stop: func(ctx context.Context, reason plan.Reason) error {
+			return a.client.stopChild(ctx, &workerapi.ChildStop{Step: key.step, Try: key.try, Reason: reason})
+		},
+		failed: func(reason string) problems.Diagnostic {
+			return a.at(problems.ChildRequestFailed, path, problems.Params{"uses": rs.Uses, "reason": reason})
+		},
+		end: func(c *workerapi.Child) runEnd {
+			return runEnd{ended: c.Ended, run: c.Run, outcome: c.Outcome, reason: c.Reason, diags: c.Diagnostics}
+		},
+	})
+	end := called{cause: c.cause, acted: c.acted, tryDiags: c.tryDiags}
+	if c.end != nil && c.cause == noStop {
+		end.succeeded = c.end.Outcome == plan.OutcomeSuccess
+		end.cancelled = c.end.Outcome == plan.OutcomeCancelled
+	}
+	return end
+}
+
+// A runAsk is how a step's try asks for a run of its own, its child or its
+// step run, and follows it to its end (askRun).
+type runAsk[T any] struct {
+	// what names the run, in the worker's log: child or step run.
+	what string
+	// prepare readies the try before it asks, as making a child's
+	// directory does, and returns the problem that fails the try if it
+	// can't; nil readies nothing.
+	prepare func() *problems.Diagnostic
+	// ask asks the coordinator for the run; poll and stop poll for its
+	// end and stop it, as awaitRun says.
+	ask  func(context.Context) (T, error)
+	poll func(context.Context) (T, bool, error)
+	stop func(context.Context, plan.Reason) error
+	// failed is the problem of a request for the run that failed for
+	// good, for reason (requestFailure).
+	failed func(reason string) problems.Diagnostic
+	// end reads the run's state, as the coordinator answered it.
+	end func(T) runEnd
+}
+
+// A runEnd is what askRun reads of a run's state: whether it has ended;
+// its ID, "" for a run the coordinator didn't make; and how it ended, and
+// the problems its end gave.
+type runEnd struct {
+	ended   bool
+	run     string
+	outcome plan.Outcome
+	reason  plan.Reason
+	diags   problems.Diagnostics
+}
+
+// An askedRun is how a run that a step's try, or its cleanup, asked for
+// ended, as askRun followed it: the stop the worker sent it, if it did;
+// its state, the zero T if there is none; the problems its end gave, which
+// leave the step's retry: and ignore-errors: to say what follows, as a
+// command's exit status does; and the problems of the try itself, which
+// fail the step.
+type askedRun[T any] struct {
+	cause    stopCause
+	end      T
+	acted    problems.Diagnostics
+	tryDiags problems.Diagnostics
+}
+
+// askRun runs a try of a step, or its cleanup, whose log is key, as a run
+// of its own, as r asks for it: what s watches stops it from its start; a
+// try that r can't ready (prepare) fails; one stopped before it asked asks
+// for none; and it waits for the run's end, stopping it as s asks
+// (awaitRun). A run the coordinator didn't make, cancelled, ends the try
+// as the attempt's control would have stopped it (heedNotMade). The
+// step's log holds note, if there is one, and the problems the end gave,
+// or that failed the try, and nothing else: the step's own log is its
+// run's. A coordinator that answers that the attempt no longer holds its
+// job halts it.
+func askRun[T any](ctx context.Context, a *attempt, key logKey, s stops, note *problems.Diagnostic, r runAsk[T]) askedRun[T] {
 	stopping, unwatch := a.watch(s)
 	defer unwatch()
-	failed := func(d problems.Diagnostic) called {
-		return called{tryDiags: append(problems.Diagnostics{d}, a.writeLog(key, noted(note, problems.Diagnostics{d}))...)}
+	failed := func(d problems.Diagnostic) askedRun[T] {
+		return askedRun[T]{tryDiags: append(problems.Diagnostics{d}, a.writeLog(key, noted(note, problems.Diagnostics{d}))...)}
 	}
-	requestFailed := func(err error, what string) called {
+	requestFailed := func(err error, what string) askedRun[T] {
 		if errors.Is(err, errFenced) || errors.Is(err, errUnauthorized) {
 			a.halt(err)
-			return called{cause: stopHalted}
+			return askedRun[T]{cause: stopHalted}
 		}
 		if a.halted.fired() {
-			return called{cause: stopHalted}
+			return askedRun[T]{cause: stopHalted}
 		}
-		a.log.Error("a step's request for its child failed", "step", key.step, "try", key.try, "request", what, "error", a.mask.Mask(err.Error()))
-		return failed(a.at(problems.ChildRequestFailed, path, problems.Params{"uses": rs.Uses, "reason": requestFailure(err)}))
+		a.log.Error("a step's request for its "+r.what+" failed", "step", key.step, "try", key.try, "request", what, "error", a.mask.Mask(err.Error()))
+		return failed(r.failed(requestFailure(err)))
 	}
-	dir := plan.ChildDir(a.claim.RunDir, rs.WorkingDirectory, a.job.Key, key.step)
-	if err := a.makeChildDir(dir, clean); err != nil {
-		return failed(a.at(problems.ChildDirUnusable, path, problems.Params{"dir": dir, "reason": err.Error()}))
+	if r.prepare != nil {
+		if d := r.prepare(); d != nil {
+			return failed(*d)
+		}
 	}
 	select {
-	case req := <-stopping:
+	case stop := <-stopping:
 		// Stopped before it asked: it asks for none.
-		if req.cause == stopHalted {
-			return called{cause: stopHalted}
+		if stop.cause == stopHalted {
+			return askedRun[T]{cause: stopHalted}
 		}
-		return called{cause: req.cause, tryDiags: a.writeLog(key, noted(note, nil))}
+		return askedRun[T]{cause: stop.cause, tryDiags: a.writeLog(key, noted(note, nil))}
 	default:
 	}
-	child, err := a.client.child(ctx, childRequest(rs, key.try, vars, slices.Concat(a.masked, a.secrets)))
+	run, err := r.ask(ctx)
 	if err != nil {
-		return requestFailed(err, "child")
+		return requestFailed(err, r.what)
 	}
 	var cause stopCause
-	if !child.Ended {
-		cause, child, err = a.awaitChild(ctx, key, stopping)
+	if !r.end(run).ended {
+		cause, run, err = awaitRun(ctx, a, key, r.what, stopping, r.poll, r.stop)
 		switch {
 		case cause == stopHalted:
-			return called{cause: stopHalted}
+			return askedRun[T]{cause: stopHalted}
 		case err != nil:
 			return requestFailed(err, "end")
 		}
 	}
-	if child.Run == "" && child.Outcome == plan.OutcomeCancelled {
-		// The coordinator didn't make the child, as the worker would have
+	end := r.end(run)
+	if end.run == "" && end.outcome == plan.OutcomeCancelled {
+		// The coordinator didn't make the run, as the worker would have
 		// stopped the step had it read the attempt's control first: the
-		// try ends as that stop ends it, and the worker does as the control
-		// asks from now on, as though it had read it.
-		cause = a.heedNotMade(child.Reason)
+		// try ends as that stop ends it, and the worker does as the
+		// control asks from now on, as though it had read it.
+		cause = a.heedNotMade(end.reason)
 	}
-	acted := child.Diagnostics
-	return called{
-		cause:     cause,
-		succeeded: cause == noStop && child.Outcome == plan.OutcomeSuccess,
-		cancelled: cause == noStop && child.Outcome == plan.OutcomeCancelled,
-		acted:     acted,
-		tryDiags:  a.writeLog(key, noted(note, acted)),
-	}
+	return askedRun[T]{cause: cause, end: run, acted: end.diags, tryDiags: a.writeLog(key, noted(note, end.diags))}
 }
 
-// awaitChild waits for the end of the child of the step's try, key's, and
-// returns it, and why the worker stopped it, if it did, as awaitRun says.
-func (a *attempt) awaitChild(ctx context.Context, key logKey, stopping <-chan stopRequest) (stopCause, *workerapi.Child, error) {
-	return awaitRun(ctx, a, key, "child", stopping,
-		func(ctx context.Context) (*workerapi.Child, bool, error) {
-			child, err := a.client.childEnd(ctx, key.step, key.try)
-			return child, err == nil && child.Ended, err
-		},
-		func(ctx context.Context, reason plan.Reason) error {
-			return a.client.stopChild(ctx, &workerapi.ChildStop{Step: key.step, Try: key.try, Reason: reason})
-		})
+// compactMasks returns the strings of ss, sorted, each once, and without
+// "", as a run that a step's try asks for is given the strings the worker
+// masks.
+func compactMasks(ss ...[]string) []string {
+	masked := slices.Compact(slices.Sorted(slices.Values(slices.Concat(ss...))))
+	if len(masked) > 0 && masked[0] == "" {
+		masked = masked[1:]
+	}
+	return masked
 }
 
 // awaitRun waits for the end of a run that a step's try, key's, asked for,
