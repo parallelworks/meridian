@@ -1884,7 +1884,7 @@
   },
   "cluster_name_invalid": {
     "title": "无效的集群名",
-    "why": "集群的名称是 compute-clusters 输入的值所指定的。workspace 和 user-workspace 指本机，与格式 1 指代 workspace 的方式相同。",
+    "why": "集群的名称是 compute-clusters 输入的值所指定的。workspace 和 user-workspace 指本机，与格式 1 指代 workspace 的方式相同。集群的名称也是它的 id，会话的目标会读取它，而格式 1 也把目标 localhost 读作 workspace。",
     "fix": [
       "重命名该集群。"
     ]

@@ -265,7 +265,7 @@
   "variable_env_unset": "変数 {variable} は環境変数 {env} から値を取りますが、その環境変数は設定されていません。",
   "variable_file_unreadable": "変数 {variable} はファイル {file} から値を取りますが、そのファイルを読み込めません: {reason}",
   "variable_file_home": "変数 {variable} は {file} から値を取りますが、その ~/ のための HOME が絶対パスに設定されていません。",
-  "cluster_name_invalid": "クラスター名「{cluster}」は無効です。名前には英字、数字、_、-、. を使い、英字か数字で始め、workspace と user-workspace 以外にします。",
+  "cluster_name_invalid": "クラスター名「{cluster}」は無効です。名前には英字、数字、_、-、. を使い、英字か数字で始め、workspace、user-workspace、localhost 以外にします。",
   "cluster_invalid": "クラスター「{cluster}」の {key} が {value} で、有効ではありません。",
   "workflow_mapping_key_invalid": "sources.yaml の workflows のキー「{key}」は、marketplace/<slug>/<バージョン> や workflow/<名前> のようにプラットフォームが保存するワークフローを指定しておらず、スラッグのすべてのバージョンも指定していません。",
   "workflow_mapping_repeated": "sources.yaml の workflows のキー「{key}」は、{first_line} 行目の「{first}」と同じワークフローを指定しています。",

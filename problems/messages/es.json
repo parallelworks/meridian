@@ -265,7 +265,7 @@
   "variable_env_unset": "La variable {variable} toma su valor de la variable de entorno {env}, que no está definida.",
   "variable_file_unreadable": "La variable {variable} toma su valor del archivo {file}, que no se puede leer: {reason}.",
   "variable_file_home": "La variable {variable} toma su valor de {file}, y HOME no tiene una ruta absoluta para su ~/.",
-  "cluster_name_invalid": "El nombre de clúster “{cluster}” no es válido: un nombre tiene letras, dígitos, _, - y ., empieza por una letra o un dígito, y no es workspace ni user-workspace.",
+  "cluster_name_invalid": "El nombre de clúster “{cluster}” no es válido: un nombre tiene letras, dígitos, _, - y ., empieza por una letra o un dígito, y no es workspace, user-workspace ni localhost.",
   "cluster_invalid": "El clúster “{cluster}” tiene {key}: {value}, que no es válido.",
   "workflow_mapping_key_invalid": "La clave “{key}” de los workflows de sources.yaml no nombra un flujo de trabajo que guarda una plataforma, como lo hacen marketplace/<slug>/<versión> y workflow/<nombre>, ni cada versión de un slug.",
   "workflow_mapping_repeated": "La clave “{key}” de los workflows de sources.yaml nombra el mismo flujo de trabajo que “{first}”, en la línea {first_line}.",

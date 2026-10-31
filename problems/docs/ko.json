@@ -1884,7 +1884,7 @@
   },
   "cluster_name_invalid": {
     "title": "올바르지 않은 클러스터 이름",
-    "why": "클러스터의 이름은 compute-clusters 입력의 값이 지정하는 것입니다. workspace와 user-workspace는 형식 1이 workspace를 가리키듯 이 컴퓨터를 가리킵니다.",
+    "why": "클러스터의 이름은 compute-clusters 입력의 값이 지정하는 것입니다. workspace와 user-workspace는 형식 1이 workspace를 가리키듯 이 컴퓨터를 가리킵니다. 클러스터의 이름은 그 id이기도 하며 세션의 대상이 그것을 읽는데, 형식 1은 대상 localhost도 workspace로 읽습니다.",
     "fix": [
       "클러스터의 이름을 바꾸세요."
     ]

@@ -5203,10 +5203,16 @@ host itself.
   or an IPv6 address, is an alias the user's `ssh_config` defines, as
   format 1 takes a login from the config's `User`. A host can't start
   with `-` or hold a space, as a workflow's script can put it in a
-  command line. A name is letters, digits, `_`, `-` and `.`, as a group's.
+  command line. A name is letters, digits, `_`, `-` and `.`, as a group's,
+  and isn't `workspace` or `user-workspace`, which name the workspace, or
+  `localhost`, which a session's target reads as the workspace, as a
+  cluster's `id` is its name.
 
   An input that names a cluster sees what format 1 gives for an existing
-  cluster's details, for what a cluster here can know of them: `name`;
+  cluster's details, for what a cluster here can know of them: its name,
+  as `name` and as `id`, which every target a known workflow's
+  `parallelworks/update-session` gives reads (`${{ inputs.<cluster>.id }}`,
+  11 steps), and nothing else of theirs does;
   its host as `ip`, which 189 of the 196 workflows we know of that have
   such an input read, as a job's `ssh:` `remoteHost` above all; its
   scheduler as `schedulerType`, or `""` for none, as format 1 writes a
@@ -5214,8 +5220,8 @@ host itself.
   format 1 names a cluster that a platform reaches but didn't make, which
   73 of those workflows read to decide what else to ask for; and `$type`
   `computeResource`. What names a platform's own record of the cluster,
-  its `id` and its `pw://` `uri`, and its owner's platform account, its
-  `user` and its `namespace`, it leaves out: an existing cluster without
+  its `pw://` `uri`, and its owner's platform account, its `user` and its
+  `namespace`, it leaves out: an existing cluster without
   the account fields, a shape format 1 doesn't give, where the 5 reads of
   them in the known workflows feed the platform's own CLI. The workspace,
   `workspace` or `user-workspace`, is the machine a run starts on, this

@@ -1884,7 +1884,7 @@
   },
   "cluster_name_invalid": {
     "title": "Nombre de clúster no válido",
-    "why": "El nombre de un clúster es lo que nombra el valor de una entrada compute-clusters. workspace y user-workspace nombran esta máquina, como el formato 1 nombra el workspace.",
+    "why": "El nombre de un clúster es lo que nombra el valor de una entrada compute-clusters. workspace y user-workspace nombran esta máquina, como el formato 1 nombra el workspace. El nombre de un clúster es también su id, que lee el destino de una sesión, y el formato 1 también lee el destino localhost como el workspace.",
     "fix": [
       "Cambia el nombre del clúster."
     ]

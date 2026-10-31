@@ -1621,7 +1621,7 @@
     ]
   },
   "cluster_name_invalid": {
-    "why": "A cluster's name is what a compute-clusters input's value names. workspace and user-workspace name this machine, as format 1 names the workspace.",
+    "why": "A cluster's name is what a compute-clusters input's value names. workspace and user-workspace name this machine, as format 1 names the workspace. A cluster's name is also its id, which a session's target reads, and format 1 reads the target localhost as the workspace too.",
     "fix": [
       "Rename the cluster."
     ]

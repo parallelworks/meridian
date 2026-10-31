@@ -265,7 +265,7 @@
   "variable_env_unset": "变量 {variable} 从环境变量 {env} 获取其值，但该环境变量未设置。",
   "variable_file_unreadable": "变量 {variable} 从文件 {file} 获取其值，但无法读取该文件：{reason}",
   "variable_file_home": "变量 {variable} 从 {file} 获取其值，但 HOME 未设置为绝对路径，无法解析其中的 ~/。",
-  "cluster_name_invalid": "集群名“{cluster}”无效：名称由字母、数字、_、- 和 . 组成，以字母或数字开头，且不能是 workspace 或 user-workspace。",
+  "cluster_name_invalid": "集群名“{cluster}”无效：名称由字母、数字、_、- 和 . 组成，以字母或数字开头，且不能是 workspace、user-workspace 或 localhost。",
   "cluster_invalid": "集群“{cluster}”的 {key} 为 {value}，无效。",
   "workflow_mapping_key_invalid": "sources.yaml 的 workflows 中的键“{key}”既没有像 marketplace/<slug>/<版本> 和 workflow/<名称> 那样指定平台存储的工作流，也没有指定某个 slug 的所有版本。",
   "workflow_mapping_repeated": "sources.yaml 的 workflows 中的键“{key}”与第 {first_line} 行的“{first}”指定的是同一个工作流。",
