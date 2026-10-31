@@ -184,7 +184,9 @@ func TestResolveClusters(t *testing.T) {
 			{"provider": []any{}},
 			{"csp": "aws"},
 		} {
-			for _, name := range []string{"workspace", "user-workspace", "pw://user-workspace", "pw://alice/user-workspace"} {
+			for _, name := range []string{
+				"workspace", "user-workspace", "pw://workspace", "pw://user-workspace", "pw://alice/workspace", "pw://alice/user-workspace",
+			} {
 				got, err := c.ResolveInput(t.Context(), "compute-clusters", definition, name, called)
 				if err != nil || !reflect.DeepEqual(got, workspaceDetails) {
 					t.Errorf("ResolveInput(%s) with %v, called %v = %v, %v", name, definition, called, got, err)
@@ -258,7 +260,6 @@ func TestResolveClusters(t *testing.T) {
 		{nil, "cpu", false, "pw://alice/cpu"},
 		{nil, "pw://hpc", false, "pw://alice/hpc"},
 		{nil, "pw://hpc", true, "pw://alice/hpc"},
-		{nil, "pw://workspace", false, "pw://alice/user-workspace"},
 		{nil, details, false, "pw://alice/hpc"},
 		{nil, map[string]any{"ip": "elsewhere"}, false, "pw://alice/<name>"},
 		{multi, []any{"pw://alice/hpc", details}, false, "pw://alice/hpc"},
@@ -279,6 +280,7 @@ func TestResolveClusters(t *testing.T) {
 		{nil, "pw://alice/cpu"},
 		{nil, "pw://bob/hpc"},
 		{nil, "pw://bob/user-workspace"},
+		{nil, "pw://bob/workspace"},
 		{nil, "pw://alice/hpc/x"},
 		{nil, "pw://alice/"},
 		{nil, "pw://"},

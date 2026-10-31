@@ -452,8 +452,9 @@ the SHA-256 hash of its content: 218 files.
   `compute-resources` input takes `pw://user/name`, a user's cluster, or
   `pw://name`, an organization's, and a `bucket` input `pw://user/name`;
   with `multi`, a list of them; and `""` is no value. The workspace keeps
-  the names it is resolved by: `workspace`, `user-workspace`,
-  `pw://user-workspace` and `pw://<user>/user-workspace`. At a run's own
+  the names it is resolved by: `workspace` and `user-workspace`, alone,
+  as `pw://workspace` and `pw://user-workspace`, and as
+  `pw://<user>/workspace` and `pw://<user>/user-workspace`. At a run's own
   input, submitted or a default, a name alone, or a mapping of details,
   is refused (`cluster_uri_required`, `bucket_uri_invalid`); a called
   workflow's input also takes the details its caller passes, a mapping,
@@ -5327,8 +5328,8 @@ host itself.
   `user` and its `namespace`, as format 1 gives its owner's platform
   account, which 7, 2 and 3 of the known workflows read. The workspace is
   the machine a run starts on, this one, and needs no config: it keeps
-  the names format 1 resolves it by, `workspace`, `user-workspace`,
-  `pw://user-workspace` and `pw://<login>/user-workspace`, and gives `id`
+  the names format 1 resolves it by, `workspace` and `user-workspace`,
+  alone, after `pw://` and after `pw://<login>/`, and gives `id`
   and `name` `user-workspace`, `ip` `""`, as format 1 gives it, and its
   URI, `user` and `namespace`.
 

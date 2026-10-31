@@ -1447,7 +1447,7 @@
     ]
   },
   "cluster_uri_required": {
-    "why": "A compute-clusters or compute-resources input names a cluster by its pw:// URI. On the machine running the workflow, a cluster of clusters.yaml in Meridian's config directory is pw://, the login name of the user who runs meridian, a slash and the cluster's name, as pw://alice/hpc; and the workspace, this machine, is also workspace, user-workspace, pw://user-workspace or pw://alice/user-workspace. A name alone isn't a URI, and pw:// and a name names an organization's cluster on a platform, which a run here has none of. A run's own input takes the URI, as a platform's form gives it; only a workflow a step calls is given a cluster's details, a mapping, as its caller passes those it has.",
+    "why": "A compute-clusters or compute-resources input names a cluster by its pw:// URI. On the machine running the workflow, a cluster of clusters.yaml in Meridian's config directory is pw://, the login name of the user who runs meridian, a slash and the cluster's name, as pw://alice/hpc; and the workspace, this machine, is also workspace or user-workspace, alone, after pw:// or after pw://alice/. A name alone isn't a URI, and pw:// and a name names an organization's cluster on a platform, which a run here has none of. A run's own input takes the URI, as a platform's form gives it; only a workflow a step calls is given a cluster's details, a mapping, as its caller passes those it has.",
     "fix": [
       "Write the cluster as the URI the message gives, with the cluster's name in clusters.yaml.",
       "Give a cluster's details only to a workflow a step calls, in the step's with:, as format 1 passes them."

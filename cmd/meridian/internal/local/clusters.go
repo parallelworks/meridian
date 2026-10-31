@@ -164,10 +164,10 @@ func (c *Config) resolveClusters(def map[string]any, value any, called bool) (an
 // pw://, the login name of the user who runs meridian, a slash and a
 // cluster's name in the clusters file, as pw://alice/hpc. The workspace,
 // this machine, is pw://<login>/user-workspace, and keeps the reserved
-// names format 1 resolves it by, workspace, user-workspace and
-// pw://user-workspace. A name alone, and pw://name, which a platform reads
-// as an organization's cluster, which a run here has none of, are
-// problems.ClusterURIRequired, which gives the URI to name the cluster by.
+// names format 1 resolves it by (isWorkspace). A name alone, and
+// pw://name, which a platform reads as an organization's cluster, which a
+// run here has none of, are problems.ClusterURIRequired, which gives the
+// URI to name the cluster by.
 // Another user's URI, or one of no cluster, is problems.ClusterUnknown,
 // which lists the clusters' URIs, or problems.ClustersNone when the file
 // has none.
@@ -176,18 +176,15 @@ func (c *Config) resolveCluster(ref string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ref == workspaceName || ref == workspaceShortName || ref == pwPrefix+workspaceName {
-		return workspaceValue(login), nil
-	}
 	rest, isURI := strings.CutPrefix(ref, pwPrefix)
 	owner, name, userScoped := strings.Cut(rest, "/")
 	switch {
+	case isWorkspace(ref), isURI && !userScoped && isWorkspace(rest), isURI && owner == login && isWorkspace(name):
+		return workspaceValue(login), nil
 	case !isURI && groupNamePattern.MatchString(ref):
 		return nil, c.uriRequired(ref, ref)
 	case isURI && !userScoped && groupNamePattern.MatchString(rest):
 		return nil, c.uriRequired(ref, rest)
-	case isURI && owner == login && name == workspaceName:
-		return workspaceValue(login), nil
 	case isURI && owner == login:
 		if cl, ok := c.clusters[name]; ok {
 			return cl.value(login, name), nil
@@ -202,6 +199,12 @@ func (c *Config) resolveCluster(ref string) (any, error) {
 	}
 	return nil, problems.ClusterUnknown.InputProblem(problems.Params{"value": problems.Show(ref), "clusters": problems.QuoteAll(uris)})
 }
+
+// isWorkspace reports whether name is one of the workspace's reserved
+// names, workspace and user-workspace, by which format 1 resolves the
+// workspace alone, as pw://name, and as pw://<user>/name, where here
+// <user> is the login name.
+func isWorkspace(name string) bool { return name == workspaceName || name == workspaceShortName }
 
 // uriRequired is problems.ClusterURIRequired of v, a value that names a
 // cluster otherwise than by its URI, with the URI of the cluster named

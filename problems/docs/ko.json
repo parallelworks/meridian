@@ -1683,7 +1683,7 @@
   },
   "cluster_uri_required": {
     "title": "클러스터의 pw:// URI가 아닌 값",
-    "why": "compute-clusters 또는 compute-resources 입력은 클러스터를 그 pw:// URI로 지정합니다. 워크플로를 실행하는 컴퓨터에서 Meridian 설정 디렉터리에 있는 clusters.yaml의 클러스터는 pw://, meridian을 실행하는 사용자의 로그인 이름, 슬래시, 클러스터 이름 순으로, pw://alice/hpc와 같습니다. workspace(이 컴퓨터)는 workspace, user-workspace, pw://user-workspace, pw://alice/user-workspace로도 적을 수 있습니다. 이름만으로는 URI가 아니며, pw://와 이름만 있으면 플랫폼에서 조직의 클러스터를 가리키는데, 여기서의 실행에는 그런 클러스터가 없습니다. 실행 자신의 입력은 플랫폼의 양식이 주는 것처럼 URI를 받습니다. 클러스터의 세부 정보(매핑)는 단계가 호출하는 워크플로만 받으며, 호출하는 쪽이 가진 세부 정보를 그대로 넘깁니다.",
+    "why": "compute-clusters 또는 compute-resources 입력은 클러스터를 그 pw:// URI로 지정합니다. 워크플로를 실행하는 컴퓨터에서 Meridian 설정 디렉터리에 있는 clusters.yaml의 클러스터는 pw://, meridian을 실행하는 사용자의 로그인 이름, 슬래시, 클러스터 이름 순으로, pw://alice/hpc와 같습니다. workspace(이 컴퓨터)는 workspace나 user-workspace를 단독으로, pw:// 뒤에, 또는 pw://alice/ 뒤에 적어도 됩니다. 이름만으로는 URI가 아니며, pw://와 이름만 있으면 플랫폼에서 조직의 클러스터를 가리키는데, 여기서의 실행에는 그런 클러스터가 없습니다. 실행 자신의 입력은 플랫폼의 양식이 주는 것처럼 URI를 받습니다. 클러스터의 세부 정보(매핑)는 단계가 호출하는 워크플로만 받으며, 호출하는 쪽이 가진 세부 정보를 그대로 넘깁니다.",
     "fix": [
       "메시지가 알려 주는 URI 형식으로, clusters.yaml에 있는 클러스터 이름을 써서 클러스터를 적으세요.",
       "클러스터의 세부 정보는 형식 1이 넘기듯이 단계의 with:로, 그 단계가 호출하는 워크플로에만 넘기세요."

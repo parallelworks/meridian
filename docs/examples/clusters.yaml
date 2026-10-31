@@ -18,9 +18,9 @@
 #   meridian run --input cluster=pw://alice/hpc workflow.yaml
 # It sees name and id hpc, ip hpc-login, schedulerType slurm, type and
 # provider existing, uri pw://alice/hpc, and user and namespace alice. The
-# workspace needs no entry: it is this machine, as workspace, user-workspace,
-# pw://user-workspace or pw://alice/user-workspace, and no cluster can be
-# named workspace, user-workspace or localhost.
+# workspace needs no entry: it is this machine, as workspace or
+# user-workspace, alone, after pw:// or after pw://alice/, and no cluster
+# can be named workspace, user-workspace or localhost.
 
 hpc:
   host: hpc-login

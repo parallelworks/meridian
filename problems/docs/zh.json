@@ -1683,7 +1683,7 @@
   },
   "cluster_uri_required": {
     "title": "不是集群的 pw:// URI 的值",
-    "why": "compute-clusters 或 compute-resources 输入按其 pw:// URI 指定集群。在运行工作流的机器上，Meridian 配置目录中 clusters.yaml 定义的集群写作 pw://、运行 meridian 的用户的登录名、斜杠和集群名称，如 pw://alice/hpc；workspace（即本机）也可以写作 workspace、user-workspace、pw://user-workspace 或 pw://alice/user-workspace。只有名称不是 URI，而只有 pw:// 和名称则指平台上某个组织的集群，此处的运行没有这样的集群。运行自身的输入接受 URI，正如平台的表单给出的那样；只有步骤调用的工作流才会收到集群的详细信息（一个映射），由调用方按其所有的详细信息传入。",
+    "why": "compute-clusters 或 compute-resources 输入按其 pw:// URI 指定集群。在运行工作流的机器上，Meridian 配置目录中 clusters.yaml 定义的集群写作 pw://、运行 meridian 的用户的登录名、斜杠和集群名称，如 pw://alice/hpc；workspace（即本机）也可以写作 workspace 或 user-workspace，单独写，或写在 pw:// 或 pw://alice/ 之后。只有名称不是 URI，而只有 pw:// 和名称则指平台上某个组织的集群，此处的运行没有这样的集群。运行自身的输入接受 URI，正如平台的表单给出的那样；只有步骤调用的工作流才会收到集群的详细信息（一个映射），由调用方按其所有的详细信息传入。",
     "fix": [
       "按消息给出的 URI 写出集群，使用 clusters.yaml 中的集群名称。",
       "只在步骤的 with: 中把集群的详细信息传给该步骤调用的工作流，正如格式 1 传递它们那样。"
