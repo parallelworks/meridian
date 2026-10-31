@@ -214,6 +214,13 @@ type unsentError struct{ err error }
 func (e *unsentError) Error() string { return e.err.Error() }
 func (e *unsentError) Unwrap() error { return e.err }
 
+// unsent reports whether err is an *unsentError itself, as call and
+// runOn return one, not one it wraps.
+func unsent(err error) bool {
+	_, ok := err.(*unsentError) //nolint:errorlint // the error's own layer, not what it wraps
+	return ok
+}
+
 // sentOrNot returns err without what says it came before a request was
 // written.
 func sentOrNot(err error) error {

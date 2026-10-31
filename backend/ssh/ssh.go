@@ -272,18 +272,41 @@ var errNoAnswer = fmt.Errorf("no answer within %v", connectBudget)
 // as one the host dropped before the pool knew, is made again, once:
 // nothing was asked of the host over it.
 func (d *Driver) run(ctx context.Context, t sshconn.Target, conn *sshconn.Conn, op string, req func(*host) (*hostproto.Request, error)) (*hostproto.Message, *host, error) {
-	for try := 1; ; try++ {
-		if conn == nil {
+	type ran struct {
+		m *hostproto.Message
+		h *host
+	}
+	r, _, err := retryClosed(ctx, func() (ran, *sshconn.Conn, error) {
+		// conn, if run was given one, is the first try's alone.
+		c := conn
+		conn = nil
+		if c == nil {
 			var err error
-			if conn, err = d.connect(ctx, t); err != nil {
-				return nil, nil, err
+			if c, err = d.connect(ctx, t); err != nil {
+				return ran{}, nil, err
 			}
 		}
-		m, h, err := d.runOn(ctx, conn, t, op, req)
-		if _, unsent := err.(*unsentError); !unsent || try > 1 || ctx.Err() != nil || !closed(conn, err) { //nolint:errorlint // runOn's own error
-			return m, h, sentOrNot(err)
+		m, h, err := d.runOn(ctx, c, t, op, req)
+		return ran{m, h}, c, err
+	}, unsent)
+	return r.m, r.h, sentOrNot(err)
+}
+
+// retryClosed runs try, which runs something over a connection to a host,
+// the pool's, and returns that connection too, or nil if it got none;
+// and, once, again, if what it ran failed as it does over a connection
+// that had closed before the pool knew, as one the host dropped: again,
+// if it isn't nil, says whether try's error is one a closed connection
+// can give, as a caller's own errors that say the host refused are not,
+// and closed whether the connection had closed. The pool makes a closed
+// connection again, so the second try runs over a new one. It returns
+// what try returned last.
+func retryClosed[T any](ctx context.Context, try func() (T, *sshconn.Conn, error), again func(error) bool) (T, *sshconn.Conn, error) {
+	for n := 1; ; n++ {
+		v, conn, err := try()
+		if err == nil || n > 1 || conn == nil || ctx.Err() != nil || again != nil && !again(err) || !closed(conn, err) {
+			return v, conn, err
 		}
-		conn = nil
 	}
 }
 
@@ -523,3 +546,7 @@ func asProblem(err error) *problem.Problem {
 	p, _ := errors.AsType[*problem.Problem](err)
 	return p
 }
+
+// notProblem reports whether err isn't a problem (asProblem): one says
+// what is wrong with the member, never that a connection closed.
+func notProblem(err error) bool { return asProblem(err) == nil }
