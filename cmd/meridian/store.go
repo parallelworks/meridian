@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/harden"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // startQueue names the hopper queue the Start of the run id goes in: one
@@ -64,7 +66,7 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	}
 	coord, err := coordinator.Open(ctx, coordinator.Options{
 		Database: db, Keys: keys,
-		Variables: cfg, Inputs: cfg, Groups: cfg,
+		Variables: cfg, Inputs: cfg, Groups: cfg, Env: platformEnv(),
 		Trees: trees,
 		Drivers: map[string]backend.Driver{
 			"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()},
@@ -80,6 +82,19 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	// The store names runs' directories on hosts, with their runs.
 	ssh.Store = coord.StoreID()
 	return coord, nil
+}
+
+// platformEnv returns the variables a platform gives every job's steps
+// that meridian gives them too (coordinator.Options.Env): PW_USER, format
+// 1's name of the person who runs the workflow, as the login name of the
+// user who runs meridian, as os/user finds it, or none where it finds
+// none. Every run of the store is theirs.
+func platformEnv() map[string]workerapi.EnvVar {
+	u, err := user.Current()
+	if err != nil || u.Username == "" {
+		return nil
+	}
+	return map[string]workerapi.EnvVar{"PW_USER": {Value: u.Username}}
 }
 
 // hardenProcess keeps the user's other processes out of the process's
