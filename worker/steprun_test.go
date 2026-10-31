@@ -2,11 +2,13 @@ package worker
 
 import (
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/parallelworks/meridian/plan"
@@ -397,6 +399,33 @@ cat $OUTPUTS`), Retry: &plan.StepRetry{}}
 	}
 	if log, _ := logOf(f, logKey{workerapi.LogStep, 2, 1}); strings.Contains(log, "t0k3n") || !strings.Contains(log, "dir="+f.Claim.RunDir) {
 		t.Errorf("the step's log is %q", log)
+	}
+}
+
+// TestStepRunWorkerWaits checks that the worker of a step run doesn't start
+// its step until the coordinator has stored that it is starting, as a
+// job's first step waits (TestFirstStepWaits).
+func TestStepRunWorkerWaits(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, stepRunJob(command("touch $PW_JOB_DIR/ran")))
+	f.Claim.StepRun = &workerapi.StepRunClaim{Step: 2, State: workerapi.StepRunState{Steps: []workerapi.StepRunResult{{Outcome: plan.OutcomeSuccess}, {Outcome: plan.OutcomeSuccess}}}}
+	var requests counter
+	var early atomic.Bool
+	f.Fault = func(r *http.Request) workerapitest.Fault {
+		if r.URL.Path == workerapi.PathEvents && requests.next(r.URL.Path) <= 5 {
+			if _, err := os.Stat(filepath.Join(f.Claim.RunDir, "ran")); err == nil {
+				early.Store(true)
+			}
+			return workerapitest.Unavailable
+		}
+		return workerapitest.Answer
+	}
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEnd(t, f, plan.OutcomeSuccess, "")
+	if early.Load() {
+		t.Error("the step ran before the coordinator stored that it was starting")
 	}
 }
 

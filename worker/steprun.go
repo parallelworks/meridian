@@ -365,33 +365,13 @@ func (a *attempt) runAsStepRun(ctx context.Context, jobDiags problems.Diagnostic
 		diags = append(diags, *note)
 	}
 	seq := a.events.add(workerapi.Event{Time: now(), Step: i, Try: try, Cleanup: sr.Cleanup})
-	if !a.firstStarted {
-		// Whether the workflow's code may have run must always be known.
-		if cause := a.await(s, func() (bool, <-chan struct{}) { return a.events.isStored(seq) }); cause != noStop {
-			if cause == stopHalted {
-				return nil
-			}
-			return ended(plan.OutcomeCancelled, -1, nil, diags)
+	if cause := a.awaitFirstStart(s, seq); cause != noStop {
+		if cause == stopHalted {
+			return nil
 		}
-		a.firstStarted = true
+		return ended(plan.OutcomeCancelled, -1, nil, diags)
 	}
-	var (
-		exit      = -1
-		cause     stopCause
-		succeeded bool
-		acted     problems.Diagnostics
-		tryDiags  problems.Diagnostics
-	)
-	switch {
-	case slices.Contains(platformActions, rs.Uses):
-		acted = problems.Diagnostics{a.at(problems.ActionNeedsPlatform, path, problems.Params{"uses": rs.Uses})}
-		tryDiags = a.writeLog(key, noted(note, acted))
-	case rs.Uses != "":
-		succeeded, cause, acted, tryDiags = a.runAction(ctx, key, rs, s, note)
-	default:
-		exit, cause, tryDiags = a.runCommand(key, rs, rs.Run, dir, a.stepEnv(rs, state.Env), s, note)
-		succeeded = cause == noStop && exit == 0
-	}
+	exit, cause, succeeded, acted, tryDiags := a.runStepBody(ctx, key, rs, path, dir, state.Env, s, note)
 	if a.halted.fired() {
 		return nil
 	}
