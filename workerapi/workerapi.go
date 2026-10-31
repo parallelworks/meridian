@@ -347,14 +347,24 @@ const MaxChildRequest = 4 << 20
 const MaxStepRunRequest = 4 << 20
 
 // MaxMaskedBytes is the most bytes a ChildRequest's or a
-// StepRunRequest's Masked hold in all, which the child run's secret record
-// keeps.
+// StepRunRequest's Masked hold in all (MaskedSize), which the child run's
+// secret record keeps.
 const MaxMaskedBytes = 1 << 20
 
 // MaxMasks is the most strings a ChildRequest's or a StepRunRequest's
 // Masked hold: each is masked in every line the child run's workers log,
 // and in each of its steps' outputs, which one masked makes a secret.
 const MaxMasks = 10_000
+
+// MaskedSize returns how many bytes the strings masked hold in all, as
+// MaxMaskedBytes counts them.
+func MaskedSize(masked []string) int {
+	size := 0
+	for _, m := range masked {
+		size += len(m)
+	}
+	return size
+}
 
 // MaxOutputs is the most bytes of a step's $OUTPUTS file that a worker
 // reads (docs/design.md, Outputs), as the file holds them; and the most of

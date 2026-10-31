@@ -3948,7 +3948,8 @@ and a platform that embeds Meridian serve the same API.
 - **Child runs:** ask for the child run of a workflow a step's try calls
   (`/v1/child`), with the step's `with:` and environment as Step evaluated
   them, which parts of them are private or hold a secret, and the strings
-  the worker masks for the step, which a repeat answers with the same
+  the worker masks for the step, 10,000 of them, of 1 MiB in all, at
+  most, which a repeat answers with the same
   child, and a child that wasn't made with why, as `child_not_created`
   with its own problems; wait for its end (`/v1/child/end`), held as a
   control is, with how the child run ended; and stop it, with why
@@ -3980,7 +3981,11 @@ and a platform that embeds Meridian serve the same API.
   host](#steps-on-another-host)). A step run's attempt's claim has the
   try of the step it runs and that state, and its job has that step, the
   steps before it by their `id` alone, and no `outputs:`. Version 3 adds
-  them, and such a job needs it, as one that calls a workflow does.
+  them, and such a job needs it, as one that calls a workflow does. A
+  step whose child or step run would mask more strings than the
+  coordinator takes fails before it asks (`masks_too_many`,
+  `masks_too_large`): the worker never asks with fewer, which would let
+  the run's logs show the rest.
 - **Actions:** ask the coordinator to do a step's cancel-jobs,
   update-session or checkout, from version 3
   ([Built-in actions](#built-in-actions)). The request has the step's

@@ -8,7 +8,19 @@ import (
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/workerapi"
 )
+
+// maskedWithin reports whether masked, the strings a worker masks that it
+// asks a child run's worker to mask too, as a child's or a step run's
+// request gives them, are within the bounds: workerapi.MaxMasks of them,
+// of workerapi.MaxMaskedBytes in all. The child's secret record keeps
+// them, and its workers mask each in every line they log. A worker checks
+// the same bounds before it asks, and fails the step where they are passed
+// rather than mask less.
+func maskedWithin(masked []string) bool {
+	return len(masked) <= workerapi.MaxMasks && workerapi.MaskedSize(masked) <= workerapi.MaxMaskedBytes
+}
 
 // childOf returns the ID of the child run of the try try of the step step
 // of the attempt a, or of the step's cleanup:, of the kind a path asks
@@ -53,12 +65,7 @@ func (s *Server) awaitEnd(w http.ResponseWriter, r *http.Request, a *store.Attem
 		// The poll waits before the store is read, so that an end stored
 		// after the read wakes it.
 		woken, done := s.ends.wait(id)
-		var run *store.Run
-		err := s.store.View(ctx, func(tx *store.Tx) error {
-			var err error
-			run, err = tx.Run(id)
-			return err
-		})
+		run, err := s.readEnd(ctx, id)
 		switch {
 		case err != nil:
 			done()
@@ -87,6 +94,21 @@ func (s *Server) awaitEnd(w http.ResponseWriter, r *http.Request, a *store.Attem
 		}
 		done()
 	}
+}
+
+// readEnd reads the run id, for awaitEnd, and then calls afterEndRead, if
+// it is set.
+func (s *Server) readEnd(ctx context.Context, id string) (*store.Run, error) {
+	var run *store.Run
+	err := s.store.View(ctx, func(tx *store.Tx) error {
+		var err error
+		run, err = tx.Run(id)
+		return err
+	})
+	if s.afterEndRead != nil {
+		s.afterEndRead()
+	}
+	return run, err
 }
 
 // stopOf stops the child run of the try try of the step step of the

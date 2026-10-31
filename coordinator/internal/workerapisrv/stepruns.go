@@ -50,19 +50,6 @@ func (s *Server) serveStepRun(w http.ResponseWriter, r *http.Request, a *store.A
 	writeBody(w, a.APIVersion, sr)
 }
 
-// maskedWithin reports whether masked, the strings a worker masks that it
-// asks a child run's worker to mask too, as a child's or a step run's
-// request gives them, are within the bounds: MaxMasks of them, of
-// MaxMaskedBytes in all. The child's secret record keeps them, and its
-// workers mask each in every line they log.
-func maskedWithin(masked []string) bool {
-	n := 0
-	for _, m := range masked {
-		n += len(m)
-	}
-	return n <= workerapi.MaxMaskedBytes && len(masked) <= workerapi.MaxMasks
-}
-
 // serveStepRunEnd answers a poll for the end of the step run of a step's
 // try, or of its cleanup: (workerapi.PathStepRunEnd), named in the query,
 // as awaitEnd does: once it has ended, how, as Children gives it; or as it

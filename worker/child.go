@@ -84,8 +84,10 @@ type called struct {
 // and nothing else: the child's logs are its own run's.
 func (a *attempt) runChild(ctx context.Context, key logKey, rs *plan.ReadyStep, s stops, note *problems.Diagnostic, vars map[string]string, clean bool) called {
 	path := a.job.Steps[key.step].Path
+	req := childRequest(rs, key.try, vars, slices.Concat(a.masked, a.secrets))
 	c := askRun(ctx, a, key, s, note, runAsk[*workerapi.Child]{
-		what: "child",
+		what:   "child",
+		masked: req.Masked,
 		prepare: func() *problems.Diagnostic {
 			dir := plan.ChildDir(a.claim.RunDir, rs.WorkingDirectory, a.job.Key, key.step)
 			if err := a.makeChildDir(dir, clean); err != nil {
@@ -95,7 +97,7 @@ func (a *attempt) runChild(ctx context.Context, key logKey, rs *plan.ReadyStep, 
 			return nil
 		},
 		ask: func(ctx context.Context) (*workerapi.Child, error) {
-			return a.client.child(ctx, childRequest(rs, key.try, vars, slices.Concat(a.masked, a.secrets)))
+			return a.client.child(ctx, req)
 		},
 		poll: func(ctx context.Context) (*workerapi.Child, bool, error) {
 			child, err := a.client.childEnd(ctx, key.step, key.try)
@@ -124,6 +126,9 @@ func (a *attempt) runChild(ctx context.Context, key logKey, rs *plan.ReadyStep, 
 type runAsk[T any] struct {
 	// what names the run, in the worker's log: child or step run.
 	what string
+	// masked are the strings the request asks the run's workers to mask,
+	// which the coordinator takes only so many of (maskedBeyond).
+	masked []string
 	// prepare readies the try before it asks, as making a child's
 	// directory does, and returns the problem that fails the try if it
 	// can't; nil readies nothing.
@@ -167,8 +172,9 @@ type askedRun[T any] struct {
 // askRun runs a try of a step, or its cleanup, whose log is key, as a run
 // of its own, as r asks for it: what s watches stops it from its start; a
 // try that r can't ready (prepare) fails; one stopped before it asked asks
-// for none; and it waits for the run's end, stopping it as s asks
-// (awaitRun). A run the coordinator didn't make, cancelled, ends the try
+// for none; one whose run would mask more than the coordinator takes
+// fails, and asks for none (maskedBeyond); and it waits for the run's
+// end, stopping it as s asks (awaitRun). A run the coordinator didn't make, cancelled, ends the try
 // as the attempt's control would have stopped it (heedNotMade). The
 // step's log holds note, if there is one, and the problems the end gave,
 // or that failed the try, and nothing else: the step's own log is its
@@ -205,6 +211,9 @@ func askRun[T any](ctx context.Context, a *attempt, key logKey, s stops, note *p
 		return askedRun[T]{cause: stop.cause, tryDiags: a.writeLog(key, noted(note, nil))}
 	default:
 	}
+	if d, beyond := a.maskedBeyond(r.masked, a.job.Steps[key.step].Path); beyond {
+		return failed(d)
+	}
 	run, err := r.ask(ctx)
 	if err != nil {
 		return requestFailed(err, r.what)
@@ -239,6 +248,23 @@ func compactMasks(ss ...[]string) []string {
 		masked = masked[1:]
 	}
 	return masked
+}
+
+// maskedBeyond returns the problem, at path, of a step whose request for
+// a run of its own, its child or its step run, asks that run's workers to
+// mask masked, which are more than the coordinator takes: more than
+// workerapi.MaxMasks strings, masks_too_many, or more than
+// workerapi.MaxMaskedBytes in all, masks_too_large; or false for masks
+// within both. The step fails rather than ask with fewer of them, which
+// would let the run's logs show the rest.
+func (a *attempt) maskedBeyond(masked []string, path string) (problems.Diagnostic, bool) {
+	if n := len(masked); n > workerapi.MaxMasks {
+		return a.at(problems.MasksTooMany, path, problems.Params{"count": n, "limit": workerapi.MaxMasks}), true
+	}
+	if size := workerapi.MaskedSize(masked); size > workerapi.MaxMaskedBytes {
+		return a.at(problems.MasksTooLarge, path, problems.Params{"size": size, "limit": workerapi.MaxMaskedBytes}), true
+	}
+	return problems.Diagnostic{}, false
 }
 
 // awaitRun waits for the end of a run that a step's try, key's, asked for,

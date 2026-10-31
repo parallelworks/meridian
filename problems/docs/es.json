@@ -1258,6 +1258,20 @@
       "Haz que el paso escriba un valor más corto, o con menos saltos de línea, tabulaciones y retornos de carro, o escribe el valor en un archivo del directorio de la ejecución, y la ruta del archivo en $OUTPUTS."
     ]
   },
+  "masks_too_many": {
+    "title": "Demasiadas cadenas que enmascarar para la ejecución propia de un paso",
+    "why": "Un paso que llama a un flujo de trabajo, o cuyo ssh: lo sitúa en otro host distinto del de su trabajo, se ejecuta como una ejecución propia, cuyos workers enmascaran lo que enmascara el worker de su trabajo: los secretos de su ejecución, las variables secretas de la plataforma, lo que el trabajo obtuvo de uno de ellos y lo que enmascaró el paso que llamó a la ejecución del trabajo, si alguno lo hizo. El worker se lo da todo al coordinador al pedir la ejecución, y el coordinador lo guarda en el registro secreto de la ejecución. Acepta como mucho el número de cadenas que el mensaje da como límite. Así se mantienen acotados el registro y el enmascaramiento de cada cadena en cada línea que registran los workers de la ejecución. El trabajo enmascara más, así que el paso falla y no se vuelve a intentar: el worker nunca pide la ejecución con menos, lo que dejaría que sus registros mostraran el resto.",
+    "fix": [
+      "Haz que el trabajo lea menos secretos, u obtenga menos valores de ellos, por ejemplo moviendo los pasos que leen algunos de ellos a un trabajo propio."
+    ]
+  },
+  "masks_too_large": {
+    "title": "Cadenas que enmascarar demasiado grandes para la ejecución propia de un paso",
+    "why": "Un paso que llama a un flujo de trabajo, o cuyo ssh: lo sitúa en otro host distinto del de su trabajo, se ejecuta como una ejecución propia, cuyos workers enmascaran lo que enmascara el worker de su trabajo: los secretos de su ejecución, las variables secretas de la plataforma, lo que el trabajo obtuvo de uno de ellos y lo que enmascaró el paso que llamó a la ejecución del trabajo, si alguno lo hizo. El worker se lo da todo al coordinador al pedir la ejecución, y el coordinador lo guarda en el registro secreto de la ejecución. Acepta como mucho, en total, los bytes que el mensaje da como límite. Así se mantienen acotados el registro y el enmascaramiento de cada cadena en cada línea que registran los workers de la ejecución. El trabajo enmascara más, así que el paso falla y no se vuelve a intentar: el worker nunca pide la ejecución con menos, lo que dejaría que sus registros mostraran el resto.",
+    "fix": [
+      "Haz que el trabajo lea menos secretos, u obtenga menos valores de ellos, por ejemplo moviendo los pasos que leen algunos de ellos a un trabajo propio."
+    ]
+  },
   "cancel_jobs_job_unknown": {
     "title": "Trabajo que un paso no puede cancelar",
     "why": "El jobs: de un paso parallelworks/cancel-jobs nombra los trabajos de su ejecución que hay que cancelar. Este nombre no es el de ningún trabajo de la ejecución, o es el de un trabajo con matriz, cuyas instancias el formato 1 conoce por otros nombres, así que no cancela ninguna. Como en el formato 1, el paso no hace nada por ese nombre y tiene éxito.",

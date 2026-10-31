@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -76,6 +78,107 @@ func TestChildRequest(t *testing.T) {
 		t.Errorf("what is private of the request is %+v", got)
 	case !slices.Equal(got.Masked, []string{"s3cr", "t0k3n-123"}):
 		t.Errorf("the request masks %q", got.Masked)
+	}
+}
+
+// TestMaskedBeyond checks that a step whose run of its own, its child or
+// its step run, would mask more than the coordinator takes, more strings
+// than workerapi.MaxMasks or more bytes of them than
+// workerapi.MaxMaskedBytes, fails, with masks_too_many or masks_too_large,
+// and asks for no run, rather than ask with fewer; and that one that masks
+// as much as the coordinator takes, and no more, asks for its run.
+func TestMaskedBeyond(t *testing.T) {
+	t.Parallel()
+	strs := func(n int) []string {
+		s := make([]string, n)
+		for i := range s {
+			s[i] = fmt.Sprintf("mask-%06d", i)
+		}
+		return s
+	}
+	for _, c := range []struct {
+		name   string
+		masked []string
+		code   string
+	}{
+		{"too many", strs(workerapi.MaxMasks + 1), "masks_too_many"},
+		{"too large", []string{strings.Repeat("m", workerapi.MaxMaskedBytes+1)}, "masks_too_large"},
+		{"as many as it may", strs(workerapi.MaxMasks), ""},
+		{"as large as it may", []string{strings.Repeat("m", workerapi.MaxMaskedBytes)}, ""},
+	} {
+		for _, kind := range []string{"child", "step run"} {
+			t.Run(kind+", "+c.name, func(t *testing.T) {
+				t.Parallel()
+				// A child has no exit status of its own.
+				step, succeeded := calling(nil), "finished 0.0 success -1"
+				if kind == "step run" {
+					step, succeeded = remote("true"), "finished 0.0 success 0"
+				}
+				job := newJob(step)
+				job.Masked = c.masked
+				f := workerapitest.NewFake(t, job)
+				f.Child = ends(f, map[string]plan.Outcome{"0.0": plan.OutcomeSuccess})
+				f.StepRun = stepRunEnds(f, map[string]workerapi.StepRun{"0.0": {Outcome: plan.OutcomeSuccess}})
+				if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+					t.Fatal(err)
+				}
+				asked := len(f.ChildAsks()) + len(f.StepRunAsks())
+				if c.code == "" {
+					checkEvents(t, f, "started 0.0", succeeded)
+					if asked != 1 {
+						t.Errorf("the worker asked for %d runs", asked)
+					}
+					return
+				}
+				checkEvents(t, f, "started 0.0", "finished 0.0 failure -1")
+				if got := codes(finishedEvent(t, f, 0, 0, false).Diagnostics); !slices.Equal(got, []string{c.code}) {
+					t.Errorf("the step's diagnostics are %v", got)
+				}
+				if asked != 0 {
+					t.Errorf("the worker asked for %d runs, with too much to mask", asked)
+				}
+			})
+		}
+	}
+}
+
+// TestRunAskFenced checks that a step whose ask for a run of its own, its
+// child or its step run, is answered that the attempt was superseded, or
+// that its credential isn't accepted, halts the attempt, as any request so
+// answered does: the worker exits without completing it, rather than fail
+// the step with the request's problem and go on.
+func TestRunAskFenced(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"child", "step run"} {
+		for _, tc := range []struct {
+			name string
+			flt  workerapitest.Fault
+			want error
+		}{
+			{"fenced", workerapitest.Fence, errFenced},
+			{"unauthorized", workerapitest.Unauthorized, errUnauthorized},
+		} {
+			t.Run(kind+", "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				step, path := calling(nil), workerapi.PathChild
+				if kind == "step run" {
+					step, path = remote("true"), workerapi.PathStepRun
+				}
+				f := workerapitest.NewFake(t, newJob(step))
+				f.Fault = func(r *http.Request) workerapitest.Fault {
+					if r.URL.Path == path {
+						return tc.flt
+					}
+					return workerapitest.Answer
+				}
+				if err := runWorker(t, f, t.Context(), Config{}); !errors.Is(err, tc.want) {
+					t.Fatalf("got %v, want %v", err, tc.want)
+				}
+				if f.End() != nil {
+					t.Error("a worker whose ask for a run was refused so completed its attempt")
+				}
+			})
+		}
 	}
 }
 
