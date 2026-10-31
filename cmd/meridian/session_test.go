@@ -214,22 +214,6 @@ func checkSessionServed(t *testing.T, env map[string]string, setUp func(*cli), a
 	}
 }
 
-// untilSaid waits for meridian run's output to say said, and fails the test
-// if it ends first, or doesn't within a while.
-func untilSaid(t *testing.T, cmd *commandRun, said string) {
-	t.Helper()
-	for deadline := time.Now().Add(3 * time.Minute); !strings.Contains(cmd.stdout.String(), said); {
-		select {
-		case r := <-cmd.done:
-			t.Fatalf("meridian run ended before it said %q: %+v", said, r)
-		case <-time.After(20 * time.Millisecond):
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("meridian run hasn't said %q:\n%s%s", said, cmd.stdout.String(), cmd.stderr.String())
-		}
-	}
-}
-
 // TestSessionLinks checks how meridian run says its session is served on
 // a person's terminal: as text, with a link whose one-time code opens it;
 // and as JSON, which a program reads and keeps, as an editor's task runner

@@ -449,13 +449,27 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	if err := s.View(ctx, s.readID); err != nil {
 		return err
 	}
-	if err := s.Tx(ctx, func(tx *Tx) error { return tx.eraseDigests() }); err != nil {
+	var pending bool
+	if err := s.Tx(ctx, func(tx *Tx) error {
+		found, err := tx.eraseDigests()
+		if err != nil {
+			return err
+		}
+		if found {
+			if err := tx.markErasePending(); err != nil {
+				return err
+			}
+		}
+		pending, err = tx.erasePending()
+		return err
+	}); err != nil {
 		return err
 	}
 	// A process that ended between a run's end and the checkpoint after it
-	// left the log holding the run's secret record; and the digests just
-	// erased are in it.
-	s.eraseWAL(context.WithoutCancel(ctx))
+	// left the log holding the run's secret record, which the store's
+	// marker says, as it says of the digests just erased, if any: this
+	// process warns of those as of its own, if it can't truncate the log.
+	s.eraseWAL(context.WithoutCancel(ctx), pending)
 	return nil
 }
 
@@ -473,13 +487,22 @@ const noDigest = "x'000000000000000000000000000000000000000000000000000000000000
 // again, and so does each run's end. Each finds only the rows that hold
 // one, by an index of them. The store's writes overwrite what they
 // replace with zeros (secure_delete), and the write-ahead log is truncated
-// after.
-func (tx *Tx) eraseDigests() error {
-	if _, err := tx.exec("UPDATE meridian_attempts SET complete_digest = NULL WHERE complete_digest IS NOT NULL"); err != nil {
-		return err
+// after. It reports whether it found any.
+func (tx *Tx) eraseDigests() (bool, error) {
+	attempts, err := tx.exec("UPDATE meridian_attempts SET complete_digest = NULL WHERE complete_digest IS NOT NULL")
+	if err != nil {
+		return false, err
 	}
-	_, err := tx.exec("UPDATE meridian_actions SET digest = " + noDigest + " WHERE keyed = 0 AND digest <> " + noDigest)
-	return err
+	actions, err := tx.exec("UPDATE meridian_actions SET digest = " + noDigest + " WHERE keyed = 0 AND digest <> " + noDigest)
+	if err != nil {
+		return false, err
+	}
+	a, err := attempts.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	b, err := actions.RowsAffected()
+	return a+b > 0, err
 }
 
 // checkSchema checks that a store just opened only to read it has
@@ -809,7 +832,7 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 		}
 	}
 	if tx.erased {
-		s.eraseWAL(context.WithoutCancel(ctx))
+		s.eraseWAL(context.WithoutCancel(ctx), true)
 	}
 	if tx.events {
 		s.changedMu.Lock()

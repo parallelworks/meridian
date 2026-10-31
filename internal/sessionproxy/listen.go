@@ -79,7 +79,7 @@ func Listen(ctx context.Context, port int) (*Listener, error) {
 	for try := 1; ; try++ {
 		v4, err := listen(ctx, "tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		if err != nil {
-			return nil, portProblem(port, err)
+			return nil, portProblem(port, port == 0, err)
 		}
 		got, _ := v4.Addr().(*net.TCPAddr)
 		v6, err := listen(ctx, "tcp6", net.JoinHostPort("::1", strconv.Itoa(got.Port)))
@@ -91,19 +91,19 @@ func Listen(ctx context.Context, port int) (*Listener, error) {
 		}
 		_ = v4.Close()
 		if port != 0 || !errors.Is(err, syscall.EADDRINUSE) {
-			return nil, portProblem(got.Port, err)
+			return nil, portProblem(got.Port, port == 0, err)
 		}
 		if try == portTries {
-			return nil, portProblem(0, err)
+			return nil, portProblem(0, true, err)
 		}
 	}
 }
 
 // portProblem returns err, an error listening on port, as the problem it
-// is: one in use, or one the system won't let the process listen on; for
-// 0, one the system picked.
-func portProblem(port int, err error) error {
-	params := problems.Params{"port": strconv.Itoa(port), "picked": strconv.FormatBool(port == 0)}
+// is: one in use, or one the system won't let the process listen on;
+// where picked is set, one the system picked.
+func portProblem(port int, picked bool, err error) error {
+	params := problems.Params{"port": strconv.Itoa(port), "picked": strconv.FormatBool(picked)}
 	switch {
 	case errors.Is(err, syscall.EADDRINUSE):
 		return problems.SessionLocalPortTaken.Problem(params)

@@ -44,26 +44,30 @@ func (d *Driver) DialTCP(ctx context.Context, m *backend.Member, host string, po
 	if !TCPHost(host) || port < 1 || port > 65535 {
 		return nil, problems.SSHTCPAddressInvalid.Problem(problems.Params{"value": host, "port": strconv.Itoa(port)})
 	}
-	address := net.JoinHostPort(host, strconv.Itoa(port))
-	for try := 1; ; try++ {
+	// What the host said of the address is its answer, not a closed
+	// connection's.
+	c, _, err := retryClosed(ctx, func() (net.Conn, *sshconn.Conn, error) {
 		conn, err := d.connect(ctx, t)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		c, err := conn.DialTCP(ctx, host, port)
-		if err == nil {
-			return c, nil
-		}
-		if te, ok := errors.AsType[*sshconn.TCPError](err); ok {
-			if te.Refused {
-				return nil, problems.SSHTCPForwardingRefused.Problem(problems.Params{"host": t.Host, "address": address})
-			}
-			return nil, problems.SSHTCPConnectFailed.Problem(problems.Params{"host": t.Host, "address": address, "reason": cmp.Or(te.Said, te.Reason)})
-		}
-		if try > 1 || ctx.Err() != nil || !closed(conn, err) {
-			return nil, err
-		}
+		return c, conn, err
+	}, func(err error) bool {
+		_, said := errors.AsType[*sshconn.TCPError](err)
+		return !said
+	})
+	if err == nil {
+		return c, nil
 	}
+	if te, ok := errors.AsType[*sshconn.TCPError](err); ok {
+		address := net.JoinHostPort(host, strconv.Itoa(port))
+		if te.Refused {
+			return nil, problems.SSHTCPForwardingRefused.Problem(problems.Params{"host": t.Host, "address": address})
+		}
+		return nil, problems.SSHTCPConnectFailed.Problem(problems.Params{"host": t.Host, "address": address, "reason": cmp.Or(te.Said, te.Reason)})
+	}
+	return nil, err
 }
 
 // TCPHost reports whether DialTCP asks a host to connect to host, as a

@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"slices"
-	"strconv"
 
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
@@ -56,12 +55,12 @@ func runSession(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) in
 	if err != nil {
 		return c.fail(runNotFound(id, err))
 	}
-	coord, sessions, err := coordinate(ctx, c, dirs, cfg, db)
+	co, err := coordinate(ctx, c, dirs, cfg, db)
 	if err != nil {
 		return c.fail(err)
 	}
-	defer func() { _ = coord.Close() }()
-	defer sessions.Close()
+	defer func() { _ = co.close() }()
+	coord := co.coord
 	s, err := runSessionOf(ctx, coord, id, key)
 	if err != nil {
 		return c.fail(err)
@@ -75,7 +74,7 @@ func runSession(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) in
 		}
 		return exitOK
 	}
-	link, err := sessions.Link(ctx, s)
+	link, err := co.sessions.Link(ctx, s)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -102,7 +101,5 @@ func runSessionOf(ctx context.Context, coord *coordinator.Coordinator, id, key s
 		}
 		keys = append(keys, s.Key)
 	}
-	return coordinator.Session{}, problems.SessionKeyUnknown.Problem(problems.Params{
-		"run": id, "key": key, "keys": problems.QuoteAll(keys), "listed": strconv.FormatBool(len(keys) > 0),
-	})
+	return coordinator.Session{}, problems.SessionKeyUnknown.Problem(problems.Listed(problems.Params{"run": id, "key": key}, "keys", keys))
 }

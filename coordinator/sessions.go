@@ -648,9 +648,10 @@ func (c *Coordinator) SessionServed(ctx context.Context, id string, port int, p 
 	return c.store.Tx(ctx, func(tx *store.Tx) error { return tx.SessionServed(id, port, p) })
 }
 
-// SessionServing reports whether a process serves the session id now: one
-// that holds it (store.Store.HoldSession), this one or another.
-func (c *Coordinator) SessionServing(_ context.Context, id string) (bool, error) {
+// SessionHeld reports whether a process holds the session id now
+// (store.Store.HoldSession), as the one that serves it does: this one or
+// another.
+func (c *Coordinator) SessionHeld(_ context.Context, id string) (bool, error) {
 	return c.store.SessionHeld(id)
 }
 
