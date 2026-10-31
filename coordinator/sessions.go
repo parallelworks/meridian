@@ -33,21 +33,25 @@ type SessionHost interface {
 	Check(ctx context.Context, sessions map[string]any) (map[string]string, error)
 	// Point reads what a step that uses parallelworks/update-session asks
 	// of the session s, as u gives it, which the coordinator has
-	// authorized, and serves the session where it says: it returns where
-	// the session points, encoded, which the store keeps, and which the
-	// host is given again, and the port it serves it at. A refusal, as of
-	// a port in use, is a problem of a workflow's kind, which fails the
-	// step; any other error, one it couldn't answer, which the step asks
-	// again. It mustn't log or quote what u.With gives where u.Read says
-	// it read a variable, a password or a secret.
-	Point(ctx context.Context, s Session, u compile.SessionUpdate) (SessionPoint, error)
+	// authorized, and, where serve is set, serves the session where it
+	// says: it returns where the session points, encoded, which the store
+	// keeps, and which the host is given again, and the port it serves it
+	// at. Where serve isn't set, as for a session another process serves,
+	// it serves nothing, and returns the port the step gave, or the one
+	// s is served at already. A refusal, as of a port in use, is a
+	// problem of a workflow's kind, which fails the step; any other error,
+	// one it couldn't answer, which the step asks again. It mustn't log or
+	// quote what u.With gives where u.Read says it read a variable, a
+	// password or a secret.
+	Point(ctx context.Context, s Session, u compile.SessionUpdate, serve bool) (SessionPoint, error)
 	// Serve has the host serve live, the store's sessions that haven't
-	// ended, as the store has them, and no other: those it doesn't serve
-	// yet it serves, as a coordinator that takes over from another does,
-	// those whose salt or point changed it serves so, and others it stops
-	// serving. The coordinator calls it whenever they may have changed,
-	// and every so often, for changes another process made
-	// (Coordinator.ServeSessions).
+	// ended that this process serves, as the store has them, and no
+	// other: those it doesn't serve yet it serves, as a process that takes
+	// over from another does, those whose salt or point changed it serves
+	// so, and others it stops serving; a session that points nowhere yet
+	// it serves nothing for. The coordinator calls it whenever they may
+	// have changed, and every so often, for changes another process made,
+	// and, as it stops serving, with none (Coordinator.ServeSessions).
 	Serve(ctx context.Context, live []Session)
 }
 
@@ -188,14 +192,17 @@ func (p sessionProvider) Make(ctx context.Context, runID string, sessions map[st
 // one its own tree made (session_not_permitted). A session the store has
 // none of, that hasn't ended, is session_unknown, and a with: that names
 // none session_name_empty. The host reads where it points, and serves it
-// there (SessionHost.Point); the store keeps it, sealed from then on where
-// with:, or what the session was made of, read a variable, a password or a
-// secret.
+// there (SessionHost.Point), where this process serves the session, as it
+// does once it has taken it (takeSession); the store keeps it, sealed from
+// then on where with:, or what the session was made of, read a variable,
+// a password or a secret.
 func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) error {
 	c := p.c
 	if u.Name == "" {
 		return problems.SessionNameEmpty.Problem(nil)
 	}
+	c.sessionsMu.Lock()
+	defer c.sessionsMu.Unlock()
 	var stored *store.Session
 	err := c.store.View(ctx, func(tx *store.Tx) error {
 		var err error
@@ -214,7 +221,11 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 	if err != nil {
 		return err
 	}
-	point, err := c.opts.SessionHost.Point(ctx, s, u)
+	s, serve, err := c.takeSession(ctx, s)
+	if err != nil {
+		return err
+	}
+	point, err := c.opts.SessionHost.Point(ctx, s, u, serve)
 	if err != nil {
 		return err
 	}
@@ -247,17 +258,17 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 }
 
 // ServeSessions has the coordinator's session host serve the store's
-// sessions that haven't ended (SessionHost.Serve), until ctx is done: at
-// once, as a coordinator that takes over from another serves those it
-// served, and then whenever they may have changed in this process, as a
-// step points one or a run ends, and every pollInterval, for what another
-// process changed. It needs a session host.
+// sessions that haven't ended, and that no other process serves
+// (SessionHost.Serve), until ctx is done: at once, as a process that takes
+// over from another serves those it served, and then whenever they may
+// have changed in this process, as a step points one or a run ends, and
+// every pollInterval, for what another process changed, as one that served
+// a session stopped. It needs a session host. As it stops, it has the host
+// serve none, and lets them go.
 //
-// First it resets each of them (ResetSession), which this process serves
-// anew: while no process served it, as after one that served it stopped,
-// another program could have listened at its port, and taken the cookie a
-// page of it that reconnected sent there. Its new secret makes such a
-// cookie worthless.
+// It takes each session that points somewhere, and that no process serves,
+// to serve it, which resets it (takeSession): those that another process
+// serves, which they hold, it leaves to them, salt and codes and all.
 func (c *Coordinator) ServeSessions(ctx context.Context) error {
 	if err := c.writable(); err != nil {
 		return err
@@ -266,34 +277,33 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 	if host == nil {
 		return errors.New("coordinator: no session host to serve sessions")
 	}
-	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
-		live, err := tx.LiveSessions()
-		if err != nil {
-			return err
-		}
-		for _, s := range live {
-			if err := tx.ResetSession(s.ID, newSalt()); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return err
+	c.sessionsMu.Lock()
+	if c.sessionLeases != nil {
+		c.sessionsMu.Unlock()
+		return errors.New("coordinator: ServeSessions is already running")
 	}
+	c.sessionLeases = map[string]func(){}
+	c.sessionsMu.Unlock()
+	defer func() {
+		c.sessionsMu.Lock()
+		defer c.sessionsMu.Unlock()
+		// The host stops serving them before they are let go, so that
+		// no other process serves one while this one still does.
+		host.Serve(context.WithoutCancel(ctx), nil)
+		for _, release := range c.sessionLeases {
+			release()
+		}
+		c.sessionLeases = nil
+	}()
 	ticker := time.NewTicker(c.pollInterval)
 	defer ticker.Stop()
 	for {
-		live, err := c.liveSessions(ctx)
+		err := c.serveSessions(ctx)
 		switch {
 		case ctx.Err() != nil:
 			return nil
 		case err != nil:
 			c.log.Warn("coordinator: couldn't read the store's sessions", "err", err)
-		default:
-			host.Serve(ctx, live)
 		}
 		select {
 		case <-ctx.Done():
@@ -302,6 +312,73 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// serveSessions has the host serve the store's sessions that haven't ended
+// that this process serves: those it took already, and those that point
+// somewhere that no process serves, which it takes (takeSession). It lets
+// go of those that have ended, once the host serves them no more.
+func (c *Coordinator) serveSessions(ctx context.Context) error {
+	c.sessionsMu.Lock()
+	defer c.sessionsMu.Unlock()
+	live, err := c.liveSessions(ctx)
+	if err != nil {
+		return err
+	}
+	mine := make([]Session, 0, len(c.sessionLeases))
+	ids := make(map[string]bool, len(live))
+	for _, s := range live {
+		ids[s.ID] = true
+		if _, ok := c.sessionLeases[s.ID]; !ok && s.Point == nil {
+			// One that points nowhere is served by none, and taken by
+			// the process whose step points it first.
+			continue
+		}
+		s, ok, err := c.takeSession(ctx, s)
+		switch {
+		case errors.Is(err, store.ErrState) || errors.Is(err, store.ErrNotFound):
+			// It ended since it was read.
+		case err != nil:
+			c.log.Warn("coordinator: couldn't take a session to serve", "session", s.ID, "err", err)
+		case ok:
+			mine = append(mine, s)
+		}
+	}
+	c.opts.SessionHost.Serve(ctx, mine)
+	for id, release := range c.sessionLeases {
+		if !ids[id] {
+			release()
+			delete(c.sessionLeases, id)
+		}
+	}
+	return nil
+}
+
+// takeSession takes the session s for this process to serve, unless it
+// serves it already (store.Store.ServeSession), which resets it, and
+// returns s as the host is to serve it, with its new salt, and whether
+// this process serves it: not while ServeSessions doesn't run, nor while
+// another process serves it, which holds it. The caller holds sessionsMu,
+// from before it read s until the host has been asked to serve it, so that
+// no reset of this process's comes between.
+func (c *Coordinator) takeSession(ctx context.Context, s Session) (Session, bool, error) {
+	if c.sessionLeases == nil {
+		return s, false, nil
+	}
+	if _, ok := c.sessionLeases[s.ID]; ok {
+		return s, true, nil
+	}
+	salt := newSalt()
+	release, err := c.store.ServeSession(ctx, s.ID, salt)
+	switch {
+	case errors.Is(err, store.ErrSessionServed):
+		return s, false, nil
+	case err != nil:
+		return s, false, err
+	}
+	c.sessionLeases[s.ID] = release
+	s.Salt = salt
+	return s, true, nil
 }
 
 // wakeSessions tells ServeSessions that the store's sessions may have

@@ -1,10 +1,14 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
+
+	"github.com/parallelworks/meridian/internal/flock"
 )
 
 // A Session is a session a run's sessions: made, as the store holds it
@@ -162,6 +166,50 @@ func (tx *Tx) ResetSession(id string, salt []byte) error {
 	}
 	_, err = tx.exec("DELETE FROM meridian_session_codes WHERE session_id = ?", id)
 	return err
+}
+
+// ErrSessionServed is what ServeSession returns for a session another
+// serves, in this process or another.
+var ErrSessionServed = errors.New("store: another serves the session")
+
+// sessionID is what a session's ID is, as the coordinator makes it: hex.
+var sessionID = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+
+// ServeSession takes the session id, to serve it, so that no other does
+// as long as this lives: until release is called, or the process ends. It
+// is a lock on a file beside the database, named for the database and the
+// session, which release removes: ErrSessionServed while another holds
+// it. On a system without file locks, it fails.
+//
+// Once it holds the lock, before it returns, it resets the session
+// (ResetSession), with salt: while no process served the session, as
+// after one that served it stopped, another program could have listened
+// at its port, and taken the cookie that a page of it that reconnected
+// sent there; the new secret makes such a cookie worthless, and the
+// session's codes go with it. No other process can take the session
+// between the two, and its holder serves it only once ServeSession has
+// returned, so the session is never served with the salt it had before.
+// A session the store hasn't is ErrNotFound, and one that has ended
+// ErrState, and the lock is let go of.
+func (s *Store) ServeSession(ctx context.Context, id string, salt []byte) (release func(), err error) {
+	if s.readOnly {
+		return nil, ErrReadOnly
+	}
+	if !sessionID.MatchString(id) {
+		return nil, ErrNotFound
+	}
+	release, err = flock.TryLock(s.file + ".session-" + id + ".lock")
+	if errors.Is(err, flock.ErrHeld) {
+		return nil, ErrSessionServed
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Tx(ctx, func(tx *Tx) error { return tx.ResetSession(id, salt) }); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
 }
 
 // AddSessionCode keeps a one-time code of the session id, by its keyed

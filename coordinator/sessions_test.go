@@ -26,7 +26,8 @@ import (
 // testHost is a session host of a test's. It names each session by its key
 // and a number of its own, points a session where with: says, at a port
 // it gives, refusing a with: whose remoteHost is refuse as a port in use,
-// and records what it is asked to serve.
+// and records what it is asked to point, and whether to serve it there,
+// and what it is asked to serve.
 type testHost struct {
 	mu     sync.Mutex
 	n      int
@@ -45,7 +46,7 @@ func (h *testHost) Check(_ context.Context, sessions map[string]any) (map[string
 	return names, nil
 }
 
-func (h *testHost) Point(_ context.Context, s Session, u compile.SessionUpdate) (SessionPoint, error) {
+func (h *testHost) Point(_ context.Context, s Session, u compile.SessionUpdate, serve bool) (SessionPoint, error) {
 	if u.With["remoteHost"] == "refuse" {
 		return SessionPoint{}, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "1"})
 	}
@@ -55,7 +56,7 @@ func (h *testHost) Point(_ context.Context, s Session, u compile.SessionUpdate) 
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.points = append(h.points, fmt.Sprintf("%s %s %v %s", s.Name, s.Key, s.Def, data))
+	h.points = append(h.points, fmt.Sprintf("%s %s %v %s serve=%t", s.Name, s.Key, s.Def, data, serve))
 	return SessionPoint{Point: data, Port: 20000 + len(h.points), PortGiven: u.With["localPort"] != nil}, nil
 }
 
@@ -104,8 +105,8 @@ const plainWorkflow = "jobs:\n  main:\n    steps:\n      - run: echo\n"
 // its tree as its owner, its type and redirect, its definition, a label
 // and a salt of its own; made once, however often Make is asked; and,
 // where a live session has the name already, refused as
-// session_name_taken. Its host is asked to serve them, without being
-// asked, as soon as they are made.
+// session_name_taken. Its host isn't asked to serve them while they point
+// nowhere.
 func TestSessionsMade(t *testing.T) {
 	parallel(t)
 	h := &testHost{}
@@ -144,7 +145,18 @@ func TestSessionsMade(t *testing.T) {
 	case !sessionproxy.ValidLabel(desktop.Label) || desktop.Label == notes.Label || len(desktop.Salt) != sessionproxy.SaltLen || string(desktop.Salt) == string(notes.Salt):
 		t.Errorf("the sessions' labels and salts are %q %q, %x %x", desktop.Label, notes.Label, desktop.Salt, notes.Salt)
 	}
-	waitFor(t, func() bool { return len(h.lastServed()) == 2 })
+	h.mu.Lock()
+	before := len(h.served)
+	h.mu.Unlock()
+	c.wakeSessions()
+	waitFor(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.served) > before
+	})
+	if live := h.lastServed(); len(live) != 0 {
+		t.Errorf("the host was asked to serve %+v, which point nowhere", live)
+	}
 
 	other, _ := create(t, c, plainWorkflow, nil, nil)
 	wantProblem(t, p.Make(t.Context(), other, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": names["desktop"]}, expr.Read{}),
@@ -158,7 +170,7 @@ func TestSessionsMade(t *testing.T) {
 // live session has is session_unknown, and none session_name_empty. The
 // host reads where it points, which the store keeps, with the port the
 // host serves it at, and a refusal of the host's fails the step. Each
-// time, the host is asked to serve it so.
+// time, the host is asked to serve it so, since no other process does.
 func TestSessionsUpdate(t *testing.T) {
 	parallel(t)
 	h := &testHost{}
@@ -189,8 +201,8 @@ func TestSessionsUpdate(t *testing.T) {
 	points := slices.Clone(h.points)
 	h.mu.Unlock()
 	want := []string{
-		`desktop-x desktop map[useTLS:false] {"remoteHost":"node-1","remotePort":8888}`,
-		`desktop-x desktop map[useTLS:false] {"localPort":7000,"remotePort":9999}`,
+		`desktop-x desktop map[useTLS:false] {"remoteHost":"node-1","remotePort":8888} serve=true`,
+		`desktop-x desktop map[useTLS:false] {"localPort":7000,"remotePort":9999} serve=true`,
 	}
 	if !slices.Equal(points, want) {
 		t.Errorf("the host pointed\n%s\nwant\n%s", strings.Join(points, "\n"), strings.Join(want, "\n"))
@@ -288,6 +300,8 @@ func TestSessionsPrivate(t *testing.T) {
 // TestSessionCodesAndReset checks a session's one-time codes, as the
 // coordinator keeps them: a code is used once, and not once the session is
 // reset, which replaces its salt, which its host is asked to serve.
+// Pointed by a step of this process's, which takes it to serve, the
+// session is reset then too.
 func TestSessionCodesAndReset(t *testing.T) {
 	parallel(t)
 	h := &testHost{}
@@ -297,11 +311,21 @@ func TestSessionCodesAndReset(t *testing.T) {
 	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); err != nil {
 		t.Fatal(err)
 	}
+	made, err := c.RunSessions(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.opts.Sessions.Update(t.Context(), compile.SessionUpdate{Root: root, Name: "desktop-1", With: map[string]any{"remotePort": float64(1)}}); err != nil {
+		t.Fatal(err)
+	}
 	sessions, err := c.RunSessions(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := sessions[0]
+	if string(s.Salt) == string(made[0].Salt) {
+		t.Error("the session, taken to serve as a step pointed it, kept its salt")
+	}
 	later := time.Hour
 	for _, mac := range []string{"one", "two"} {
 		if err := c.AddSessionCode(t.Context(), s.ID, []byte(mac), later); err != nil {
@@ -382,53 +406,131 @@ func TestServeSessionsNeedsHost(t *testing.T) {
 	}
 }
 
-// TestSessionsServedAnew checks that a session a process serves anew, as
-// at its start, or as it takes over from one that stopped, gets a new
-// salt, and so a new secret: a cookie that another program took while no
-// process served the session, as a page of it that reconnected sent to
-// whatever listened at its port, doesn't work once it is served again; and
-// its codes are gone with it.
-func TestSessionsServedAnew(t *testing.T) {
+// TestSessionsTakenOver checks the sessions that each of a store's
+// processes serves: each serves those it took, as its step pointed them,
+// and none that another process that lives serves, which keep their salts
+// and their codes, as another's step points one too; and a session whose
+// process stopped serving it, as it ended, another takes over, by its next
+// look at the store, with a new salt, and so a new secret: a cookie that
+// another program took while no process served the session, as a page of
+// it that reconnected sent to whatever listened at its port, doesn't work
+// once it is served again; and its codes are gone with it.
+func TestSessionsTakenOver(t *testing.T) {
 	parallel(t)
-	h := &testHost{}
-	c := open(t, Options{SessionHost: h})
-	root, _ := create(t, c, plainWorkflow, nil, nil)
-	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); err != nil {
+	hb, hc, ha := &testHost{}, &testHost{}, &testHost{}
+	b := open(t, Options{SessionHost: hb})
+	c := open(t, Options{Database: b.opts.Database, Keys: b.opts.Keys, SessionHost: hc})
+	a := open(t, Options{Database: b.opts.Database, Keys: b.opts.Keys, SessionHost: ha})
+	root, _ := create(t, b, plainWorkflow, nil, nil)
+	sessions := map[string]any{"one": map[string]any{}, "two": map[string]any{}}
+	if err := b.opts.Sessions.Make(t.Context(), root, sessions, map[string]string{"one": "one-1", "two": "two-1"}, expr.Read{}); err != nil {
 		t.Fatal(err)
 	}
-	made, err := c.RunSessions(t.Context(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	salts := [][]byte{made[0].Salt}
-	for range 2 {
+	serving := func(c *Coordinator) (stop func()) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() { done <- c.ServeSessions(ctx) }()
-		prev := salts[len(salts)-1]
-		waitFor(t, func() bool { live := h.lastServed(); return len(live) == 1 && string(live[0].Salt) != string(prev) })
-		salts = append(salts, h.lastServed()[0].Salt)
-		if err := c.AddSessionCode(t.Context(), made[0].ID, []byte("code"), time.Hour); err != nil {
-			t.Fatal(err)
-		}
-		cancel()
-		if err := <-done; err != nil {
-			t.Fatal(err)
+		return func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
 		}
 	}
-	if string(salts[0]) == string(salts[1]) || string(salts[1]) == string(salts[2]) {
-		t.Errorf("the session's salts, as made and as each process served it, are %x", salts)
+	point := func(c *Coordinator, name string, port float64) {
+		t.Helper()
+		if err := c.opts.Sessions.Update(t.Context(), compile.SessionUpdate{Root: root, Name: name, With: map[string]any{"remotePort": port}}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- c.ServeSessions(ctx) }()
-	waitFor(t, func() bool { live := h.lastServed(); return len(live) == 1 && string(live[0].Salt) != string(salts[2]) })
-	if c.RedeemSessionCode(t.Context(), made[0].ID, []byte("code")) {
-		t.Error("a code made before the session was served anew was used")
+	// c looks at the store only when the test says, so that it is a that
+	// takes over from b.
+	c.pollInterval = time.Hour
+	stopB, stopC := serving(b), serving(c)
+	defer stopC()
+	point(b, "one-1", 1)
+	point(c, "two-1", 2)
+	byName := func() map[string]Session {
+		t.Helper()
+		got, err := a.RunSessions(t.Context(), root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]Session{}
+		for _, s := range got {
+			out[s.Name] = s
+		}
+		return out
 	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	was := byName()
+	for _, s := range was {
+		if err := a.AddSessionCode(t.Context(), s.ID, []byte("code"), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	served := func(h *testHost, name string) []byte {
+		live := h.lastServed()
+		for _, s := range live {
+			if s.Name == name {
+				return s.Salt
+			}
+		}
+		return nil
+	}
+	waitFor(t, func() bool { return served(hb, "one-1") != nil && served(hc, "two-1") != nil })
+
+	stopA := serving(a)
+	defer stopA()
+	// Another's step points a session c serves: a's host serves nothing.
+	point(a, "two-1", 3)
+	ha.mu.Lock()
+	points := slices.Clone(ha.points)
+	ha.mu.Unlock()
+	if len(points) != 1 || !strings.HasSuffix(points[0], `{"remotePort":3} serve=false`) {
+		t.Errorf("a's host pointed %q", points)
+	}
+	// Two looks of a's at the store, with b and c alive: it takes neither.
+	for range 2 {
+		ha.mu.Lock()
+		before := len(ha.served)
+		ha.mu.Unlock()
+		waitFor(t, func() bool {
+			ha.mu.Lock()
+			defer ha.mu.Unlock()
+			return len(ha.served) > before+1
+		})
+	}
+	if live := ha.lastServed(); len(live) != 0 {
+		t.Errorf("a serves %+v, which b and c serve", live)
+	}
+	// c, at its next look, serves two where a's step pointed it, with its
+	// salt.
+	c.wakeSessions()
+	waitFor(t, func() bool {
+		for _, s := range hc.lastServed() {
+			if s.Name == "two-1" {
+				return string(s.Salt) == string(was["two-1"].Salt) && string(s.Point) == `{"remotePort":3}`
+			}
+		}
+		return false
+	})
+
+	stopB()
+	if live := hb.lastServed(); len(live) != 0 {
+		t.Errorf("b, stopped, was last asked to serve %+v", live)
+	}
+	waitFor(t, func() bool { return served(ha, "one-1") != nil })
+	now := byName()
+	if salt := served(ha, "one-1"); string(salt) == string(was["one-1"].Salt) || string(salt) != string(now["one-1"].Salt) {
+		t.Errorf("one, taken over, is served with the salt %x, as made %x, as the store has it %x", salt, was["one-1"].Salt, now["one-1"].Salt)
+	}
+	if a.RedeemSessionCode(t.Context(), was["one-1"].ID, []byte("code")) {
+		t.Error("a code of one's from before a took it over was used")
+	}
+	if string(now["two-1"].Salt) != string(was["two-1"].Salt) || served(ha, "two-1") != nil {
+		t.Errorf("two, which c still serves, has the salt %x, made with %x, and a serves it %t", now["two-1"].Salt, was["two-1"].Salt, served(ha, "two-1") != nil)
+	}
+	if !a.RedeemSessionCode(t.Context(), was["two-1"].ID, []byte("code")) {
+		t.Error("two's code, which c still serves, was gone")
 	}
 }

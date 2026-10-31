@@ -3,6 +3,8 @@ package store
 import (
 	"bytes"
 	"errors"
+	"io/fs"
+	"os"
 	"testing"
 	"time"
 
@@ -249,4 +251,98 @@ func TestSessionsEndWithRoot(t *testing.T) {
 		return err
 	})
 	checkIntegrity(t, s)
+}
+
+// TestServeSession checks a session's lease, which its process holds as
+// long as it serves it: one at a time, in this process or another; taken,
+// it resets the session, its codes with it, before it returns; let go, its
+// file is gone, and another may take it; and a session that has ended, or
+// that the store hasn't, is never taken, nor one of a store opened only to
+// read.
+func TestServeSession(t *testing.T) {
+	t.Parallel()
+	s := open(t)
+	root := createRun(t, s)
+	inTx(t, s, func(tx *Tx) error {
+		for _, id := range []string{"a", "b"} {
+			if _, err := tx.MakeSession(testSession(id, root, root, id, id+"-1")); err != nil {
+				return err
+			}
+		}
+		return tx.AddSessionCode("a", []byte("code"), time.Hour)
+	})
+	release, err := s.ServeSession(t.Context(), "a", []byte("taken"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := s.file + ".session-a.lock"
+	if _, err := os.Lstat(file); err != nil {
+		t.Errorf("the lease's file: %v", err)
+	}
+	inTx(t, s, func(tx *Tx) error {
+		got, err := tx.Session("a")
+		if err == nil && string(got.Salt) != "taken" {
+			t.Errorf("the session, taken, has the salt %q", got.Salt)
+		}
+		if ok, err := tx.RedeemSessionCode("a", []byte("code")); ok || err != nil {
+			t.Errorf("a code from before the session was taken = %t, %v", ok, err)
+		}
+		return err
+	})
+	if _, err := s.ServeSession(t.Context(), "a", []byte("again")); !errors.Is(err, ErrSessionServed) {
+		t.Errorf("ServeSession of a session served = %v, want ErrSessionServed", err)
+	}
+	inTx(t, s, func(tx *Tx) error {
+		got, err := tx.Session("a")
+		if err == nil && string(got.Salt) != "taken" {
+			t.Errorf("a session another serves was reset, to %q", got.Salt)
+		}
+		return err
+	})
+	other, err := s.ServeSession(t.Context(), "b", []byte("b"))
+	if err != nil {
+		t.Fatalf("ServeSession of another session = %v", err)
+	}
+	other()
+	release()
+	if _, err := os.Lstat(file); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the lease's file is there once it is let go: %v", err)
+	}
+	again, err := s.ServeSession(t.Context(), "a", []byte("again"))
+	if err != nil {
+		t.Fatalf("ServeSession once let go = %v", err)
+	}
+	again()
+
+	inTx(t, s, func(tx *Tx) error { return tx.EndRun(root, plan.OutcomeSuccess, "") })
+	if _, err := s.ServeSession(t.Context(), "a", []byte("ended")); !errors.Is(err, ErrState) {
+		t.Errorf("ServeSession of an ended session = %v, want ErrState", err)
+	}
+	if _, err := os.Lstat(file); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the lease of an ended session is held: %v", err)
+	}
+	for _, bad := range []string{"nothing", "../a", ""} {
+		if _, err := s.ServeSession(t.Context(), bad, []byte("x")); !errors.Is(err, ErrNotFound) {
+			t.Errorf("ServeSession(%q) = %v, want ErrNotFound", bad, err)
+		}
+	}
+	ro, err := Open(t.Context(), s.file, &Options{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	// Read only, it takes nothing, even a session another serves.
+	live := createRun(t, s)
+	inTx(t, s, func(tx *Tx) error {
+		_, err := tx.MakeSession(testSession("c", live, live, "c", "c-1"))
+		return err
+	})
+	held, err := s.ServeSession(t.Context(), "c", []byte("c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held()
+	if _, err := ro.ServeSession(t.Context(), "c", []byte("x")); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("ServeSession read only = %v, want ErrReadOnly", err)
+	}
 }

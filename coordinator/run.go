@@ -200,6 +200,14 @@ type Coordinator struct {
 	// sessionsWake tells ServeSessions that the store's sessions may have
 	// changed in this process.
 	sessionsWake chan struct{}
+	// sessionLeases are the sessions this process serves, while
+	// ServeSessions runs, or nil, each with what lets go of its lease
+	// (store.Store.ServeSession). sessionsMu guards them, and is held from
+	// when a session is read to when its host has been asked to serve it,
+	// so that the host serves it as the store has it once taken
+	// (takeSession).
+	sessionsMu    sync.Mutex
+	sessionLeases map[string]func()
 	// inserter inserts runs' workflows, and served works their jobs while
 	// Serve runs.
 	inserter *hopper.Client[*sql.Tx]
