@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/harden"
+	"github.com/parallelworks/meridian/internal/login"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -87,14 +87,14 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 // platformEnv returns the variables a platform gives every job's steps
 // that meridian gives them too (coordinator.Options.Env): PW_USER, format
 // 1's name of the person who runs the workflow, as the login name of the
-// user who runs meridian, as os/user finds it, or none where it finds
-// none. Every run of the store is theirs.
+// user who runs meridian (login.Name), which a session's path holds too,
+// or none where there is none. Every run of the store is theirs.
 func platformEnv() map[string]workerapi.EnvVar {
-	u, err := user.Current()
-	if err != nil || u.Username == "" {
+	name, err := login.Name()
+	if err != nil {
 		return nil
 	}
-	return map[string]workerapi.EnvVar{"PW_USER": {Value: u.Username}}
+	return map[string]workerapi.EnvVar{"PW_USER": {Value: name}}
 }
 
 // hardenProcess keeps the user's other processes out of the process's
