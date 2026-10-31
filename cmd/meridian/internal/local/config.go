@@ -618,7 +618,7 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]an
 	switch typ {
 	case "execution-groups":
 	case "compute-clusters", "compute-resources":
-		return c.resolveClusters(value)
+		return c.resolveClusters(def, value)
 	case "bucket":
 		return resolveBucket(def, value)
 	default:
@@ -632,6 +632,50 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]an
 		return nil, problems.ExecutionGroupUnknown.InputProblem(problems.Params{"value": problems.Show(value), "groups": problems.QuoteAll(c.GroupNames())})
 	}
 	return name, nil
+}
+
+// resolveEach gives the value of an input whose value names a platform's
+// resource, of the shape its type takes: with multi, a list, whose items
+// item gives; and otherwise text, which one gives, or a mapping, the
+// details a run passes to a workflow it calls, which is kept as it is. ""
+// is no value, list or not, and is kept. Any other value is
+// problems.InputNotList, with multi, or problems.InputNotText. Format 1's
+// run creation checked no shape, so a value of another one reached the run
+// as empty details; checking it is a bug fix to format 1, which ACTIVATE
+// takes too (docs/design.md, Bug fixes to format 1).
+//
+// The types differ in two ways, which the callers keep. Only
+// compute-clusters, compute-resources and bucket read multi; every other
+// type takes text or a mapping whatever multi says. And a list's items
+// differ: a cluster list keeps what isn't a name, as details a caller
+// resolved already, where a bucket list takes only URIs, but for the
+// mappings kept here (docs/design.md, Interfaces).
+func resolveEach(value any, multi bool, one func(string) (any, error), item func(any) (any, error)) (any, error) {
+	if value == "" {
+		return value, nil
+	}
+	if multi {
+		list, ok := value.([]any)
+		if !ok {
+			return nil, problems.InputNotList.InputProblem(problems.Params{"value": problems.Show(value)})
+		}
+		out := make([]any, len(list))
+		for i, it := range list {
+			v, err := item(it)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = v
+		}
+		return out, nil
+	}
+	switch v := value.(type) {
+	case string:
+		return one(v)
+	case map[string]any:
+		return v, nil
+	}
+	return nil, problems.InputNotText.InputProblem(problems.Params{"value": problems.Show(value)})
 }
 
 // expandHome turns a path that starts with ~/ into one in the home

@@ -23,48 +23,20 @@ const pwPrefix = "pw://"
 // platform that holds the bucket can make, is
 // problems.BucketCredentialsNeedPlatform. A value of the wrong shape for
 // the input is problems.InputNotText, or, with multi, problems.InputNotList,
-// as format 1 refuses it.
+// as the bug fix to format 1 refuses it (resolveEach), and an item of a
+// list that is neither a URI nor a mapping is problems.BucketURIInvalid,
+// as format 1 refuses one that isn't a URI.
 func resolveBucket(def map[string]any, value any) (any, error) {
-	multi := def["multi"] == true
-	switch v := value.(type) {
-	case string:
-		switch {
-		case v == "":
-			return v, nil
-		case multi:
-			return nil, problems.InputNotList.InputProblem(problems.Params{"value": problems.Show(value)})
+	one := func(uri string) (any, error) { return bucketValue(def, uri) }
+	return resolveEach(value, def["multi"] == true, one, func(item any) (any, error) {
+		switch it := item.(type) {
+		case map[string]any:
+			return it, nil
+		case string:
+			return one(it)
 		}
-		return bucketValue(def, v)
-	case map[string]any:
-		if multi {
-			return nil, problems.InputNotList.InputProblem(problems.Params{"value": problems.Show(value)})
-		}
-		return v, nil
-	case []any:
-		if !multi {
-			return nil, problems.InputNotText.InputProblem(problems.Params{"value": problems.Show(value)})
-		}
-		out := make([]any, len(v))
-		for i, item := range v {
-			switch it := item.(type) {
-			case map[string]any:
-				out[i] = it
-			case string:
-				b, err := bucketValue(def, it)
-				if err != nil {
-					return nil, err
-				}
-				out[i] = b
-			default:
-				return nil, problems.BucketURIInvalid.InputProblem(problems.Params{"value": problems.Show(item)})
-			}
-		}
-		return out, nil
-	}
-	if multi {
-		return nil, problems.InputNotList.InputProblem(problems.Params{"value": problems.Show(value)})
-	}
-	return nil, problems.InputNotText.InputProblem(problems.Params{"value": problems.Show(value)})
+		return nil, problems.BucketURIInvalid.InputProblem(problems.Params{"value": problems.Show(item)})
+	})
 }
 
 // bucketValue returns the details of the bucket uri names, a URI of the
