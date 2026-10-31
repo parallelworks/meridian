@@ -221,6 +221,8 @@
   "execution_group_unknown": "输入“{input}”指定的执行组 {value} 不在以下组中：{groups}。",
   "cluster_unknown": "输入“{input}”指定的集群 {value} 既不是 workspace，也不在以下集群中：{clusters}。",
   "clusters_none": "输入“{input}”指定的集群 {value} 不是 workspace，而这里没有其他集群。",
+  "bucket_uri_invalid": "输入“{input}”接受存储桶的 pw:// URI，如 pw://user/bucket，而不是 {value}。",
+  "bucket_credentials_need_platform": "输入“{input}”请求其存储桶的凭据，而只有平台才能生成它们。",
   "source_ref_invalid": "uses:“{ref}”不是对 Git 仓库中工作流的引用，例如 github/owner/repository@revision。",
   "source_on_platform": "uses:“{ref}”指定的是平台存储的工作流，只有该平台才能读取。",
   "source_revision_not_found": "Git 未找到仓库 {repo} 的修订“{revision}”：{reason}。提交要用完整的 SHA 指定。",

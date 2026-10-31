@@ -526,9 +526,11 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 //     as format 1 gives it: a scheduler's partitions, accounts, QoS and
 //     queues, Kubernetes clusters, their namespaces and volume claims, and
 //     an organization's groups (passedThrough).
+//   - bucket, whose value is a bucket's pw://user/name URI, and gives its
+//     details, as far as a run here knows them (resolveBucket).
 //
 // The compiler reports a problem with the input's name.
-func (c *Config) ResolveInput(ctx context.Context, typ string, _ map[string]any, value any) (any, error) {
+func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]any, value any) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -536,6 +538,8 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, _ map[string]any,
 	case "execution-groups":
 	case "compute-clusters":
 		return c.resolveClusters(value)
+	case "bucket":
+		return resolveBucket(def, value)
 	default:
 		if slices.Contains(passedThrough, typ) {
 			return passThrough(value)

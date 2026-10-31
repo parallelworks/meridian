@@ -1342,6 +1342,19 @@
       "Or run the workflow on a platform that provides the input's clusters."
     ]
   },
+  "bucket_uri_invalid": {
+    "why": "A bucket input names a bucket by its URI on the platform that holds it: pw://, the user who owns it, a slash and the bucket's name. A platform reads a bucket's name alone, or pw:// and the name, as one of the user's own buckets, which needs their platform username. A run here has none, so the URI must name the user.",
+    "fix": [
+      "Write the bucket as pw://user/bucket, with the platform username of the bucket's owner."
+    ]
+  },
+  "bucket_credentials_need_platform": {
+    "why": "A bucket input with generateCredentials gives the run access keys scoped to the bucket, which the platform that holds the bucket makes as the run is created. A run here has no platform to make them, and Meridian won't start the run without the keys the workflow reads.",
+    "fix": [
+      "Run the workflow on the platform that holds the bucket.",
+      "Or, if the workflow can reach the bucket some other way, such as the platform's own CLI, leave generateCredentials out."
+    ]
+  },
   "source_ref_invalid": {
     "why": "Meridian reads a workflow that a step's uses: names from a Git repository, as ACTIVATE does: github/ and the repository's owner and name, or gitlab/ and a project's path, its groups' names among it, and then @ and a branch, tag or commit, the default branch unless it names one. The workflow's file in the repository is the step's with: $yaml, workflow.yaml unless it names another, and with: $host names a GitLab server, only for gitlab/. A part that could be read as something else, such as .. in a path or a revision that starts with -, isn't allowed, nor is a group's name that ends in .git or .lock.",
     "fix": [

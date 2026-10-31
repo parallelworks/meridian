@@ -259,6 +259,12 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     the run started on ([Workflows a step calls](#workflows-a-step-calls));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
+  - what the meridian command's Inputs gives of a bucket and of a called
+    workflow's platform inputs: a bucket's details without what only the
+    platform's record holds, a bare name and `pw://name` refused, a
+    mapping among a root's inputs kept, and a called workflow's input of
+    a platform's type resolved as a root's is
+    ([Interfaces](#interfaces));
   - how a job's `ssh:` reaches its host, where its run's directory is
     there, and what an outage or a cancel does to its steps
     ([The `ssh` backend](#the-ssh-backend)).
@@ -1868,7 +1874,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; the platform's other resources, as its regions, come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
@@ -1878,11 +1884,35 @@ interface, and the compiler, coordinator and worker see only the interface:
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
 
 A name the local Inputs gives as it was given means what it means on a
-platform: a Kubernetes cluster's is the name the platform knows it by. A
-step that gives one to the platform's own CLI, as `pw kube auth` does in
-every known workflow with such an input, needs that CLI installed and
+platform: a Kubernetes cluster's is the name the platform knows it by,
+and a bucket's URI the one the platform reaches it by. A step that gives
+one to the platform's own CLI, as `pw kube auth` does in every known
+workflow with a Kubernetes input, and `pw buckets cp` in every one that
+requires a bucket, needs that CLI installed and
 signed in to the platform as it runs, standalone as on the platform:
 Meridian gives the step the name, and doesn't stand in for that CLI.
+
+The local Inputs gives format 1's platform inputs otherwise than ACTIVATE
+in four ways:
+
+- **A bare name, and `pw://name`, aren't a bucket** (`bucket_uri_invalid`).
+  ACTIVATE reads each as one of the caller's own buckets, by the run's
+  user's platform username, which a run here doesn't have.
+- **A bucket input's mapping is kept as given**, as its details.
+  ACTIVATE refuses one among a root run's submitted inputs, unless the
+  input's non-empty default takes its place, so that no credential is made
+  from details the caller wrote. Inputs can't tell a root's input from a
+  called workflow's, which is given its caller's details so; and here no
+  credential is made from a mapping.
+- **A called workflow's input of a platform's type is resolved**, as a
+  root's is. ACTIVATE resolves only the root's submitted inputs, so a
+  caller whose `with:` gives a bucket's `pw://` URI, or a cluster's name,
+  gives the called workflow that text there, and its details here.
+- **A bucket's details are its `type`, `name`, `user` and `uri`.**
+  ACTIVATE's hold its `csp` and `id` too, and its `bucketName` and
+  `region` once it is provisioned, which only the platform's record of it
+  knows. The known workflows read a bucket's `uri`, 15 times, and its
+  whole value, 10 times, and nothing else.
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
 are interfaces in `compile`, the coordinator's, Keys, Trees and Logs, in

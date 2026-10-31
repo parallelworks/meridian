@@ -133,6 +133,15 @@ var (
 	// are, as QuoteAll writes them.
 	ClusterUnknown = define(Error, "cluster_unknown", "No such cluster", "input", "value", "clusters")
 	ClustersNone   = define(Error, "clusters_none", "No clusters to choose from", "input", "value")
+	// BucketURIInvalid is what the meridian command's Inputs gives for a
+	// bucket input whose value isn't a bucket's pw://user/name URI, as a
+	// name alone or pw://name, which a platform reads as one of the user's
+	// own buckets, and a run here has no platform user to read it as: value
+	// is the value, as Show writes it. BucketCredentialsNeedPlatform is what
+	// it gives for a bucket input with generateCredentials, whose access
+	// keys only the platform that holds the bucket can make.
+	BucketURIInvalid              = define(Error, "bucket_uri_invalid", "Not a bucket's pw:// URI", "input", "value")
+	BucketCredentialsNeedPlatform = define(Error, "bucket_credentials_need_platform", "Bucket's credentials need a platform", "input")
 )
 
 // The workflows a step's uses: names, as a Sources resolver reports them.
