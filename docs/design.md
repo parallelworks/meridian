@@ -259,9 +259,24 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     the run started on ([Workflows a step calls](#workflows-a-step-calls));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
+  - what the meridian command's Inputs gives of a bucket and of a called
+    workflow's platform inputs: a bucket's details without what only the
+    platform's record holds, a bare name and `pw://name` refused, a
+    mapping among a root's inputs kept, and a called workflow's input of
+    a platform's type resolved as a root's is
+    ([Interfaces](#interfaces));
   - how a job's `ssh:` reaches its host, where its run's directory is
     there, and what an outage or a cancel does to its steps
-    ([The `ssh` backend](#the-ssh-backend)).
+    ([The `ssh` backend](#the-ssh-backend));
+  - a step whose `ssh:` puts it on another host than its job's, which runs
+    there as a run of its own, with a placement for each try, an
+    `OUTPUTS` of its own and its own log; one whose `ssh:` is null, or
+    gives no `remoteHost`, in a job on a host, which runs in the run's
+    default group; one whose `ssh:` reads what only its job's worker
+    knows, which fails; a calling step's own `ssh:`, which is refused;
+    and an action the coordinator performs with an `ssh:` of its own,
+    which connects to no host
+    ([Steps on another host](#steps-on-another-host)).
 
 ### Conformance
 
@@ -438,6 +453,22 @@ the SHA-256 hash of its content: 218 files.
   isn't a list is. ACTIVATE takes the same fix. None of the 211
   `compute-clusters` inputs of the known workflows is `multi`, the form
   that takes a list.
+- **A `compute-resources` input names a cluster as a `compute-clusters`
+  one does**: a name, or a `pw://` reference, becomes the cluster's
+  details, where ACTIVATE's run handler resolved a name only for
+  `compute-clusters`, so that a `compute-resources` input given one
+  through its API or its CLI reached the run as the name, and every read
+  of its details, as its `ip`, gave `""`. Its form, which lists the
+  Kubernetes clusters the user can reach for `compute-resources` too,
+  gives a cluster that either names the same details, so only a name
+  given otherwise was wrong. ACTIVATE takes the same fix, and resolves a
+  `pw://` reference to a Kubernetes cluster the user can reach to what
+  its form gives for one; Meridian has no Kubernetes clusters of its own,
+  so `clusters.yaml` names only clusters
+  ([The `meridian` command](#the-meridian-command)). 7 of the known
+  workflows have a `compute-resources` input, and all 7 read its
+  details: whether it is a Kubernetes cluster, its `ip` and its
+  `schedulerType`. None reads it as a name.
 - **A `parallelworks/cancel-jobs` of a job that hasn't started yet is
   kept**: the job ends cancelled where it waits, on the jobs it needs or
   to be placed, and never starts
@@ -967,7 +998,13 @@ ACTIVATE's launch form and its backend do together:
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
-  input of such a type that has a value is an error.
+  input of such a type that has a value is an error. Format 1 gives a run
+  the details of a cluster and of a bucket for its name; every other type's
+  value is the name as it was given, text or a mapping, which nothing checks
+  as the run is created: a platform's form lists the names to choose from,
+  as a cluster's partitions, and the scheduler, or the command the workflow
+  gives the name to, checks it as the run uses it. The meridian command's
+  resolver gives these names so ([Interfaces](#interfaces)).
 - **What waits for Start.** A default that reads something not known when
   the run is created, such as `env` or a secret variable, isn't evaluated
   until then: its input isn't among the plan's values, and Start, which
@@ -1177,7 +1214,11 @@ made from one, it doesn't hold in another form either.
    and tells the provider what evaluating them read: what is made from a
    variable or a password is private, and from a secret masked as what is
    made from one is. One that fails to evaluate fails the run, as an
-   `env:` value does, without showing what it read. Create only checks
+   `env:` value does, without showing what it read. As in format 1, only
+   one session may have `redirect: true`, the one the person who runs the
+   workflow is taken to: Create refuses two that the workflow writes so,
+   and Start two that expressions give so (`session_redirect_twice`).
+   Create only checks
    them, as they are written, since a run that is created may never start.
    Making them again for a run that has them makes nothing more, and a
    rerun, whose sessions ended with the run, makes them again. A run with
@@ -1648,11 +1689,20 @@ sees one version.
   (`Plan.Calls`), the variables the tree reads (`Run.TreeVariables`), each
   pin's remote context (`Source.Remote`), and a child run's link to its
   step (`Run.Parent`), with what its secret record holds of the step
-  (`Record.Inherited`); and the pins of `parallelworks/checkout` steps, a
+  (`Record.Inherited`); the pins of `parallelworks/checkout` steps, a
   run's own (`Step.Checkout`) and its called workflows'
-  (`Plan.Checkouts`). So a run that calls no workflow, and checks out
-  nothing, is of version 1. A release reads every version up to its own,
-  each by its own schemas, under `plan/schema/<version>/`, and refuses
+  (`Plan.Checkouts`); and what a step run's secret record holds of the
+  step's try it runs (`Record.StepRun`, [Steps on another
+  host](#steps-on-another-host)). So a run that calls no workflow, and
+  checks out nothing, is of version 1. A step run's secret record is of
+  version 2 whatever its plan's version, as it holds `Record.StepRun`,
+  while the step run's row keeps its plan's version, its caller's, which
+  can be 1: a replica of a release that reads only version 1 would claim
+  the step run, and fail to read its record. No release has written
+  either version yet, so it is harmless; before one does, a step run's
+  row is to keep its record's version. A release reads every version up
+  to its own, each by its own schemas, under `plan/schema/<version>/`,
+  and refuses
   what a later version added in an earlier one's plan
   (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
@@ -1862,14 +1912,45 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts and queues come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; `compute-resources` the same, as format 1 gives a cluster that either names the same details ([Bug fixes to format 1](#bug-fixes-to-format-1)), though its form lists Kubernetes clusters too, which it never names here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
-| Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
+| Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later; a workflow a platform stores, where `sources.yaml` maps it to one in Git |
 | Trees | The trees of the commits checkouts were pinned to, which the coordinator serves to their steps' workers | The copies of the repositories that Sources pinned them from, in Meridian's cache directory |
 | Sessions | Interactive sessions a workflow serves, which it makes and updates | None |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
+
+A name the local Inputs gives as it was given means what it means on a
+platform: a Kubernetes cluster's is the name the platform knows it by,
+and a bucket's URI the one the platform reaches it by. A step that gives
+one to the platform's own CLI, as `pw kube auth` does in every known
+workflow with a Kubernetes input, and `pw buckets cp` in every one that
+requires a bucket, needs that CLI installed and
+signed in to the platform as it runs, standalone as on the platform:
+Meridian gives the step the name, and doesn't stand in for that CLI.
+
+The local Inputs gives format 1's platform inputs otherwise than ACTIVATE
+in four ways:
+
+- **A bare name, and `pw://name`, aren't a bucket** (`bucket_uri_invalid`).
+  ACTIVATE reads each as one of the caller's own buckets, by the run's
+  user's platform username, which a run here doesn't have.
+- **A bucket input's mapping is kept as given**, as its details.
+  ACTIVATE refuses one among a root run's submitted inputs, unless the
+  input's non-empty default takes its place, so that no credential is made
+  from details the caller wrote. Inputs can't tell a root's input from a
+  called workflow's, which is given its caller's details so; and here no
+  credential is made from a mapping.
+- **A called workflow's input of a platform's type is resolved**, as a
+  root's is. ACTIVATE resolves only the root's submitted inputs, so a
+  caller whose `with:` gives a bucket's `pw://` URI, or a cluster's name,
+  gives the called workflow that text there, and its details here.
+- **A bucket's details are its `type`, `name`, `user` and `uri`.**
+  ACTIVATE's hold its `csp` and `id` too, and its `bucketName` and
+  `region` once it is provisioned, which only the platform's record of it
+  knows. The known workflows read a bucket's `uri`, 15 times, and its
+  whole value, 10 times, and nothing else.
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
 are interfaces in `compile`, the coordinator's, Keys, Trees and Logs, in
@@ -1946,6 +2027,16 @@ another repository's copy, its lock or a copy being made is in the cache,
 where a repository's name, as `.github`, can start with one; and a `$yaml`
 with an empty name or `.` in it, or a control character, `./` among them,
 whose reading by ACTIVATE can't be confirmed.
+A reference to a workflow a platform stores reads as ACTIVATE reads it
+too: a `marketplace/` one as the item's slug and version,
+`marketplace/<slug>/<version>`, where the version follows the slug's first
+slash, or, without one, its first `@`, and is `latest` when there is none,
+so that `marketplace/m@v1` and `marketplace/m/v1` are one; a `workflow/`
+one, a saved workflow's name, as it is written; and neither with its
+`$yaml` or `$host`, which ACTIVATE ignores and the schema warns of. A
+platform reads the normal reference as the same item, and the local
+Sources reads one only where the user's `sources.yaml` maps it to a
+workflow in Git ([The `meridian` command](#the-meridian-command)).
 Two steps whose references read the same are pinned once, to one commit,
 however they write it. A pinned workflow keeps its reference beside its
 commit and digest (`Source.Ref`), so Sources reads it again by it, and gives
@@ -2598,7 +2689,8 @@ does, whatever the version, a step that calls a workflow.
   a host never chooses where the coordinator connects with the user's
   keys, and a host that a variable or a password names is placed
   privately. Its tries come in order, each once the one before has
-  failed, so the retry counter is the try's. A step whose `ssh:` reads
+  ended, however it ended, or ran in its job, so the retry counter is
+  the try's. A step whose `ssh:` reads
   what only the job's worker knows, as its earlier steps' outputs, its
   own job's outputs through `needs`, a job of `needs` that only
   evaluating it names, the job's status, or `env` but the retry counter,
@@ -2631,7 +2723,10 @@ does, whatever the version, a step that calls a workflow.
   caller's worker masked at the try, as a workflow a step calls masks its
   caller's secrets, and names an output that holds what it masks a
   secret; the caller's worker masks each output named private or secret
-  as a secret of its job's, at least. Its `OUTPUTS` starts empty, and
+  as a secret of its job's, at least, but one shorter than what the
+  phases mask of what is made from a secret (`plan.MinDerived`), which
+  would mask common text, as the step run only says it holds what the
+  caller's worker masks already. Its `OUTPUTS` starts empty, and
   what the step
   writes there comes back to the caller's worker, as the values it
   reads, which appends them to the file the step would have written, the
@@ -2681,7 +2776,12 @@ Where format 1 does otherwise, none of it in the known workflows:
   each try, a second or two once the host has the binary, where format 1
   reuses its connection. A host that can't be reached fails the try
   after the backend's tries (`ssh_unreachable`), as format 1's connection
-  fails it after its own, and the step's `retry:` applies in both.
+  fails it after its own, and the step's `retry:` applies in both. A
+  later optimization could place a job whose steps all name one host on
+  that host, once for the job, at the cost that a host that can't be
+  reached fails the job as it is placed, before a step's `retry:` could
+  try another. It needs every step's `ssh:` known at Ready, as all the
+  known ones are.
 - **`OUTPUTS` starts empty on the host**, so the step doesn't read what
   its job's earlier steps wrote there, and a step that writes it with
   `>` doesn't erase that, as format 1's copy back does. All 9 of the
@@ -2906,7 +3006,14 @@ checkout.
 - **update-session** updates the session its `name` names, as text,
   through Sessions (`Sessions.Update`), with the rest of its `with:` as
   it was evaluated, and whether that read a variable or a password, which
-  the provider keeps private, or a secret, which it masks. A name is any
+  the provider keeps private, or a secret, which it masks. Its keys, and
+  those of its `targetInfo`, are read as format 1 reads them, as Go's
+  encoding/json decodes an object into a struct: `LocalPort` is
+  `localPort`, which the compiler neither warns about nor drops, and of
+  keys that differ only in case, the last in byte order counts, as
+  json.Marshal orders a map's keys before format 1 decodes them.
+  `local_port`, which one known workflow writes, is no key of it, and is
+  ignored with a warning, as format 1 ignores it. A name is any
   session's: `${{ sessions.<key> }}` gives one of the run's own, as format
   1's does, but Meridian doesn't hold a step to those. The provider
   decides whether the run may update the session, as format 1's platform
@@ -3990,11 +4097,12 @@ coordinator say to each other.
   claim holds what masks what it inherits, needs version 3; any other,
   version 1. A later
   worker, in an attempt an earlier coordinator serves at an earlier
-  version, fails such a step (`uses_not_supported`), rather than run it
-  otherwise. The same problem fails, as it runs, a step that has no pin:
-  a checkout of a run created before checkouts were pinned, which the
-  coordinator fails, and a call of a workflow of one created before calls
-  were, which the worker fails.
+  version, fails such a step (`uses_not_supported`, or for a step on
+  another host `step_ssh_not_supported` or `step_off_job_host`), rather
+  than run it otherwise. The same problem fails, as it runs, a step that
+  has no pin: a checkout of a run created before checkouts were pinned,
+  which the coordinator fails, and a call of a workflow of one created
+  before calls were, which the worker fails.
 - **What a body carries of a run is the plan's.** The run's values, the
   job Ready evaluated and the results of the jobs it needs are encoded at
   the run's plan version, and a change to one of their types raises the
@@ -4136,8 +4244,11 @@ placement on it, however long it takes. The next attempt on the member
 takes the lease again, as idle: no worker of the member's can have waited
 for it, so it starts no grace, unless another process placed an attempt
 on the member meanwhile, and lapsed leases go on counting however often
-members come and go ([Leases and fencing](#leases-and-fencing)). Taking a
-lease at a start or a takeover still starts one. A host's pooled SSH
+members come and go ([Leases and fencing](#leases-and-fencing)). It
+remembers a member it let go of so for a day, and one that comes back
+after that takes its lease as at a start, so that a long-lived
+coordinator remembers only its last day's members. Taking a lease at a
+start or a takeover still starts one. A host's pooled SSH
 connection isn't let go yet. A replica that takes the lease over,
 once its holder has stopped renewing it, sets the connection up again at
 the same address, so the
@@ -4171,7 +4282,11 @@ own runs.
   one is a secret to the jobs that need the job. They go over the environment the workflow gives the step, as in
   format 1, and the worker's own over them. Without a platform, `PW_JOB_ID`
   is the run's ID and `PW_PARENT_JOB_DIR` its directory; a child run's are
-  its root's ([Workflows a step calls](#workflows-a-step-calls)).
+  its root's ([Workflows a step calls](#workflows-a-step-calls)). The
+  `meridian` command gives `PW_USER`, format 1's name of the person who
+  runs the workflow, as the login name of the user who runs it
+  (`coordinator.Options.Env`), which known workflows build a session's
+  path from, `/me/session/${PW_USER}/…`.
 - **The shell** is bash, or sh, as `shell:` says: format 1 runs no other.
 - **The env context on the worker.** As in format 1, `env` reads the
   workflow's `env:`, the job's over it, the step's over that, and the
@@ -4222,18 +4337,21 @@ own runs.
   the host it names, and a step's runs it on its own: `ssh: null` runs the
   step where the job runs without its `ssh:`, and an empty or null
   `remoteHost` runs it there too, with a note in its log, as format 1 does
-  (`ssh_host_empty`). A step whose `ssh:` names a host of its own is to
-  run there as a run of its own, and so is such a step in a job on a host
-  ([Steps on another host](#steps-on-another-host)); until that is built, a
-  worker on the host a job's `ssh:` names fails such a step
-  (`step_off_job_host`) rather than run it on the wrong host, and any
-  worker fails one whose `ssh:` names a host of its own
-  (`step_ssh_not_supported`), but for one whose `ssh:` names the same host
-  and login as its job's, as a step that repeats its job's `remoteHost`
-  does, which runs where its job runs: the same `remoteHost`,
-  `remoteUser`, `jumpNodeHost` and `jumpNodeUser`, by which format 1 keys
-  the connections it reuses, with
-  null and none as `""`, whatever else it says, such as its
+  (`ssh_host_empty`). A step whose `ssh:` names a host of its own runs
+  there as a run of its own, and so does one whose `ssh:` is null, or
+  gives no `remoteHost`, in a job on a host, but a step that calls a
+  workflow, which is refused, and one that uses an action the
+  coordinator performs other than checkout, which runs in its job ([Steps
+  on another host](#steps-on-another-host)). In an attempt of version 2
+  of the worker API or earlier, as a worker or a coordinator of an older
+  release serves, such a step fails instead, rather than run on the
+  wrong host: one off its job's host (`step_off_job_host`), and one whose
+  `ssh:` names a host of its own (`step_ssh_not_supported`). A step whose
+  `ssh:` names the same host and login as its job's, as a step that
+  repeats its job's `remoteHost` does, runs where its job runs: the same
+  `remoteHost`, `remoteUser`, `jumpNodeHost` and `jumpNodeUser`, by which
+  format 1 keys the connections it reuses, with null and none as `""`,
+  whatever else it says, such as its
   `disconnect-timeout`. `host:22` isn't `host`, as format 1 connects to
   `host:port` as it is and reads `host` through the user's `ssh_config`.
   All 536 jobs' `ssh:` mappings in the known workflows read `remoteHost`
@@ -4337,13 +4455,17 @@ own runs.
 Today the worker runs steps only on the host. A job whose steps are to run
 in a container fails before its first step, with a problem that says so,
 rather than run them on the host, and a step that `uses:` a built-in
-action the worker doesn't run, or runs on another host with `ssh:`, fails,
-as does one whose `ssh:` is null, or gives no `remoteHost`, on a worker
-that a job's `ssh:` placed on a host, until steps on another host are
-built ([Steps on another host](#steps-on-another-host)); one that uses an
-action only a platform provides fails saying so (`action_needs_platform`, [Built-in
-actions](#built-in-actions)). A step that `uses:` a workflow runs it as a
-run of its own ([Workflows a step calls](#workflows-a-step-calls)), whose
+action the worker doesn't run fails; one that uses an action only a
+platform provides fails saying so (`action_needs_platform`, [Built-in
+actions](#built-in-actions)). A step on another host with `ssh:`, and one
+whose `ssh:` is null, or gives no `remoteHost`, on a worker that a job's
+`ssh:` placed on a host, runs there as a run of its own, from version 3
+of the worker API, and fails in an attempt of an earlier version ([Steps
+on another host](#steps-on-another-host)), but a step that calls a
+workflow, which is refused, and one that uses an action the coordinator
+performs other than checkout, which runs in its job. A step that `uses:` a
+workflow runs it as a run of its own ([Workflows a step
+calls](#workflows-a-step-calls)), whose
 directory its `clean-on-retry:` cleans on the machine the run started
 on, never on a host. Its events are kept in memory
 while the coordinator is unreachable, since each is small but for a step's
@@ -4728,17 +4850,20 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   workers' placements, and the runs' directories. ACTIVATE keeps the
   job's directory alone.
 - **A step on another host than its job's**, as a step's `ssh:` that
-  names one, fails (`step_ssh_not_supported`) until it runs there as a run
-  of its own ([Steps on another host](#steps-on-another-host)), which
-  differs from ACTIVATE's run of it as that section says. ACTIVATE runs
-  it there, but for a step that calls a workflow, whose child it runs
-  where its caller runs, which Meridian refuses.
+  names one, runs there as a run of its own ([Steps on another
+  host](#steps-on-another-host)), which differs from ACTIVATE's run of it
+  as that section says, and fails (`step_ssh_not_supported`) only in an
+  attempt of an earlier version of the worker API. ACTIVATE connects to
+  that host itself, over a connection of its own from where the run
+  started, and runs the step there, but for a step that calls a
+  workflow, whose child it runs where its caller runs, which Meridian
+  refuses.
 - **A step off its job's host.** In a job on a host, a step whose `ssh:`
-  is null, or gives no `remoteHost`, would run where its job runs without
-  its `ssh:`, the machine the run started on, which a worker on the host
-  can't reach, so it fails (`step_off_job_host`) until it runs there as a
-  run of its own. ACTIVATE runs it on that machine. None of the known
-  workflows has one.
+  is null, or gives no `remoteHost`, runs as a run of its own in the
+  run's default group ([Steps on another host](#steps-on-another-host)),
+  and fails (`step_off_job_host`) only in an attempt of an earlier
+  version of the worker API. ACTIVATE runs it where the job would run
+  without its `ssh:`. None of the known workflows has one.
 - **An unreachable host** is tried again after about 1, 2 and 4 seconds,
   where ACTIVATE waits 2, 4 and 8.
 - **Host keys.** Meridian checks every host's key against known_hosts,
@@ -5046,9 +5171,61 @@ host itself.
   the user's credentials, so a workflow can't name a server of its own,
   and at HTTPS's port, or at another that Git's own `url.<base>.insteadOf`
   rewrites the server's address to.
-- **`clusters.yaml`** holds the clusters a `compute-clusters` input can
-  name, each by its name, with its `host`, and, if it gives one, its
-  `scheduler`, `slurm` or `pbs`
+
+  It holds `workflows` too, which map workflows a platform stores to
+  workflows in Git, so that a `uses:` of `marketplace/` or `workflow/`
+  runs without the platform
+  ([`docs/examples/sources.yaml`](examples/sources.yaml)):
+
+  - **Each key** is such a `uses:`, as format 1 reads it
+    ([Workflows a step calls](#workflows-a-step-calls)):
+    `marketplace/<slug>/<version>`, `workflow/<name>`, or
+    `marketplace/<slug>/{version}`, which maps each version of the slug
+    that no key of its own maps. Two keys that read the same, as
+    `marketplace/tools@v1` and `marketplace/tools/v1`, are refused
+    (`workflow_mapping_repeated`), as is a key that names no such workflow,
+    or holds what a terminal would act on, or show other than as it is, a
+    control or format character, as a key begins the location of each run
+    of its workflow (`workflow_mapping_key_invalid`).
+  - **Each value** names a workflow in Git as a step does: `uses`, a
+    `github/` or `gitlab/` reference, `yaml`, its file, and `host`, a GitLab
+    project's server, which `gitlab-servers` must register, all checked as
+    a step's are, as the file loads; never another workflow a platform
+    stores, or a URL (`workflow_mapping_invalid`).
+  - **A slug's mapping** writes the version as `{version}`, in its `yaml`
+    and after its `uses`'s `@`, and nowhere else. The version is the
+    workflow's text, so before Git runs it must be letters, digits, `.`,
+    `_`, `+` and `-`, not first `.` or `-`, at most 255 bytes, and give a
+    revision and a file that a `uses:` could name
+    (`source_version_invalid`). So a revision that is `{version}` alone
+    lets a workflow name any revision of the repository, a full commit
+    among them, which on GitHub can be one only a fork has (see
+    [Security](#security)): no more than a `github/` `uses:` of its own can
+    name, but more than the mapping means. A prefix, as
+    `@release-{version}`, keeps it to the branches and tags that the
+    repository names so.
+  - **`latest`**, which a `uses:` without a version names, is the item's
+    latest as its platform decides it, which a slug's mapping can't know:
+    only a key of its own, `marketplace/<slug>/latest`, maps it, as the
+    user's choice of the workflow, not the item's highest version
+    (`source_latest_not_mapped`, which names the key).
+  - **A mapped workflow** is pinned, read again by its pin, and kept in the
+    cache as a `github/` or `gitlab/` one is, through its mapping, and its
+    remote context is its repository's, as it was when it was pinned. Its
+    location names both, the one the `uses:` names first, as
+    `marketplace/tools/v1.2 → github.com/acme/flows@main:tools.yaml`,
+    wherever a run's workflow is shown: `meridian status`, which shows a
+    location's control and format characters escaped, wherever it came
+    from, a chain of calls, and the file a called workflow's problems are
+    in. A pin read again through a mapping changed since, to other text, is
+    `source_changed`, `source_file_not_found` or
+    `source_revision_not_found`, never the other text.
+  - **A mapping is the user's word** that the name is that workflow: the
+    platform's own item may be another. A `uses:` it doesn't map is
+    `source_on_platform`.
+- **`clusters.yaml`** holds the clusters a `compute-clusters` input, or
+  a `compute-resources` one, can name, each by its name, with its
+  `host`, and, if it gives one, its `scheduler`, `slurm` or `pbs`
   ([`docs/examples/clusters.yaml`](examples/clusters.yaml)). The host is
   an alias that ssh resolves, as `ssh -G` does, or a host name or an
   address, without a port: format 1 gives an existing cluster's `ip` so,
@@ -5057,10 +5234,16 @@ host itself.
   or an IPv6 address, is an alias the user's `ssh_config` defines, as
   format 1 takes a login from the config's `User`. A host can't start
   with `-` or hold a space, as a workflow's script can put it in a
-  command line. A name is letters, digits, `_`, `-` and `.`, as a group's.
+  command line. A name is letters, digits, `_`, `-` and `.`, as a group's,
+  and isn't `workspace` or `user-workspace`, which name the workspace, or
+  `localhost`, which a session's target reads as the workspace, as a
+  cluster's `id` is its name.
 
   An input that names a cluster sees what format 1 gives for an existing
-  cluster's details, for what a cluster here can know of them: `name`;
+  cluster's details, for what a cluster here can know of them: its name,
+  as `name` and as `id`, which every target a known workflow's
+  `parallelworks/update-session` gives reads (`${{ inputs.<cluster>.id }}`,
+  11 steps), and nothing else of theirs does;
   its host as `ip`, which 189 of the 196 workflows we know of that have
   such an input read, as a job's `ssh:` `remoteHost` above all; its
   scheduler as `schedulerType`, or `""` for none, as format 1 writes a
@@ -5068,8 +5251,8 @@ host itself.
   format 1 names a cluster that a platform reaches but didn't make, which
   73 of those workflows read to decide what else to ask for; and `$type`
   `computeResource`. What names a platform's own record of the cluster,
-  its `id` and its `pw://` `uri`, and its owner's platform account, its
-  `user` and its `namespace`, it leaves out: an existing cluster without
+  its `pw://` `uri`, and its owner's platform account, its `user` and its
+  `namespace`, it leaves out: an existing cluster without
   the account fields, a shape format 1 doesn't give, where the 5 reads of
   them in the known workflows feed the platform's own CLI. The workspace,
   `workspace` or `user-workspace`, is the machine a run starts on, this

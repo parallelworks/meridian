@@ -5,13 +5,10 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
 
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/coordinator/internal/workerapisrv"
 	"github.com/parallelworks/meridian/plan"
-	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
 
@@ -22,7 +19,7 @@ import (
 // cancelled, as the step's stop is, as Child answers for a child.
 func (k childAPI) StepRun(ctx context.Context, run *store.Run, a *store.Attempt, req *workerapi.StepRunRequest) (*workerapi.StepRun, error) {
 	c := k.c
-	p, step, err := c.planStep(run, a, req.Step)
+	p, j, step, err := c.planStep(run, a, req.Step)
 	switch {
 	case err != nil:
 		return nil, err
@@ -31,10 +28,6 @@ func (k childAPI) StepRun(ctx context.Context, run *store.Run, a *store.Attempt,
 	}
 	// The state holds the result of each step before the try's, or of
 	// every step, for a cleanup's, which evaluating the step reads.
-	_, j, err := c.planJob(run, a)
-	if err != nil {
-		return nil, err
-	}
 	want := req.Step
 	if req.Cleanup {
 		want = len(j.Steps)
@@ -50,7 +43,7 @@ func (k childAPI) StepRun(ctx context.Context, run *store.Run, a *store.Attempt,
 	if err != nil {
 		return nil, err
 	}
-	id, diags, err := c.createStepRun(ctx, a, p, step, &stepRunRequest{
+	id, diags, err := c.createStepRun(ctx, a, p, j, step, &stepRunRequest{
 		Step: req.Step, Try: req.Try, Cleanup: req.Cleanup, SSH: req.SSH, State: state, Masked: req.Masked,
 	})
 	if errors.Is(err, errNotStepRun) {
@@ -75,58 +68,9 @@ func (k childAPI) StepRun(ctx context.Context, run *store.Run, a *store.Attempt,
 }
 
 // StepRunEnd returns how the step run id, which has ended, ended
-// (stepRunEnd); but one whose step wrote more than a worker reads of
-// $OUTPUTS (workerapi.MaxOutputs), failed, with outputs_too_large at its
-// step, and none of them, as a step of the caller's own job would. The
-// server refuses such an end of a step run's attempt, so only a store
-// that holds one otherwise, as a release before that check stored, has
-// one.
+// (stepRunEnd).
 func (k childAPI) StepRunEnd(ctx context.Context, id string) (*workerapi.StepRun, error) {
-	end, err := k.c.stepRunEnd(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if !end.Ended {
-		return &workerapi.StepRun{Run: id}, nil
-	}
-	if size := workerapi.OutputsSize(end.Outputs); size > workerapi.MaxOutputs {
-		path, err := k.c.stepRunPath(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		tooLarge := problems.OutputsTooLarge.At("", problems.Position{}, path, problems.Params{"size": size, "limit": workerapi.MaxOutputs})
-		return &workerapi.StepRun{
-			Run: id, Ended: true, Outcome: plan.OutcomeFailure, ExitCode: end.ExitCode,
-			Diagnostics: append(slices.Clone(end.Diagnostics), tooLarge),
-		}, nil
-	}
-	return &workerapi.StepRun{
-		Run: id, Ended: true, Outcome: end.Outcome, Reason: end.Reason, ExitCode: end.ExitCode,
-		Outputs: end.Outputs, Private: end.Private, Secrets: end.Secrets, Diagnostics: end.Diagnostics,
-	}, nil
-}
-
-// stepRunPath returns the path, in its caller's workflow, of the step the
-// step run id runs.
-func (c *Coordinator) stepRunPath(ctx context.Context, id string) (string, error) {
-	var run *store.Run
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		run, err = tx.Run(id)
-		return err
-	}); err != nil {
-		return "", err
-	}
-	p, err := c.plans.get(run)
-	if err != nil {
-		return "", err
-	}
-	name, _, _ := strings.Cut(run.Parent.Job, "#")
-	j := p.Job(name)
-	if j == nil || run.Parent.Step >= len(j.Steps) {
-		return "", fmt.Errorf("coordinator: step run %s's caller's plan has no step %d of job %q", id, run.Parent.Step, name)
-	}
-	return j.Steps[run.Parent.Step].Path, nil
+	return k.c.stepRunEnd(ctx, id)
 }
 
 // stepRunState returns the state a step run of the attempt a's job j is

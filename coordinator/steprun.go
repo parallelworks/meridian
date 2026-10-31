@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/parallelworks/hopper"
-
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
@@ -49,8 +47,9 @@ var errNotStepRun = errors.New("coordinator: the step can't run as a run of its 
 // a, that req asks for, and returns its ID: the next number in the store,
 // or the ID of the run that the try has already, which a repeated ask
 // finds again; or, for a step whose ssh: the coordinator can't evaluate,
-// the problems that say so. step is the step at req.Step of a's job, and p
-// the plan of a's run. As docs/design.md says under Steps on another host:
+// the problems that say so. p is the plan of a's run, j a's job of it, and
+// step the step at req.Step of j. As docs/design.md says under Steps on
+// another host:
 //
 //   - Only a step that the plan says can run so gets one
 //     (plan.Job.StepElsewhere), for a try of its retry:, and never a step
@@ -80,7 +79,7 @@ var errNotStepRun = errors.New("coordinator: the step can't run as a run of its 
 // holds its job, a run that has ended or was stopped, and a step its
 // attempt's control stops; and errNotStepRun for a step, a try or a host
 // that can't have one.
-func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *plan.Plan, step *plan.Step, req *stepRunRequest) (string, problems.Diagnostics, error) {
+func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *plan.Plan, j *plan.Job, step *plan.Step, req *stepRunRequest) (string, problems.Diagnostics, error) {
 	if err := c.writable(); err != nil {
 		return "", nil, err
 	}
@@ -110,28 +109,26 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	if err := stepLives(cl.attempt, cl.run, step, cl.control, req.Cleanup); err != nil {
 		return "", nil, err
 	}
-	name, _, _ := strings.Cut(cl.attempt.Job, "#")
-	j := p.Job(name)
-	if j == nil || !j.StepElsewhere(step) {
-		return "", nil, fmt.Errorf("%w: run %s's job %q's step %d", errNotStepRun, cl.run.ID, name, req.Step)
+	if !j.StepElsewhere(step) {
+		return "", nil, fmt.Errorf("%w: run %s's job %q's step %d", errNotStepRun, cl.run.ID, j.Name, req.Step)
 	}
-	if err := c.triedBefore(ctx, cl.run, cl.attempt.Job, a.ID, req.Step, req.Try); err != nil {
+	hosts, err := c.stepHostsOf(ctx, cl.run, cl.attempt.Job)
+	if err != nil {
 		return "", nil, err
 	}
-	target, job, private, diags, err := c.stepTarget(ctx, cl.run, cl.attempt.Job, req.Step, req.Try)
+	if err := c.triedBefore(ctx, hosts, a.ID, req.Step, req.Try); err != nil {
+		return "", nil, err
+	}
+	target, private, diags, err := hosts.target(ctx, req.Step, req.Try)
 	switch {
 	case err != nil:
 		return "", nil, err
 	case diags.HasErrors():
 		return "", diags, nil
-	case target == nil && job == nil:
+	case target == nil && hosts.job == nil:
 		return "", nil, fmt.Errorf("%w: a step whose ssh: names no host runs in its job, which has none", errNotStepRun)
 	case !sameTarget(req.SSH, target):
 		return "", nil, fmt.Errorf("%w: the host its worker gave isn't the one its ssh: names", errNotStepRun)
-	}
-	callers, err := c.openRecord(ctx, cl.run.ID)
-	if err != nil {
-		return "", nil, err
 	}
 	depth := 1
 	if cl.run.Parent != nil {
@@ -139,25 +136,25 @@ func (c *Coordinator) createStepRun(ctx context.Context, a *store.Attempt, p *pl
 	}
 	link := store.Link{Run: cl.run.ID, Job: cl.attempt.Job, Attempt: cl.attempt.ID, Step: req.Step, Try: req.Try, Root: cl.root.ID, Depth: depth, Cleanup: req.Cleanup}
 	record := plan.Record{
-		Version: plan.Version, PlanDigest: callers.PlanDigest, Inherited: callers.Inherited,
+		Version: plan.Version, PlanDigest: hosts.rec.PlanDigest, Inherited: hosts.rec.Inherited,
 		StepRun: &plan.StepRun{SSH: target, Private: private, State: req.State, Masked: req.Masked},
 	}
 	id, err := c.storeChild(ctx, step, &link, func(tx *store.Tx, id string) error {
-		return c.insertStepRun(ctx, tx, id, p, &record, cl.run, &link, name)
+		return c.insertStepRun(ctx, tx, id, p, &record, cl.run, &link, j.Name)
 	})
 	return id, nil, err
 }
 
 // triedBefore checks that the try try of the step step, of the attempt
-// attempt, of run's job key, follows the one before it: that one ran in
-// its job, as one whose ssh: put it on no host, or on its job's own does,
-// or had a step run that has ended, however, as tries come one after
-// another. So a worker can't choose a try, and with it a host, where the
-// step's ssh: reads its retry counter, whatever its retry: says. How the
-// try before ended doesn't matter: a step run can succeed as its try
-// fails, as when its timeout comes as it ends, and the caller can stop it
-// at any time.
-func (c *Coordinator) triedBefore(ctx context.Context, run *store.Run, key, attempt string, step, try int) error {
+// attempt, whose job hosts evaluates its ssh: for, follows the one before
+// it: that one ran in its job, as one whose ssh: put it on no host, in a
+// job on none, or on its job's own host does, or had a step run that has
+// ended, however, as tries come one after another. So a worker can't
+// choose a try, and with it a host, where the step's ssh: reads its retry
+// counter, whatever its retry: says. How the try before ended doesn't
+// matter: a step run can succeed as its try fails, as when its timeout
+// comes as it ends, and the caller can stop it at any time.
+func (c *Coordinator) triedBefore(ctx context.Context, hosts *stepHosts, attempt string, step, try int) error {
 	if try == 0 {
 		return nil
 	}
@@ -183,37 +180,57 @@ func (c *Coordinator) triedBefore(ctx context.Context, run *store.Run, key, atte
 	case found:
 		return fmt.Errorf("%w: try %d while the step run of try %d hasn't ended", errNotStepRun, try, try-1)
 	}
-	// Without a step run, the try before ran in its job, if its ssh: put
-	// it there.
-	before, job, _, diags, err := c.stepTarget(ctx, run, key, step, try-1)
+	// Without a step run, the try before ran in its job, so its ssh: put
+	// it there. One that put it on no host, in a job on a host, ran as a
+	// step run, where the job would run without its ssh:.
+	before, _, diags, err := hosts.target(ctx, step, try-1)
 	switch {
 	case err != nil:
 		return err
-	case diags.HasErrors() || before != nil && !sameHost(before, job):
+	case diags.HasErrors(), before == nil && hosts.job != nil, before != nil && !sameHost(before, hosts.job):
 		return fmt.Errorf("%w: try %d without a step run of try %d, which its ssh: puts elsewhere than its job", errNotStepRun, try, try-1)
 	}
 	return nil
 }
 
-// stepTarget evaluates, as the coordinator, where the ssh: of the step at
-// index of the job key, of run, puts its try try: with what Ready readies
-// the job with, as a claim of it reads it (readyInputOf). It gives the
-// host the job, as Ready readies it, runs on too, or nil for none.
-func (c *Coordinator) stepTarget(ctx context.Context, run *store.Run, key string, index, try int) (*plan.Inline, *plan.Inline, bool, problems.Diagnostics, error) {
-	p, from, in, _, err := c.readyInputOf(ctx, run, key)
+// stepHosts is what the coordinator evaluates where the ssh: of a step of
+// a run's job puts its tries with: the run's plan, p; the job's name; in,
+// what Ready readies the job with, as a claim of it reads it
+// (readyInputOf), from rec, the run's secret record; and job, the host the
+// job runs on, as Ready readies it, or nil for none.
+type stepHosts struct {
+	p    *plan.Plan
+	name string
+	in   plan.ReadyInput
+	rec  *plan.Record
+	job  *plan.Inline
+}
+
+// stepHostsOf readies what the coordinator evaluates where the ssh: of a
+// step of the job key, of run, puts its tries with (stepHosts): once for
+// an ask for a step run, however many of the step's tries it evaluates.
+func (c *Coordinator) stepHostsOf(ctx context.Context, run *store.Run, key string) (*stepHosts, error) {
+	p, from, in, rec, err := c.readyInputOf(ctx, run, key)
 	if err != nil {
-		return nil, nil, false, nil, err
+		return nil, err
 	}
 	res, _, err := p.Ready(ctx, from.job.Name, in)
 	if err != nil {
-		return nil, nil, false, nil, err
+		return nil, err
 	}
-	var job *plan.Inline
+	h := &stepHosts{p: p, name: from.job.Name, in: in, rec: rec}
 	if res != nil && res.Job != nil {
-		job = res.Job.Target.Inline
+		h.job = res.Job.Target.Inline
 	}
-	target, private, diags, err := p.StepTarget(ctx, from.job.Name, index, try, in)
-	return target, job, private, diags, err
+	return h, nil
+}
+
+// target evaluates, as the coordinator, where the ssh: of the step at
+// index of the job puts its try try (plan.Plan.StepTarget): the host it
+// names, or nil for none, whether evaluating it read a variable or a
+// password, and its problems.
+func (h *stepHosts) target(ctx context.Context, index, try int) (*plan.Inline, bool, problems.Diagnostics, error) {
+	return h.p.StepTarget(ctx, h.name, index, try, h.in)
 }
 
 // sameHost reports whether a, a step's ssh:, names the host and login of
@@ -250,37 +267,26 @@ func sameTarget(a, b *plan.Inline) bool {
 // whose plan is p, its caller's, and whose secret record is record, as
 // link links it to the step's try of the run caller: with a hopper
 // workflow of its Start, its job's supervisor and its finisher, as
-// insertRun stores a run, in the caller's run's directory and default
-// group.
+// insertRun stores a run (insertWorkflow), in the caller's run's directory
+// and default group.
 func (c *Coordinator) insertStepRun(ctx context.Context, tx *store.Tx, id string, p *plan.Plan, record *plan.Record, caller *store.Run, link *store.Link, name string) error {
 	sealed, gen, err := c.sealer.Seal(ctx, id, record)
 	if err != nil {
 		return err
 	}
-	insert := func(after ...hopper.Step) *hopper.StepOpts {
-		return &hopper.StepOpts{
-			After: after, OnDependencyFailure: hopper.DependencyIgnore,
-			Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
-		}
-	}
-	wf := hopper.NewWorkflow("meridian run "+id, nil)
-	start := wf.Add(startArgs{Run: id}, &hopper.StepOpts{Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts}})
-	supervisor := wf.Add(jobArgs{Run: id, Key: name}, insert(start))
-	wf.Add(finishArgs{Run: id}, &hopper.StepOpts{
-		After: []hopper.Step{start, supervisor}, OnDependencyFailure: hopper.DependencyIgnore,
-		Insert: &hopper.InsertOpts{Queue: sharedQueue, Await: true},
-	})
-	res, err := c.inserter.InsertWorkflowTx(ctx, tx.SQL(), wf)
+	// Its one job needs none of the step run's: what it needs is its
+	// caller's run's, which Ready readies it with (readyStepRun).
+	wf, err := c.insertWorkflow(ctx, tx, id, sharedQueue, []*plan.Job{{Name: name}})
 	if err != nil {
 		return err
 	}
 	if err := tx.InsertRun(store.NewRun{
 		ID: id, Plan: p, StepRun: true, DefaultGroup: caller.DefaultGroup, RunDir: caller.RunDir,
-		WorkflowID: res.ID, FinisherID: res.Jobs[2].Job.ID, Parent: link,
+		WorkflowID: wf.id, FinisherID: wf.finisher, Parent: link,
 	}); err != nil {
 		return err
 	}
-	if err := tx.InsertJob(store.NewJob{Run: id, Name: name, Key: name, SupervisorID: res.Jobs[1].Job.ID}); err != nil {
+	if err := tx.InsertJob(store.NewJob{Run: id, Name: name, Key: name, SupervisorID: wf.supervisors[0]}); err != nil {
 		return err
 	}
 	return tx.InsertRecord(id, gen, sealed.Key, sealed.Record)
@@ -379,30 +385,20 @@ func stepRunJob(run *store.Run, rec *plan.Record, rj *plan.ReadyJob) (*plan.Read
 	return &j, nil
 }
 
-// A stepRunEnd is how a step run ended, which is how the try of the step
-// it runs ended (docs/design.md, Steps on another host), or Ended unset
-// for one that hasn't: its run's outcome and why; the exit status of its
-// step's command, or its cleanup's, for a cleanup's step run, as its
-// worker reported it finished, or -1 for none; what its step wrote to $OUTPUTS, for one that succeeded, which
-// the caller's worker appends to the file the step would have written,
-// with which of them are private and which hold a secret; and its job's
-// problems.
-type stepRunEnd struct {
-	Ended            bool
-	Outcome          plan.Outcome
-	Reason           plan.Reason
-	ExitCode         int
-	Outputs          map[string]string
-	Private, Secrets []string
-	Diagnostics      problems.Diagnostics
-}
-
-// stepRunEnd returns how the step run id ended. What its step wrote to
-// $OUTPUTS is its job's result's outputs, as the step run's worker reports
-// them, joined with its secret record's part of them, and only for a step
-// run that succeeded: format 1 copies the file back from the host only
-// after a try that succeeded.
-func (c *Coordinator) stepRunEnd(ctx context.Context, id string) (*stepRunEnd, error) {
+// stepRunEnd returns how the step run id ended, which is how the try of
+// the step it runs ended (docs/design.md, Steps on another host), or Ended
+// unset for one that hasn't: its run's outcome and why; the exit status of
+// its step's command, or its cleanup's, for a cleanup's step run, as its
+// worker reported it finished, or -1 for none; its job's problems; and
+// what its step wrote to $OUTPUTS, which the caller's worker appends to
+// the file the step would have written, with which of them are private
+// and which hold a secret. Those are its job's result's outputs, as the
+// step run's worker reports them, joined with its secret record's part of
+// them, and only for a step run that succeeded: format 1 copies the file
+// back from the host only after a try that succeeded. The server refuses
+// an end of a step run's attempt with more of them than a worker reads
+// (workerapi.MaxOutputs).
+func (c *Coordinator) stepRunEnd(ctx context.Context, id string) (*workerapi.StepRun, error) {
 	var (
 		run    *store.Run
 		job    *store.Job
@@ -446,9 +442,9 @@ func (c *Coordinator) stepRunEnd(ctx context.Context, id string) (*stepRunEnd, e
 	case err != nil:
 		return nil, err
 	case run.State != store.RunEnded:
-		return &stepRunEnd{}, nil
+		return &workerapi.StepRun{Run: id}, nil
 	}
-	end := &stepRunEnd{Ended: true, Outcome: run.Outcome, Reason: run.Reason, ExitCode: -1, Diagnostics: job.Diagnostics}
+	end := &workerapi.StepRun{Run: id, Ended: true, Outcome: run.Outcome, Reason: run.Reason, ExitCode: -1, Diagnostics: job.Diagnostics}
 	for _, e := range events {
 		if e.Finished && e.Cleanup == run.Parent.Cleanup && e.Step == run.Parent.Step {
 			end.ExitCode = e.ExitCode

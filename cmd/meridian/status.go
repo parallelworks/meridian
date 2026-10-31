@@ -214,7 +214,7 @@ func writeRuns(c *cli, runs []coordinator.RunStatus) int {
 	}
 	fmt.Fprintln(tw, header)
 	for _, r := range runs {
-		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", r.ID, stateOf(&r), outcomeOf(r.Outcome, r.Reason), timeOf(r.CreatedAt), r.Location)
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", r.ID, stateOf(&r), outcomeOf(r.Outcome, r.Reason), timeOf(r.CreatedAt), problems.EscapeControl(r.Location))
 		if tree {
 			row += "\t" + treeOf(&r)
 		}
@@ -265,7 +265,7 @@ func writeRun(c *cli, s *coordinator.RunStatus, jobs []coordinator.JobStatus, ch
 	if s.Parent != nil {
 		fmt.Fprintf(c.stdout, "called by: %s, of the tree of run %s\n", calledAt(s.Parent), s.Root)
 	}
-	fmt.Fprintf(c.stdout, "workflow: %s\n", s.Location)
+	fmt.Fprintf(c.stdout, "workflow: %s\n", problems.EscapeControl(s.Location))
 	fmt.Fprintf(c.stdout, "run directory: %s\n", s.RunDir)
 	times := "created " + timeOf(s.CreatedAt)
 	if !s.StartedAt.IsZero() {
@@ -291,7 +291,7 @@ func writeRun(c *cli, s *coordinator.RunStatus, jobs []coordinator.JobStatus, ch
 		tw := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "CALLED BY\tRUN\tSTATE\tOUTCOME\tWORKFLOW")
 		for _, r := range children {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", stepOf(r.Parent), r.ID, stateOf(&r), outcomeOf(r.Outcome, r.Reason), r.Location)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", stepOf(r.Parent), r.ID, stateOf(&r), outcomeOf(r.Outcome, r.Reason), problems.EscapeControl(r.Location))
 		}
 		if err := tw.Flush(); err != nil {
 			return c.fail(err)

@@ -193,52 +193,72 @@ func endAttempt(t *testing.T, c *Coordinator, id string) {
 	}
 }
 
+// memberKeyM1 is the key of serveMembers' member m1, as a
+// forwardingDriver gives every member.
+const memberKeyM1 = "ssh-test-member"
+
+// placeOnM1 places the one job of a new run on serveMembers' member m1,
+// and returns its attempt.
+func placeOnM1(t *testing.T, c *Coordinator) *store.Attempt {
+	t.Helper()
+	id, _ := create(t, c, oneJob, nil, nil)
+	if _, err := c.startRun(t.Context(), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.supervise(t.Context(), id, "main", nil); err != nil {
+		t.Fatal(err)
+	}
+	return latestAttempt(t, c, id, "main")
+}
+
+// m1Held reports whether a process holds the lease of member m1's
+// listener.
+func m1Held(t *testing.T, c *Coordinator) bool {
+	t.Helper()
+	held, err := c.store.EndpointHeld(memberKeyM1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held
+}
+
+// storeGraceFrom returns when the store's grace runs from.
+func storeGraceFrom(t *testing.T, c *Coordinator) time.Time {
+	t.Helper()
+	var from time.Time
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		from, err = tx.GraceFrom()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return from
+}
+
+// m1Endpoint returns the store's record of member m1's lease.
+func m1Endpoint(t *testing.T, c *Coordinator) store.Endpoint {
+	t.Helper()
+	var e *store.Endpoint
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		e, err = tx.Endpoint(memberKeyM1)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return *e
+}
+
 func TestServeMembersLetsGo(t *testing.T) {
 	parallel(t)
 	c, d, stop := serveMembers(t)
 	ctx := t.Context()
-	const key = "ssh-test-member"
-	place := func() *store.Attempt {
-		t.Helper()
-		id, _ := create(t, c, oneJob, nil, nil)
-		if _, err := c.startRun(t.Context(), id, nil); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := c.supervise(t.Context(), id, "main", nil); err != nil {
-			t.Fatal(err)
-		}
-		return latestAttempt(t, c, id, "main")
-	}
-	held := func() bool {
-		held, err := c.store.EndpointHeld(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return held
-	}
-
-	graceFrom := func() time.Time {
-		var from time.Time
-		if err := c.store.View(t.Context(), func(tx *store.Tx) error {
-			var err error
-			from, err = tx.GraceFrom()
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return from
-	}
-	endpoint := func() store.Endpoint {
-		var e *store.Endpoint
-		if err := c.store.View(t.Context(), func(tx *store.Tx) error {
-			var err error
-			e, err = tx.Endpoint(key)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return *e
-	}
+	const key = memberKeyM1
+	place := func() *store.Attempt { t.Helper(); return placeOnM1(t, c) }
+	held := func() bool { t.Helper(); return m1Held(t, c) }
+	graceFrom := func() time.Time { t.Helper(); return storeGraceFrom(t, c) }
+	endpoint := func() store.Endpoint { t.Helper(); return m1Endpoint(t, c) }
 
 	a := place()
 	waitFor(t, func() bool { return d.forwards.Load() == 1 && held() })
@@ -307,6 +327,58 @@ func TestServeMembersLetsGo(t *testing.T) {
 	}
 	if n := d.closed.Load(); n != 3 || held() || d.forwards.Load() != 3 {
 		t.Errorf("once ServeMembers stopped, %d of %d listeners are closed, and the lease is held: %t", n, d.forwards.Load(), held())
+	}
+}
+
+// TestServeMembersForgetsIdle checks that ServeMembers remembers a member
+// it let go of as idle for forwardIdleForget, and then forgets it: a
+// member that comes back within it takes its lease again as idle,
+// starting no grace, and one that comes back after it takes its lease as
+// one this process never held does, starting one, so that what it
+// remembers is bounded by time.
+func TestServeMembersForgetsIdle(t *testing.T) {
+	parallel(t)
+	c, d, _ := serveMembers(t)
+	idle := func() (time.Time, bool) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		at, ok := c.forwarding.idle[memberKeyM1]
+		return at, ok
+	}
+	l := lookups{}
+	// The member's job is placed and ends, and the member is let go, at
+	// gone, once no attempt has needed it for forwardIdle.
+	a := placeOnM1(t, c)
+	waitFor(t, func() bool { return d.forwards.Load() == 1 && m1Held(t, c) })
+	endAttempt(t, c, a.ID)
+	gone := time.Now().Add(forwardIdle)
+	if err := c.forwardAll(t.Context(), l, gone); err != nil || c.holding(memberKeyM1) {
+		t.Fatalf("after forwardIdle, the listener is still held: %t, %v", c.holding(memberKeyM1), err)
+	}
+	waitFor(t, func() bool { return d.closed.Load() == 1 && !m1Held(t, c) })
+	if at, ok := idle(); !ok || !at.Equal(gone) {
+		t.Fatalf("the member let go of is remembered as idle: %t, from %v, want %v", ok, at, gone)
+	}
+	// Within forwardIdleForget, it is remembered.
+	if err := c.forwardAll(t.Context(), l, gone.Add(forwardIdleForget-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := idle(); !ok {
+		t.Fatal("the member was forgotten within forwardIdleForget of its letting go")
+	}
+	// Once it has passed, it is forgotten.
+	if err := c.forwardAll(t.Context(), l, gone.Add(forwardIdleForget)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := idle(); ok {
+		t.Fatal("the member was remembered forwardIdleForget after its letting go")
+	}
+	// Coming back, it takes its lease as one never held does: a grace
+	// starts from its taking.
+	placeOnM1(t, c)
+	waitFor(t, func() bool { return d.forwards.Load() == 2 && m1Held(t, c) })
+	if e := m1Endpoint(t, c); e.GraceFrom.IsZero() || !e.GraceFrom.Equal(e.TakenAt) || !storeGraceFrom(t, c).Equal(e.TakenAt) {
+		t.Errorf("the lease of a member forgotten is %+v, and the store's grace is from %v", e, storeGraceFrom(t, c))
 	}
 }
 

@@ -818,6 +818,13 @@
       "disconnect-timeout を削除するか、ホストへの接続をあきらめないステップには -1 のように、形式 1 が読める形で書いてください。"
     ]
   },
+  "session_redirect_twice": {
+    "title": "ユーザーを連れて行くセッションが複数ある",
+    "why": "redirect: true のセッションは、準備ができたときにワークフローを実行した人が連れて行かれるセッションで、1 回の実行で連れて行けるセッションは 1 つだけです。そのため形式 1 は、複数のセッションがそれを持つワークフローを、実行を作成するときに拒否します。式が与える redirect: は、値がわかる実行の開始時に確かめます。",
+    "fix": [
+      "redirect: true は 1 つのセッションだけに残し、ほかのセッションでは取り除くか false にしてください。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on が実行場所ではない",
     "why": "ジョブの runs-on: はジョブを実行する場所を選びますが、その中の式が、どの場所も示さない値になりました。runs-on に指定できるのは、execution-groups 入力が返すような実行グループの名前、execution-group: を持つマッピング、environment: とそのクラスターと名前を持つマッピング、または compute-target 入力が返すようなコンピュートターゲットです。",
@@ -1546,18 +1553,34 @@
   },
   "cluster_unknown": {
     "title": "不明なクラスター",
-    "why": "compute-clusters 入力の値はクラスターを指定し、実行はそのクラスターの詳細（ip や schedulerType など）を参照します。ワークフローを実行するマシンでは、名前は workspace（このマシン、workspace または user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれかです。入力の include-workspace、provider、csp はフォームが一覧に出すものを選ぶだけで、ここでは関係しません。",
+    "why": "compute-clusters または compute-resources 入力の値はクラスターを指定し、実行はそのクラスターの詳細（ip や schedulerType など）を参照します。ワークフローを実行するマシンでは、名前は workspace（このマシン、workspace または user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれかです。入力の include-workspace、provider、csp はフォームが一覧に出すものを選ぶだけで、ここでは関係しません。",
     "fix": [
       "メッセージに挙げられたクラスターのいずれか、または workspace を選んでください。",
-      "または、Meridian の設定ディレクトリにある clusters.yaml で、そのクラスターに届く SSH ホストとともにクラスターを定義してください。"
+      "または、Meridian の設定ディレクトリにある clusters.yaml で、そのクラスターに届く SSH ホストとともにクラスターを定義してください。",
+      "プラットフォームで compute-resources 入力が指定できる Kubernetes クラスターは、ここでは選べません。単独で実行される Meridian が知っているのは clusters.yaml のクラスターと workspace だけです。そのようなワークフローは、その Kubernetes クラスターを提供するプラットフォームで実行してください。"
     ]
   },
   "clusters_none": {
     "title": "選べるクラスターがない",
-    "why": "compute-clusters 入力の値はクラスターを指定します。ワークフローを実行するマシンでは、名前は workspace（このマシン、workspace または user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれかですが、clusters.yaml がないか、クラスターを定義していません。",
+    "why": "compute-clusters または compute-resources 入力の値はクラスターを指定します。ワークフローを実行するマシンでは、名前は workspace（このマシン、workspace または user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれかですが、clusters.yaml がないか、クラスターを定義していません。",
     "fix": [
       "Meridian の設定ディレクトリにある clusters.yaml で、そのクラスターに届く SSH ホストとともにクラスターを定義してください。",
-      "または、入力のクラスターを提供するプラットフォームでワークフローを実行してください。"
+      "または、入力のクラスターを提供するプラットフォームでワークフローを実行してください。単独で実行される Meridian が知っているのは clusters.yaml のクラスターと workspace だけなので、プラットフォームで compute-resources 入力が指定できる Kubernetes クラスターは、ここでは使えません。"
+    ]
+  },
+  "bucket_uri_invalid": {
+    "title": "バケットの pw:// URI ではない値",
+    "why": "バケット入力は、バケットを保持するプラットフォーム上の URI でバケットを指定します。pw://、所有者のユーザー、スラッシュ、バケット名の順です。プラットフォームは、バケット名だけ、または pw:// と名前だけを、そのユーザー自身のバケットとして読みます。これにはプラットフォームのユーザー名が必要ですが、ここでの実行にはそれがないため、URI でユーザーを指定する必要があります。",
+    "fix": [
+      "バケットを pw://user/bucket の形で、バケット所有者のプラットフォームのユーザー名とともに書いてください。"
+    ]
+  },
+  "bucket_credentials_need_platform": {
+    "title": "プラットフォームが必要なバケットの資格情報",
+    "why": "generateCredentials を持つバケット入力は、バケットに限定されたアクセスキーを実行に渡します。このキーは、実行の作成時にバケットを保持するプラットフォームが作ります。ここでの実行にはそれを作るプラットフォームがないため、Meridian はワークフローが読むキーなしに実行を始めません。",
+    "fix": [
+      "バケットを保持するプラットフォームでワークフローを実行してください。",
+      "または、ワークフローがプラットフォーム自身の CLI など別の方法でバケットに届くなら、generateCredentials を外してください。"
     ]
   },
   "source_ref_invalid": {
@@ -1569,10 +1592,26 @@
   },
   "source_on_platform": {
     "title": "プラットフォームが保存するワークフロー",
-    "why": "marketplace/ または workflow/ で始まる uses: は、ACTIVATE などのプラットフォームが保持するワークフローを指定します。Meridian 単体では、ワークフローを Git リポジトリから読み込みます。",
+    "why": "marketplace/ または workflow/ で始まる uses: は、ACTIVATE などのプラットフォームが保持するワークフローを指定します。Meridian 単体では、ワークフローを Git リポジトリから読み込み、プラットフォームが保存するワークフローは、あなたが対応付けた場合にだけ読み込みます。sources.yaml の workflows がそうした uses: を Git リポジトリのワークフローに対応付けると、それが github/ や gitlab/ の uses: と同じように読み込まれ、固定されます。",
     "fix": [
-      "使用するワークフローを保存しているプラットフォームでワークフローを実行してください。",
-      "または、github/<オーナー>/<リポジトリ>@<リビジョン> のように Git リポジトリでワークフローを指定し、ファイルを with: $yaml で指定してください。"
+      "sources.yaml の workflows で、uses: をキーとして、ワークフローを Git のワークフローに対応付けてください。例: marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}",
+      "または、uses: 自体で github/<オーナー>/<リポジトリ>@<リビジョン> のように Git リポジトリでワークフローを指定し、ファイルを with: $yaml で指定してください。"
+    ]
+  },
+  "source_version_invalid": {
+    "title": "対応付けで使えないマーケットプレイスのワークフローのバージョン",
+    "why": "sources.yaml の workflows で、キー marketplace/<slug>/{version} はマーケットプレイスのワークフローのスラッグのすべてのバージョンを対応付けます。yaml の中と uses の @ の後にある {version} は、uses: が指定するバージョンを表します。バージョンはワークフロー自身のテキストなので、Git が何かを読む前に、英字、数字、.、_、+、- だけからなり、. や - で始まらず、255 バイト以下で、それから得られるリビジョンとファイルが uses: で指定できるものでなければなりません。これにより、リポジトリの外のファイルを指したり、オプションとして読まれたりすることを防ぎます。",
+    "fix": [
+      "v1.2 のように、対応付けで使えるバージョンを指定してください。",
+      "または、そのバージョンを独自のキー marketplace/<slug>/<バージョン> で sources.yaml の workflows に対応付けてください。"
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "対応付けられていないマーケットプレイスのワークフローの最新バージョン",
+    "why": "marketplace/<slug> または marketplace/<slug>/latest の uses: は、プラットフォームが決めるアイテムの最新バージョンを指定します。sources.yaml のスラッグの対応付け marketplace/<slug>/{version} にはそれがどれかわからないため、Meridian は最新を独自のキー marketplace/<slug>/latest でだけ対応付けます。これはあなたが選んだワークフローであり、アイテムの最も高いバージョンではありません。",
+    "fix": [
+      "メッセージが示すキー marketplace/<slug>/latest を sources.yaml の workflows に追加し、最新とみなすワークフローに対応付けてください。",
+      "または、marketplace/<slug>/<バージョン> のように uses: でバージョンを指定してください。"
     ]
   },
   "source_revision_not_found": {
@@ -1853,7 +1892,7 @@
   },
   "cluster_name_invalid": {
     "title": "無効なクラスター名",
-    "why": "クラスターの名前は、compute-clusters 入力の値が指定するものです。workspace と user-workspace は、フォーマット 1 が workspace を指す名前と同じく、このマシンを指します。",
+    "why": "クラスターの名前は、compute-clusters 入力の値が指定するものです。workspace と user-workspace は、フォーマット 1 が workspace を指す名前と同じく、このマシンを指します。クラスターの名前はその id でもあり、セッションのターゲットが読み取ります。フォーマット 1 はターゲット localhost も workspace として読み取ります。",
     "fix": [
       "クラスターの名前を変えてください。"
     ]
@@ -1864,6 +1903,27 @@
     "fix": [
       "キーに合わせて値を修正してください。",
       "ポート、ログインするユーザー、踏み台ホスト、IPv6 アドレスなど、それ以上が必要なホストには、ssh_config で定義したエイリアスを指定してください。"
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "プラットフォームが保存するワークフロー以外の対応付け",
+    "why": "sources.yaml の workflows の各キーは、プラットフォームが保存するワークフローを指定する uses: です。marketplace/<slug>/<バージョン> はマーケットプレイスのワークフローの 1 つのバージョン、marketplace/<slug>/{version} は独自のキーで対応付けられていないそのスラッグの各バージョン、workflow/<名前> は保存されたワークフローを指定します。バージョンのテンプレートはバージョン全体であり、キーのほかの部分には波かっこを含められません。",
+    "fix": [
+      "marketplace/tools/v1.2、marketplace/tools/{version}、workflow/nightly のように、uses: と同じ形でキーを書いてください。"
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "同じワークフローの 2 つの対応付け",
+    "why": "sources.yaml の workflows の 2 つのキーが、フォーマット 1 が uses: を読むとおり、同じワークフローを指定しています。marketplace/<slug>@<バージョン> と marketplace/<slug>/<バージョン> は同じもので、marketplace/<slug> と marketplace/<slug>/latest も同じです。実行がどちらの対応付けを読むのかが明らかではありません。",
+    "fix": [
+      "どちらか一方だけを残してください。"
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "Git のワークフロー以外への対応付け",
+    "why": "sources.yaml の workflows の各対応付けは、ステップの uses: と同じように Git リポジトリのワークフローを指定します。uses は github/<オーナー>/<リポジトリ>[@<リビジョン>] または gitlab/<グループ>/<プロジェクト>[@<リビジョン>]、yaml はそのファイルで、ほかを指定しなければ workflow.yaml、host は GitLab プロジェクトのサーバーで、gitlab-servers に登録されている必要があります。Git はどの uses: と同じくあなたの認証情報でそれに到達するので、プラットフォームが保存する別のワークフローや URL は指定できません。対応付けにバージョンを {version} として書けるのはスラッグのキー marketplace/<slug>/{version} だけで、その yaml の中と uses の @ の後に書きます。",
+    "fix": [
+      "{uses: github/acme/flows@main, yaml: flows/tools.yaml} のように、ステップが Git のワークフローを指定するのと同じ形で対応付けを書いてください。"
     ]
   },
   "key_file_invalid": {
@@ -2674,6 +2734,29 @@
     "fix": [
       "ホストの管理者に、Unix ソケットの転送を許可するよう依頼してください。sshd_config の AllowStreamLocalForwarding yes または all です。",
       "同じマシンから同じユーザーで ssh -R <path>:/dev/null <host> true を実行し、そこにソケットを転送できるか確かめてください。"
+    ]
+  },
+  "ssh_tcp_forwarding_refused": {
+    "title": "Meridian のためにアドレスへ接続しないホスト",
+    "why": "Meridian は ssh -L や ssh -W と同じように、ホストを通じてアドレスに到達します。ホストとの SSH 接続を通じて、ホストの sshd にそのアドレスへ接続するよう求め、その接続を運びます (direct-tcpip)。Meridian はホスト上でポートを開きません。sshd は拒否しました。sshd_config の AllowTcpForwarding no や remote、DisableForwarding yes のようにクライアントのための TCP 接続を転送しないか、そこにある PermitOpen がそのアドレスを許可していないか、Meridian がログインに使う鍵に authorized_keys で no-port-forwarding や restrict が付いています。",
+    "fix": [
+      "ホストの管理者に、そのアドレスへの TCP 接続の転送を許可するよう依頼してください。sshd_config の AllowTcpForwarding yes または local と、PermitOpen が設定されている場合はそのアドレスを許可する PermitOpen です。",
+      "同じマシンから同じユーザーで ssh -W <address> <host> を実行し、接続できるか確かめてください。"
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "title": "Meridian のためにアドレスへ接続できなかったホスト",
+    "why": "Meridian は ssh -L や ssh -W と同じように、ホストを通じてアドレスに到達します。ホストとの SSH 接続を通じて、ホストの sshd にそのアドレスへ接続するよう求めます (direct-tcpip)。sshd は試みましたが、接続できませんでした。そのアドレスで何も待ち受けていないか、その名前がホスト上で解決できないか、ホストがそこに到達できないか、sshd が今は新しい接続を開けません。メッセージは sshd が言ったことを示します。",
+    "fix": [
+      "そのアドレスで待ち受けるはずのものが動いていて、ホストから見て、ワークフローが与えたアドレスとポートで待ち受けているか確かめてください。",
+      "同じマシンから同じユーザーで ssh -W <address> <host> を実行し、接続できるか確かめてください。"
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "title": "Meridian がホストに接続を求めないアドレス",
+    "why": "Meridian は、ホストの sshd にアドレスへ接続するよう求めて、ホストを通じてそのアドレスに到達します (ssh -L と同じ direct-tcpip)。アドレスはセッションの remoteHost と remotePort のようにワークフローから来るため、Meridian はホストがアドレス以上のものとして読み取れない形でだけ接続を求めます。英字、数字、-、_、ドットからなり - で始まらないホストの名前か、角かっこのない IPv4 または IPv6 アドレスと、1 から 65535 までのポートです。メッセージは値の制御文字を \\n のようにエスケープして示します。",
+    "fix": [
+      "ワークフローが想定するとおり、ポートや角かっこを付けずにホストの名前かアドレスだけを与え、ポートは 1 から 65535 までの数で与えてください。"
     ]
   },
   "ssh_host_release_mismatch": {

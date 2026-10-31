@@ -115,7 +115,7 @@ func (r actions) Tree(ctx context.Context, call *workerapisrv.ActionCall, w io.W
 // the run's plan has it: an error that wraps workerapisrv.ErrNotAction if
 // the job has no such step.
 func (c *Coordinator) actionStep(call *workerapisrv.ActionCall) (*plan.Step, error) {
-	_, step, err := c.planStep(call.Run, call.Attempt, call.Request.Step)
+	_, _, step, err := c.planStep(call.Run, call.Attempt, call.Request.Step)
 	if err == nil && step == nil {
 		err = fmt.Errorf("%w: job %q has no step %d", workerapisrv.ErrNotAction, call.Attempt.Job, call.Request.Step)
 	}

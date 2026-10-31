@@ -53,14 +53,15 @@ func localGroup() *backend.Group {
 	}}}
 }
 
-// Config is the user's config: their execution groups, variables and
-// clusters, from the config directory. It provides the Variables and Groups
-// the compiler and the coordinator read, and the input types that name what
-// it holds.
+// Config is the user's config: their execution groups, variables, sources
+// and clusters, from the config directory. It provides the Variables and
+// Groups the compiler and the coordinator read, the input types that name
+// what it holds, and what Sources reaches.
 type Config struct {
 	groups    map[string]*backend.Group
 	variables map[string]variable
 	servers   []string
+	workflows Workflows
 	clusters  map[string]cluster
 	lookupEnv func(string) (string, bool)
 }
@@ -428,12 +429,17 @@ func (f configFile) resources(group string, n *yaml.Node, r *backend.Resources) 
 	return nil
 }
 
-// sourcesKeys are the keys of the sources file.
-var sourcesKeys = []string{"gitlab-servers"}
+// sourcesKeys are the keys of the sources file, and mappingKeys those of a
+// mapping of its workflows.
+var (
+	sourcesKeys = []string{"gitlab-servers", "workflows"}
+	mappingKeys = []string{"uses", "yaml", "host"}
+)
 
 // loadSources reads the sources file at path: the GitLab servers, besides
 // gitlab.com, that a workflow's $host can name, each a host name with no
-// port, as a $host names it (validHost).
+// port, as a $host names it (validHost); and the workflows a platform
+// stores that the user maps to workflows in Git (Workflows).
 func (c *Config) loadSources(path string) error {
 	data, err := readConfig(path, safepath.Unchangeable)
 	if err != nil || data == nil {
@@ -448,9 +454,16 @@ func (c *Config) loadSources(path string) error {
 	if err != nil {
 		return err
 	}
+	// The workflows are read once the servers are, which their mappings
+	// to GitLab can name.
+	var mappings *yaml.Node
 	for _, kv := range keys {
 		key, list := kv.key.Value, kv.value
 		if list.Kind == yaml.ScalarNode && list.Tag == "!!null" {
+			continue
+		}
+		if key == "workflows" {
+			mappings = list
 			continue
 		}
 		if list.Kind != yaml.SequenceNode {
@@ -468,12 +481,74 @@ func (c *Config) loadSources(path string) error {
 			c.servers = append(c.servers, strings.ToLower(server))
 		}
 	}
-	return nil
+	if mappings != nil {
+		c.workflows, err = f.workflows(mappings, c.servers)
+	}
+	return err
+}
+
+// workflows reads the sources file's workflows, which n holds: each key,
+// which names a workflow a platform stores (MappingKey), maps it to a
+// workflow in Git, its uses, yaml and host, as a step names one, on
+// gitlab.com or one of servers (MappingInvalid). Two keys that name the
+// same workflow, as Normal reads them, are refused, as two of one key are.
+func (f configFile) workflows(n *yaml.Node, servers []string) (Workflows, error) {
+	if err := f.mapping("workflows", n); err != nil {
+		return nil, err
+	}
+	pairs, err := f.pairs(n, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := Workflows{}
+	firsts := map[string]*yaml.Node{}
+	for _, p := range pairs {
+		key := p.key.Value
+		normal, slug, ok := MappingKey(key)
+		if !ok {
+			return nil, f.problem(problems.WorkflowMappingKeyInvalid, p.key, problems.Params{"key": key})
+		}
+		if first, ok := firsts[normal]; ok {
+			return nil, f.problem(problems.WorkflowMappingRepeated, p.key, problems.Params{"key": key, "first": first.Value, "first_line": first.Line})
+		}
+		firsts[normal] = p.key
+		if err := f.mapping(key, p.value); err != nil {
+			return nil, err
+		}
+		fields, err := f.pairs(p.value, mappingKeys)
+		if err != nil {
+			return nil, err
+		}
+		var to plan.SourceRef
+		for _, field := range fields {
+			text, err := f.text(field.key.Value, field.value)
+			if err != nil {
+				return nil, err
+			}
+			switch field.key.Value {
+			case "uses":
+				to.Uses = text
+			case "yaml":
+				to.Path = text
+			default:
+				to.Host = text
+			}
+		}
+		if what := MappingInvalid(to, slug, servers); what != "" {
+			return nil, f.problem(problems.WorkflowMappingInvalid, p.value, problems.Params{"key": key, "what": what})
+		}
+		out[normal] = to
+	}
+	return out, nil
 }
 
 // GitLabServers returns the GitLab servers, besides gitlab.com, that the
 // sources file registers, which a workflow's $host can name (NewSources).
 func (c *Config) GitLabServers() []string { return slices.Clone(c.servers) }
+
+// Workflows returns the workflows a platform stores that the sources file
+// maps to workflows in Git (NewSources).
+func (c *Config) Workflows() Workflows { return maps.Clone(c.workflows) }
 
 // GroupNames returns the names of the execution groups, in order.
 func (c *Config) GroupNames() []string { return slices.Sorted(maps.Keys(c.groups)) }
@@ -512,8 +587,9 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 	return nil, compile.ErrNotFound
 }
 
-// ResolveInput provides two input types, and no other: the input types
-// that name a scheduler's partitions, accounts and queues come later.
+// ResolveInput provides these input types, and no other: the other types
+// that name a platform's resources, as its regions and its other
+// Kubernetes objects, come later.
 //
 //   - execution-groups, whose value is the name of one of the config's
 //     groups. A value that names none of them is
@@ -521,17 +597,34 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 //   - compute-clusters, whose value names one of the clusters of the
 //     clusters file, or the workspace, and gives its details
 //     (resolveClusters).
+//   - compute-resources, which format 1 gives as it gives
+//     compute-clusters: its form lists Kubernetes clusters beside the
+//     clusters, and a cluster it names has the same details. Here it
+//     names a cluster as compute-clusters does. It names no Kubernetes
+//     cluster here, so a name that isn't one of the clusters is the
+//     problem compute-clusters gives.
+//   - Those whose value is a name, which the run reads as it was given,
+//     as format 1 gives it: a scheduler's partitions, accounts, QoS and
+//     queues, Kubernetes clusters, their namespaces and volume claims, and
+//     an organization's groups (passedThrough).
+//   - bucket, whose value is a bucket's pw://user/name URI, and gives its
+//     details, as far as a run here knows them (resolveBucket).
 //
 // The compiler reports a problem with the input's name.
-func (c *Config) ResolveInput(ctx context.Context, typ string, _ map[string]any, value any) (any, error) {
+func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]any, value any) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	switch typ {
 	case "execution-groups":
-	case "compute-clusters":
+	case "compute-clusters", "compute-resources":
 		return c.resolveClusters(value)
+	case "bucket":
+		return resolveBucket(def, value)
 	default:
+		if slices.Contains(passedThrough, typ) {
+			return passThrough(value)
+		}
 		return nil, compile.ErrInputType
 	}
 	name, ok := value.(string)

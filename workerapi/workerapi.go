@@ -194,11 +194,17 @@ const Version2 = 2
 // a step whose uses: names a workflow asks for the run of it, waits for it
 // and stops it (ChildRequest, Child, ChildStop), Claim.Tree, what a child
 // run's attempt has of its tree, and Claim.RunDirOnMember, which says
-// where the worker cleans a child's directory. A worker asks only in an
-// attempt of version 3 or later, and the coordinator answers the paths
-// for another as ones the API doesn't have, 404. An attempt whose job has
-// a step whose uses: names a workflow, or an action the coordinator
-// performs, or of a child run, needs version 3 (WorkerAPITooOld). No
+// where the worker cleans a child's directory; and step runs: PathStepRun,
+// PathStepRunEnd and PathStepRunStop, through which a step whose ssh:
+// puts it on another host than its job's asks for its run there, waits
+// for it and stops it (StepRunRequest, StepRun, StepRunStop), and
+// Claim.StepRun, what a step run's attempt has of the step's try it runs.
+// A worker asks only in an attempt of version 3 or later, and the
+// coordinator answers the paths for another as ones the API doesn't have,
+// 404. An attempt whose job has a step whose uses: names a workflow, or
+// an action the coordinator performs, or whose ssh: can put it on another
+// host, or of a child run or a step run, needs version 3
+// (WorkerAPITooOld). No
 // release has written it yet, so what is added before one does joins it,
 // as for a plan version.
 const Version3 = 3

@@ -123,14 +123,14 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	tree := r.tree(run, root, dirs.root, p, rec)
 	return &workerapisrv.Ready{
 		Job: res.Job, Run: reads.Reads(in.Run), Needs: reads.ReadsNeeds(in.Needs), Tree: tree, StepRun: stepRun,
-		RunDir: dirs.run, RunDirOnMember: dirs.own,
+		RunDir: dirs.run, RunDirOnMember: dirs.own, Env: c.opts.Env,
 	}, nil
 }
 
 // readyInputOf returns the plan of run, and what Ready readies its job key
 // with, as its supervisor pinned it and a claim reads it: so that what is
 // evaluated again with it, as a claim's Ready, or the coordinator's
-// evaluation of a step's ssh: (stepTarget), reads what the job was
+// evaluation of a step's ssh: (stepHostsOf), reads what the job was
 // readied with. It returns the run's secret record too, as it opened it.
 func (c *Coordinator) readyInputOf(ctx context.Context, run *store.Run, key string) (*plan.Plan, *readyFrom, plan.ReadyInput, *plan.Record, error) {
 	p, err := c.plans.get(run)
@@ -217,22 +217,22 @@ func (c *Coordinator) planJob(run *store.Run, a *store.Attempt) (*plan.Plan, *pl
 	return p, p.Job(name), nil
 }
 
-// planStep returns run's plan, and the step at index of the job of it
-// that the attempt a, of run, runs (planJob): nil if the job has no such
-// step, or, for a step run, if it isn't the step its link names, the one
-// step of the job its attempt runs; and an error if the plan has no such
-// job.
-func (c *Coordinator) planStep(run *store.Run, a *store.Attempt, index int) (*plan.Plan, *plan.Step, error) {
+// planStep returns run's plan, the job of it that the attempt a, of run,
+// runs (planJob), and the step at index of the job: nil if the job has no
+// such step, or, for a step run, if it isn't the step its link names, the
+// one step of the job its attempt runs; and an error if the plan has no
+// such job.
+func (c *Coordinator) planStep(run *store.Run, a *store.Attempt, index int) (*plan.Plan, *plan.Job, *plan.Step, error) {
 	p, job, err := c.planJob(run, a)
 	switch {
 	case err != nil:
-		return nil, nil, err
+		return nil, nil, nil, err
 	case job == nil:
-		return nil, nil, fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, a.Job)
+		return nil, nil, nil, fmt.Errorf("coordinator: run %s's plan has no job %q", run.ID, a.Job)
 	case index < 0 || index >= len(job.Steps), run.StepRun && index != run.Parent.Step:
-		return p, nil, nil
+		return p, job, nil, nil
 	}
-	return p, &job.Steps[index], nil
+	return p, job, &job.Steps[index], nil
 }
 
 // rootOf returns the root of run's tree: run itself, for a run no step

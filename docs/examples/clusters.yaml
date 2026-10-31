@@ -1,6 +1,7 @@
 # clusters.yaml, in Meridian's config directory (~/.config/meridian on
 # Linux, ~/Library/Application Support/Meridian on macOS): the clusters a
-# workflow's compute-clusters input can name when it runs with meridian.
+# workflow's compute-clusters or compute-resources input can name when it
+# runs with meridian.
 # Only you may change it.
 #
 # Each cluster is its name, with:
@@ -12,9 +13,10 @@
 #   scheduler  optional: slurm or pbs, which a workflow reads as the
 #              cluster's schedulerType; without it, "".
 #
-# An input that names hpc sees name hpc, ip hpc-login, schedulerType slurm,
-# and type and provider existing. The name workspace needs no entry: it is
-# this machine.
+# An input that names hpc sees name and id hpc, ip hpc-login, schedulerType
+# slurm, and type and provider existing. The name workspace needs no entry:
+# it is this machine, and no cluster can be named workspace, user-workspace
+# or localhost.
 
 hpc:
   host: hpc-login

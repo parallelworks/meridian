@@ -818,6 +818,13 @@
       "Quita disconnect-timeout, o escríbelo como lo lee el formato 1, como -1 para un paso que nunca se rinde con su host."
     ]
   },
+  "session_redirect_twice": {
+    "title": "Más de una sesión a la que llevar al usuario",
+    "why": "Una sesión con redirect: true es aquella a la que se lleva a quien ejecuta el flujo de trabajo una vez que está lista, y una ejecución solo puede llevarle a una sesión. Así que el formato 1 rechaza, al crear la ejecución, un flujo de trabajo en el que más de una sesión la tiene. Un redirect: que da una expresión se comprueba al empezar la ejecución, una vez que se conoce.",
+    "fix": [
+      "Deja redirect: true en una sola sesión, y quítalo, o ponlo a false, en las demás."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",
@@ -1546,18 +1553,34 @@
   },
   "cluster_unknown": {
     "title": "Clúster desconocido",
-    "why": "El valor de una entrada compute-clusters nombra un clúster, y la ejecución ve sus detalles, como su ip y su schedulerType. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, digan lo que digan include-workspace, provider y csp de la entrada, que solo eligen lo que lista un formulario.",
+    "why": "El valor de una entrada compute-clusters o compute-resources nombra un clúster, y la ejecución ve sus detalles, como su ip y su schedulerType. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, digan lo que digan include-workspace, provider y csp de la entrada, que solo eligen lo que lista un formulario.",
     "fix": [
       "Elige uno de los clústeres que indica el mensaje, o el workspace.",
-      "O define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él."
+      "O define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él.",
+      "Un clúster de Kubernetes, que una entrada compute-resources puede nombrar en una plataforma, no se puede elegir aquí: ejecutado por sí solo, Meridian solo conoce los clústeres de clusters.yaml y el workspace. Ejecuta un flujo de trabajo así en una plataforma que proporcione el clúster de Kubernetes."
     ]
   },
   "clusters_none": {
     "title": "Ningún clúster entre los que elegir",
-    "why": "El valor de una entrada compute-clusters nombra un clúster. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, y no hay clusters.yaml, o no define ningún clúster.",
+    "why": "El valor de una entrada compute-clusters o compute-resources nombra un clúster. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, y no hay clusters.yaml, o no define ningún clúster.",
     "fix": [
       "Define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él.",
-      "O ejecuta el flujo de trabajo en una plataforma que proporcione los clústeres de la entrada."
+      "O ejecuta el flujo de trabajo en una plataforma que proporcione los clústeres de la entrada: ejecutado por sí solo, Meridian solo conoce los clústeres de clusters.yaml y el workspace, así que un clúster de Kubernetes, que una entrada compute-resources puede nombrar en una plataforma, no está disponible aquí."
+    ]
+  },
+  "bucket_uri_invalid": {
+    "title": "Valor que no es la URI pw:// de un bucket",
+    "why": "Una entrada de bucket nombra un bucket por su URI en la plataforma que lo guarda: pw://, el usuario al que pertenece, una barra y el nombre del bucket. Una plataforma lee el nombre de un bucket solo, o pw:// y el nombre, como uno de los buckets del propio usuario, lo que necesita su nombre de usuario en la plataforma. Una ejecución aquí no tiene ninguno, así que la URI debe nombrar al usuario.",
+    "fix": [
+      "Escribe el bucket como pw://usuario/bucket, con el nombre de usuario en la plataforma de quien es dueño del bucket."
+    ]
+  },
+  "bucket_credentials_need_platform": {
+    "title": "Las credenciales del bucket necesitan una plataforma",
+    "why": "Una entrada de bucket con generateCredentials da a la ejecución claves de acceso limitadas al bucket, que crea la plataforma que lo guarda al crear la ejecución. Una ejecución aquí no tiene ninguna plataforma que las cree, y Meridian no inicia la ejecución sin las claves que lee el flujo de trabajo.",
+    "fix": [
+      "Ejecuta el flujo de trabajo en la plataforma que guarda el bucket.",
+      "O, si el flujo de trabajo puede llegar al bucket de otra forma, como con la CLI propia de la plataforma, quita generateCredentials."
     ]
   },
   "source_ref_invalid": {
@@ -1569,10 +1592,26 @@
   },
   "source_on_platform": {
     "title": "Flujo de trabajo que guarda una plataforma",
-    "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git.",
+    "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git, y lee uno que guarda una plataforma solo a través de una asignación tuya: los workflows de sources.yaml asignan ese uses: a un flujo de trabajo de un repositorio Git, que entonces se lee y se fija como un uses: de github/ o gitlab/.",
     "fix": [
-      "Ejecuta el flujo de trabajo en la plataforma que guarda el flujo de trabajo que usa.",
-      "O nombra el flujo de trabajo por su repositorio Git, como github/<propietario>/<repositorio>@<revisión>, con su archivo en with: $yaml."
+      "Asigna el flujo de trabajo en los workflows de sources.yaml, con el uses: como clave, al flujo de trabajo en Git: por ejemplo, marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}.",
+      "O nombra el flujo de trabajo por su repositorio Git en el propio uses:, como github/<propietario>/<repositorio>@<revisión>, con su archivo en with: $yaml."
+    ]
+  },
+  "source_version_invalid": {
+    "title": "Versión de un flujo de trabajo del marketplace que una asignación no admite",
+    "why": "En los workflows de sources.yaml, una clave marketplace/<slug>/{version} asigna cada versión del slug de un flujo de trabajo del marketplace: {version}, en su yaml y tras la @ de su uses, representa la versión que nombra un uses:. La versión es texto del propio flujo de trabajo, así que antes de que Git lea nada debe tener solo letras, dígitos, ., _, + y -, no empezar por . ni por -, tener como mucho 255 bytes, y la revisión y el archivo que da deben ser unos que un uses: pueda nombrar, para que no nombre un archivo fuera del repositorio ni se lea como una opción.",
+    "fix": [
+      "Nombra una versión que la asignación admita, como v1.2.",
+      "O asigna esa versión con una clave propia, marketplace/<slug>/<versión>, en los workflows de sources.yaml."
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "Última versión de un flujo de trabajo del marketplace sin asignar",
+    "why": "Un uses: de marketplace/<slug>, o de marketplace/<slug>/latest, nombra la última versión del elemento, que decide su plataforma. La asignación de un slug en sources.yaml, marketplace/<slug>/{version}, no puede saber cuál es, así que Meridian asigna la última solo con una clave propia, marketplace/<slug>/latest: tu elección del flujo de trabajo, no la versión más alta del elemento.",
+    "fix": [
+      "Añade la clave que nombra el mensaje, marketplace/<slug>/latest, a los workflows de sources.yaml, asignada al flujo de trabajo que consideres la última.",
+      "O nombra una versión en el uses:, como marketplace/<slug>/<versión>."
     ]
   },
   "source_revision_not_found": {
@@ -1853,7 +1892,7 @@
   },
   "cluster_name_invalid": {
     "title": "Nombre de clúster no válido",
-    "why": "El nombre de un clúster es lo que nombra el valor de una entrada compute-clusters. workspace y user-workspace nombran esta máquina, como el formato 1 nombra el workspace.",
+    "why": "El nombre de un clúster es lo que nombra el valor de una entrada compute-clusters. workspace y user-workspace nombran esta máquina, como el formato 1 nombra el workspace. El nombre de un clúster es también su id, que lee el destino de una sesión, y el formato 1 también lee el destino localhost como el workspace.",
     "fix": [
       "Cambia el nombre del clúster."
     ]
@@ -1864,6 +1903,27 @@
     "fix": [
       "Corrige el valor como necesita su clave.",
       "Para un host que necesite más, como un puerto, un usuario con el que iniciar sesión, un host de salto o una dirección IPv6, nombra un alias que defina tu ssh_config."
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "Asignación de algo que no es un flujo de trabajo que guarda una plataforma",
+    "why": "Cada clave de los workflows de sources.yaml es un uses: que nombra un flujo de trabajo que guarda una plataforma: marketplace/<slug>/<versión>, una versión de un flujo de trabajo del marketplace; marketplace/<slug>/{version}, cada versión de su slug que ninguna clave propia asigna; o workflow/<nombre>, un flujo de trabajo guardado. Una plantilla de versión es la versión entera, y ninguna otra parte de una clave lleva una llave.",
+    "fix": [
+      "Escribe la clave como la escribe un uses:, como marketplace/tools/v1.2, marketplace/tools/{version} o workflow/nightly."
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "Dos asignaciones de un mismo flujo de trabajo",
+    "why": "Dos claves de los workflows de sources.yaml nombran el mismo flujo de trabajo, como el formato 1 lee un uses:: marketplace/<slug>@<versión> y marketplace/<slug>/<versión> son uno, y también lo son marketplace/<slug> y marketplace/<slug>/latest. No está claro cuál de sus asignaciones leería una ejecución.",
+    "fix": [
+      "Quédate con una de las dos."
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "Asignación a algo que no es un flujo de trabajo en Git",
+    "why": "Cada asignación de los workflows de sources.yaml nombra un flujo de trabajo de un repositorio Git como lo hace el uses: de un paso: uses, como github/<propietario>/<repositorio>[@<revisión>] o gitlab/<grupo>/<proyecto>[@<revisión>]; yaml, su archivo, workflow.yaml si no nombra otro; y host, el servidor de un proyecto de GitLab, que gitlab-servers debe registrar. Git lo alcanza con tus credenciales, como para cualquier uses:, así que no puede nombrar otro flujo de trabajo que guarde una plataforma, ni una URL. Solo la clave de un slug, marketplace/<slug>/{version}, puede escribir la versión en su asignación, como {version}, en su yaml y tras la @ de su uses.",
+    "fix": [
+      "Escribe la asignación como un paso nombra un flujo de trabajo en Git, como {uses: github/acme/flows@main, yaml: flows/tools.yaml}."
     ]
   },
   "key_file_invalid": {
@@ -2674,6 +2734,29 @@
     "fix": [
       "Pide a los administradores del host que permitan reenviar sockets Unix: AllowStreamLocalForwarding yes, o all, en sshd_config.",
       "Comprueba que ssh -R <ruta>:/dev/null <host> true puede reenviar un socket allí, desde la misma máquina y como el mismo usuario."
+    ]
+  },
+  "ssh_tcp_forwarding_refused": {
+    "title": "Host que no conecta con una dirección para Meridian",
+    "why": "Meridian llega a una dirección a través de un host como lo hacen ssh -L y ssh -W: por su conexión SSH con el host, pide al sshd del host que conecte con la dirección, y lleva esa conexión (direct-tcpip). Meridian no abre ningún puerto en el host. sshd se negó: no reenvía conexiones TCP de sus clientes, como con AllowTcpForwarding no o remote, o DisableForwarding yes, en sshd_config; un PermitOpen allí no permite la dirección; o la clave con la que Meridian inicia sesión tiene no-port-forwarding, o restrict, en authorized_keys.",
+    "fix": [
+      "Pide a los administradores del host que permitan reenviar conexiones TCP a la dirección: AllowTcpForwarding yes, o local, en sshd_config, con un PermitOpen que la permita, si hay uno.",
+      "Comprueba que ssh -W <dirección> <host> conecta, desde la misma máquina y como el mismo usuario."
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "title": "Host que no pudo conectar con una dirección para Meridian",
+    "why": "Meridian llega a una dirección a través de un host como lo hacen ssh -L y ssh -W: por su conexión SSH con el host, pide al sshd del host que conecte con la dirección (direct-tcpip). sshd lo intentó y no pudo: nada escucha en la dirección, su nombre no se resuelve en el host, el host no llega a ella, o sshd no puede abrir otra conexión ahora. El mensaje muestra lo que dijo sshd.",
+    "fix": [
+      "Comprueba que lo que debería escuchar en la dirección se está ejecutando, y escucha en la dirección y el puerto que dio el flujo de trabajo, tal como los ve el host.",
+      "Comprueba que ssh -W <dirección> <host> conecta, desde la misma máquina y como el mismo usuario."
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "title": "Dirección con la que Meridian no pide a un host que conecte",
+    "why": "Meridian llega a una dirección a través de un host pidiendo al sshd del host que conecte con ella (direct-tcpip, como hace ssh -L). La dirección viene de un flujo de trabajo, como el remoteHost y el remotePort de una sesión, así que Meridian solo la pide en una forma que el host no pueda leer como algo más que una dirección: el nombre de un host, de letras, dígitos, -, _ y puntos, que no empiece por -, o una dirección IPv4 o IPv6 sin corchetes; y un puerto de 1 a 65535. El mensaje muestra el valor con sus caracteres de control escapados, como \\n.",
+    "fix": [
+      "Da solo el nombre o la dirección del host, sin puerto ni corchetes, y su puerto como un número de 1 a 65535, como espera el flujo de trabajo."
     ]
   },
   "ssh_host_release_mismatch": {

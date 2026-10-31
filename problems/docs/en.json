@@ -703,6 +703,12 @@
       "Remove disconnect-timeout, or write it as format 1 reads it, such as -1 for a step that never gives up on its host."
     ]
   },
+  "session_redirect_twice": {
+    "why": "A session with redirect: true is the one the person who runs the workflow is taken to once it is ready, and a run can take them to one session only. So format 1 refuses a workflow in which more than one session has it, as the run is created. A redirect: that an expression gives is checked as the run starts, once it is known.",
+    "fix": [
+      "Keep redirect: true on one session, and remove it, or set it to false, on the others."
+    ]
+  },
   "runs_on_invalid": {
     "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
     "fix": [
@@ -1329,17 +1335,31 @@
     ]
   },
   "cluster_unknown": {
-    "why": "A compute-clusters input's value names a cluster, and the run sees the cluster's details, such as its ip and its schedulerType. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, whatever the input's include-workspace, provider and csp say, which only choose what a form lists.",
+    "why": "A compute-clusters or compute-resources input's value names a cluster, and the run sees the cluster's details, such as its ip and its schedulerType. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, whatever the input's include-workspace, provider and csp say, which only choose what a form lists.",
     "fix": [
       "Choose one of the clusters the message lists, or the workspace.",
-      "Or define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it."
+      "Or define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it.",
+      "A Kubernetes cluster, which a compute-resources input can name on a platform, can't be chosen here: run on its own, Meridian knows only the clusters of clusters.yaml and the workspace. Run such a workflow on a platform that provides the Kubernetes cluster."
     ]
   },
   "clusters_none": {
-    "why": "A compute-clusters input's value names a cluster. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, and there is no clusters.yaml, or it defines no cluster.",
+    "why": "A compute-clusters or compute-resources input's value names a cluster. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, and there is no clusters.yaml, or it defines no cluster.",
     "fix": [
       "Define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it.",
-      "Or run the workflow on a platform that provides the input's clusters."
+      "Or run the workflow on a platform that provides the input's clusters: run on its own, Meridian knows only the clusters of clusters.yaml and the workspace, so a Kubernetes cluster, which a compute-resources input can name on a platform, isn't available here."
+    ]
+  },
+  "bucket_uri_invalid": {
+    "why": "A bucket input names a bucket by its URI on the platform that holds it: pw://, the user who owns it, a slash and the bucket's name. A platform reads a bucket's name alone, or pw:// and the name, as one of the user's own buckets, which needs their platform username. A run here has none, so the URI must name the user.",
+    "fix": [
+      "Write the bucket as pw://user/bucket, with the platform username of the bucket's owner."
+    ]
+  },
+  "bucket_credentials_need_platform": {
+    "why": "A bucket input with generateCredentials gives the run access keys scoped to the bucket, which the platform that holds the bucket makes as the run is created. A run here has no platform to make them, and Meridian won't start the run without the keys the workflow reads.",
+    "fix": [
+      "Run the workflow on the platform that holds the bucket.",
+      "Or, if the workflow can reach the bucket some other way, such as the platform's own CLI, leave generateCredentials out."
     ]
   },
   "source_ref_invalid": {
@@ -1349,10 +1369,24 @@
     ]
   },
   "source_on_platform": {
-    "why": "A uses: that starts with marketplace/ or workflow/ names a workflow that a platform, such as ACTIVATE, keeps. Meridian on its own reads workflows from Git repositories.",
+    "why": "A uses: that starts with marketplace/ or workflow/ names a workflow that a platform, such as ACTIVATE, keeps. Meridian on its own reads workflows from Git repositories, and reads one a platform stores only through a mapping of yours: sources.yaml's workflows map such a uses: to a workflow in a Git repository, which is then read, and pinned, as a github/ or gitlab/ uses: is.",
     "fix": [
-      "Run the workflow on the platform that stores the workflow it uses.",
-      "Or name the workflow by its Git repository, as github/<owner>/<repository>@<revision>, with its file in with: $yaml."
+      "Map the workflow in sources.yaml's workflows, by the uses: as its key, to the workflow in Git: for example, marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}.",
+      "Or name the workflow by its Git repository in the uses: itself, as github/<owner>/<repository>@<revision>, with its file in with: $yaml."
+    ]
+  },
+  "source_version_invalid": {
+    "why": "In sources.yaml's workflows, a key marketplace/<slug>/{version} maps every version of a marketplace workflow's slug: {version}, in its yaml and after its uses's @, stands for the version a uses: names. The version is the workflow's own text, so before Git reads anything it must be letters, digits, ., _, + and - only, not starting with . or -, at most 255 bytes, and the revision and the file it gives must be ones a uses: can name, so that it can't name a file outside the repository or be read as an option.",
+    "fix": [
+      "Name a version the mapping takes, such as v1.2.",
+      "Or map that version with a key of its own, marketplace/<slug>/<version>, in sources.yaml's workflows."
+    ]
+  },
+  "source_latest_not_mapped": {
+    "why": "A uses: of marketplace/<slug>, or of marketplace/<slug>/latest, names the item's latest version, which its platform decides. A slug's mapping in sources.yaml, marketplace/<slug>/{version}, can't know which that is, so Meridian maps the latest only through a key of its own, marketplace/<slug>/latest: your choice of the workflow, not the item's highest version.",
+    "fix": [
+      "Add the key the message names, marketplace/<slug>/latest, to sources.yaml's workflows, mapped to the workflow you take to be the latest.",
+      "Or name a version in the uses:, as marketplace/<slug>/<version>."
     ]
   },
   "source_revision_not_found": {
@@ -1594,7 +1628,7 @@
     ]
   },
   "cluster_name_invalid": {
-    "why": "A cluster's name is what a compute-clusters input's value names. workspace and user-workspace name this machine, as format 1 names the workspace.",
+    "why": "A cluster's name is what a compute-clusters input's value names. workspace and user-workspace name this machine, as format 1 names the workspace. A cluster's name is also its id, which a session's target reads, and format 1 reads the target localhost as the workspace too.",
     "fix": [
       "Rename the cluster."
     ]
@@ -1604,6 +1638,24 @@
     "fix": [
       "Correct the value as its key needs.",
       "For a host that needs more, such as a port, a user to log in as, a jump host or an IPv6 address, name an alias that your ssh_config defines."
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "why": "Each key of sources.yaml's workflows is a uses: that names a workflow a platform stores: marketplace/<slug>/<version>, one version of a marketplace workflow; marketplace/<slug>/{version}, each version of its slug that no key of its own maps; or workflow/<name>, a saved workflow. A version template is the whole version, and no other part of a key holds a brace.",
+    "fix": [
+      "Write the key as a uses: writes it, such as marketplace/tools/v1.2, marketplace/tools/{version} or workflow/nightly."
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "why": "Two keys of sources.yaml's workflows name the same workflow, as format 1 reads a uses:: marketplace/<slug>@<version> and marketplace/<slug>/<version> are one, and so are marketplace/<slug> and marketplace/<slug>/latest. Which of their mappings a run would read isn't plain.",
+    "fix": [
+      "Keep one of the two."
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "why": "Each mapping of sources.yaml's workflows names a workflow in a Git repository as a step's uses: does: uses, as github/<owner>/<repository>[@<revision>] or gitlab/<group>/<project>[@<revision>]; yaml, its file, workflow.yaml unless it names another; and host, a GitLab project's server, which gitlab-servers must register. Git reaches it with your credentials, as for any uses:, so it can't name another workflow a platform stores, or a URL. Only a slug's key, marketplace/<slug>/{version}, can write the version in its mapping, as {version}, in its yaml and after its uses's @.",
+    "fix": [
+      "Write the mapping as a step names a workflow in Git, such as {uses: github/acme/flows@main, yaml: flows/tools.yaml}."
     ]
   },
   "key_file_invalid": {
@@ -2303,6 +2355,26 @@
     "fix": [
       "Ask the host's administrators to allow forwarding Unix sockets: AllowStreamLocalForwarding yes, or all, in sshd_config.",
       "Check that ssh -R <path>:/dev/null <host> true can forward a socket there, from the same machine and user."
+    ]
+  },
+  "ssh_tcp_forwarding_refused": {
+    "why": "Meridian reaches an address through a host as ssh -L and ssh -W do: over its SSH connection to the host, it asks the host's sshd to connect to the address, and carries that connection (direct-tcpip). Meridian opens no port on the host. sshd refused: it doesn't forward TCP connections for its clients, as with AllowTcpForwarding no or remote, or DisableForwarding yes, in sshd_config; a PermitOpen there doesn't allow the address; or the key Meridian logs in with has no-port-forwarding, or restrict, in authorized_keys.",
+    "fix": [
+      "Ask the host's administrators to allow forwarding TCP connections to the address: AllowTcpForwarding yes, or local, in sshd_config, with a PermitOpen that allows it, if one is set.",
+      "Check that ssh -W <address> <host> connects, from the same machine and user."
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "why": "Meridian reaches an address through a host as ssh -L and ssh -W do: over its SSH connection to the host, it asks the host's sshd to connect to the address (direct-tcpip). sshd tried and couldn't: nothing listens at the address, its name doesn't resolve on the host, the host can't reach it, or sshd can't open another connection now. The message shows what sshd said.",
+    "fix": [
+      "Check that what should listen at the address runs, and listens at the address and port the workflow gave, as the host sees them.",
+      "Check that ssh -W <address> <host> connects, from the same machine and user."
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "why": "Meridian reaches an address through a host by asking the host's sshd to connect to it (direct-tcpip, as ssh -L does). The address comes from a workflow, as a session's remoteHost and remotePort do, so Meridian asks for one only in a form the host can't read as more than an address: a host's name, of letters, digits, -, _ and dots, that doesn't start with -, or an IPv4 or IPv6 address without brackets; and a port from 1 to 65535. The message shows the value with its control characters escaped, as \\n.",
+    "fix": [
+      "Give the host's name or address alone, without a port or brackets, and its port as a number from 1 to 65535, as the workflow expects."
     ]
   },
   "ssh_host_release_mismatch": {

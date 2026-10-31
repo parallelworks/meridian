@@ -31,19 +31,20 @@ func TestClustersFile(t *testing.T) {
 	if got, want := c.ClusterNames(), []string{"gpu.box", "hpc", "lab"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("ClusterNames = %q, want %q", got, want)
 	}
-	// No user or namespace, which name the owner's platform account; and,
-	// without a scheduler, "", as format 1 writes a cluster's that has none.
+	// Its name as its id, which a session's target reads; no user or
+	// namespace, which name the owner's platform account; and, without a
+	// scheduler, "", as format 1 writes a cluster's that has none.
 	for name, want := range map[string]map[string]any{
 		"hpc": {
-			"$type": "computeResource", "type": "existing", "provider": "existing", "name": "hpc",
+			"$type": "computeResource", "type": "existing", "provider": "existing", "id": "hpc", "name": "hpc",
 			"ip": "hpc-login", "schedulerType": "slurm",
 		},
 		"lab": {
-			"$type": "computeResource", "type": "existing", "provider": "existing", "name": "lab",
+			"$type": "computeResource", "type": "existing", "provider": "existing", "id": "lab", "name": "lab",
 			"ip": "10.1.2.3", "schedulerType": "",
 		},
 		"gpu.box": {
-			"$type": "computeResource", "type": "existing", "provider": "existing", "name": "gpu.box",
+			"$type": "computeResource", "type": "existing", "provider": "existing", "id": "gpu.box", "name": "gpu.box",
 			"ip": "gpu_1.example.com", "schedulerType": "pbs",
 		},
 	} {
@@ -77,7 +78,7 @@ func TestClustersExample(t *testing.T) {
 	c := load(t, map[string]string{ClustersFile: string(text)}, nil)
 	got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "hpc")
 	want := map[string]any{
-		"$type": "computeResource", "type": "existing", "provider": "existing", "name": "hpc",
+		"$type": "computeResource", "type": "existing", "provider": "existing", "id": "hpc", "name": "hpc",
 		"ip": "hpc-login", "schedulerType": "slurm",
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -116,11 +117,14 @@ func TestClustersFileRefuses(t *testing.T) {
 		"name":           {"-hpc:\n  host: a\n", problems.ClusterNameInvalid, 1},
 		"workspace":      {"workspace:\n  host: a\n", problems.ClusterNameInvalid, 1},
 		"user-workspace": {"user-workspace:\n  host: a\n", problems.ClusterNameInvalid, 1},
-		"repeated name":  {"hpc:\n  host: a\nhpc:\n  host: b\n", problems.ConfigKeyRepeated, 3},
-		"repeated key":   {"hpc:\n  host: a\n  host: b\n", problems.ConfigKeyRepeated, 3},
-		"not yaml":       {"hpc: [", problems.ConfigYAMLSyntax, 0},
-		"a list":         {"- hpc\n", problems.ConfigNotMapping, 1},
-		"two documents":  {"hpc:\n  host: a\n---\nlab: {}\n", problems.ConfigExtraDocument, 3},
+		// A session's target localhost is the workspace's, as format 1 reads
+		// it, and a cluster's id is its name.
+		"localhost":     {"localhost:\n  host: a\n", problems.ClusterNameInvalid, 1},
+		"repeated name": {"hpc:\n  host: a\nhpc:\n  host: b\n", problems.ConfigKeyRepeated, 3},
+		"repeated key":  {"hpc:\n  host: a\n  host: b\n", problems.ConfigKeyRepeated, 3},
+		"not yaml":      {"hpc: [", problems.ConfigYAMLSyntax, 0},
+		"a list":        {"- hpc\n", problems.ConfigNotMapping, 1},
+		"two documents": {"hpc:\n  host: a\n---\nlab: {}\n", problems.ConfigExtraDocument, 3},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := configDir(t, map[string]string{ClustersFile: tc.text})
@@ -228,6 +232,40 @@ func TestResolveClustersWithoutFile(t *testing.T) {
 	if got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "workspace"); err != nil || got.(map[string]any)["id"] != "user-workspace" {
 		t.Errorf("ResolveInput of the workspace = %v, %v", got, err)
 	}
+}
+
+// TestResolveComputeResources checks that a compute-resources input gives
+// what a compute-clusters one does, as format 1 gives a cluster that
+// either names the same details: the workspace, a cluster, a list of
+// them, and what isn't a name, as it is; and that a name that is no
+// cluster here, as a Kubernetes cluster's, which format 1's form lists
+// for a compute-resources input too, is the problem compute-clusters
+// gives, with the file and without it.
+func TestResolveComputeResources(t *testing.T) {
+	details := map[string]any{"name": "hpc", "ip": "elsewhere"}
+	values := []any{
+		"hpc", "lab", "gpu.box", "workspace", "user-workspace", "", "k8s", details,
+		[]any{"lab", "", details, "workspace", nil},
+		[]any{"hpc", "k8s"},
+	}
+	for name, files := range map[string]map[string]string{"with the file": {ClustersFile: clustersText}, "without it": nil} {
+		c := load(t, files, nil)
+		for _, v := range values {
+			want, wantErr := c.ResolveInput(t.Context(), "compute-clusters", nil, v)
+			got, err := c.ResolveInput(t.Context(), "compute-resources", map[string]any{"include-workspace": false}, v)
+			if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(err, wantErr) {
+				t.Errorf("%s: ResolveInput(%v) as compute-resources = %v, %v, want %v, %v as compute-clusters", name, v, got, err, want, wantErr)
+			}
+		}
+	}
+	c := load(t, map[string]string{ClustersFile: clustersText}, nil)
+	if got, err := c.ResolveInput(t.Context(), "compute-resources", nil, "hpc"); err != nil || got.(map[string]any)["ip"] != "hpc-login" {
+		t.Errorf("ResolveInput(hpc) as compute-resources = %v, %v", got, err)
+	}
+	_, err := c.ResolveInput(t.Context(), "compute-resources", nil, "k8s")
+	kindtest.Want(t, err, problems.ClusterUnknown)
+	_, err = load(t, nil, nil).ResolveInput(t.Context(), "compute-resources", nil, "k8s")
+	kindtest.Want(t, err, problems.ClustersNone)
 }
 
 // clusterWorkflow is a format 1 workflow whose job runs on the cluster its
