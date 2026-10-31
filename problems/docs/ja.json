@@ -1550,7 +1550,7 @@
     "fix": [
       "メッセージに挙げられたクラスターのいずれか、または workspace を選んでください。",
       "または、Meridian の設定ディレクトリにある clusters.yaml で、そのクラスターに届く SSH ホストとともにクラスターを定義してください。",
-      "プラットフォームで compute-resources 入力が指定できる Kubernetes クラスターは、ここでは選べません。単独で実行される Meridian が知っているのは clusters.yaml のクラスターと workspace だけです。そのようなワークフローは、それを提供するプラットフォームで実行してください。"
+      "プラットフォームで compute-resources 入力が指定できる Kubernetes クラスターは、ここでは選べません。単独で実行される Meridian が知っているのは clusters.yaml のクラスターと workspace だけです。そのようなワークフローは、その Kubernetes クラスターを提供するプラットフォームで実行してください。"
     ]
   },
   "clusters_none": {

@@ -444,6 +444,22 @@ the SHA-256 hash of its content: 218 files.
   isn't a list is. ACTIVATE takes the same fix. None of the 211
   `compute-clusters` inputs of the known workflows is `multi`, the form
   that takes a list.
+- **A `compute-resources` input names a cluster as a `compute-clusters`
+  one does**: a name, or a `pw://` reference, becomes the cluster's
+  details, where ACTIVATE's run handler resolved a name only for
+  `compute-clusters`, so that a `compute-resources` input given one
+  through its API or its CLI reached the run as the name, and every read
+  of its details, as its `ip`, gave `""`. Its form, which lists the
+  Kubernetes clusters the user can reach for `compute-resources` too,
+  gives a cluster that either names the same details, so only a name
+  given otherwise was wrong. ACTIVATE takes the same fix, and resolves a
+  `pw://` reference to a Kubernetes cluster the user can reach to what
+  its form gives for one; Meridian has no Kubernetes clusters of its own,
+  so `clusters.yaml` names only clusters
+  ([The `meridian` command](#the-meridian-command)). 7 of the known
+  workflows have a `compute-resources` input, and all 7 read its
+  details: whether it is a Kubernetes cluster, its `ip` and its
+  `schedulerType`. None reads it as a name.
 - **A `parallelworks/cancel-jobs` of a job that hasn't started yet is
   kept**: the job ends cancelled where it waits, on the jobs it needs or
   to be placed, and never starts
@@ -1874,7 +1890,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; `compute-resources` the same, as format 1 gives a cluster that either names the same details, though its form lists Kubernetes clusters too, which there are none of here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; `compute-resources` the same, as format 1 gives a cluster that either names the same details ([Bug fixes to format 1](#bug-fixes-to-format-1)), though its form lists Kubernetes clusters too, which it never names here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |

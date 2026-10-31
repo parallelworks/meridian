@@ -1550,7 +1550,7 @@
     "fix": [
       "Elige uno de los clústeres que indica el mensaje, o el workspace.",
       "O define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él.",
-      "Un clúster de Kubernetes, que una entrada compute-resources puede nombrar en una plataforma, no se puede elegir aquí: ejecutado por sí solo, Meridian solo conoce los clústeres de clusters.yaml y el workspace. Ejecuta un flujo de trabajo así en una plataforma que lo proporcione."
+      "Un clúster de Kubernetes, que una entrada compute-resources puede nombrar en una plataforma, no se puede elegir aquí: ejecutado por sí solo, Meridian solo conoce los clústeres de clusters.yaml y el workspace. Ejecuta un flujo de trabajo así en una plataforma que proporcione el clúster de Kubernetes."
     ]
   },
   "clusters_none": {

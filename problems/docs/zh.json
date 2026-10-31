@@ -1550,7 +1550,7 @@
     "fix": [
       "从消息列出的集群中选择一个，或选择 workspace。",
       "或者在 Meridian 配置目录的 clusters.yaml 中定义该集群，并给出能到达它的 SSH 主机。",
-      "在平台上 compute-resources 输入可以指定的 Kubernetes 集群在这里无法选择：单独运行时，Meridian 只知道 clusters.yaml 中的集群和 workspace。请在提供它的平台上运行这样的工作流。"
+      "在平台上 compute-resources 输入可以指定的 Kubernetes 集群在这里无法选择：单独运行时，Meridian 只知道 clusters.yaml 中的集群和 workspace。请在提供该 Kubernetes 集群的平台上运行这样的工作流。"
     ]
   },
   "clusters_none": {

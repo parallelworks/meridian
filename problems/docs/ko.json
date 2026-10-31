@@ -1550,7 +1550,7 @@
     "fix": [
       "메시지에 나열된 클러스터 중 하나나 workspace를 고르세요.",
       "또는 Meridian 설정 디렉터리의 clusters.yaml에 그 클러스터에 닿는 SSH 호스트와 함께 클러스터를 정의하세요.",
-      "플랫폼에서 compute-resources 입력이 지정할 수 있는 Kubernetes 클러스터는 여기서 고를 수 없습니다. 단독으로 실행되는 Meridian은 clusters.yaml의 클러스터와 workspace만 압니다. 그런 워크플로는 그것을 제공하는 플랫폼에서 실행하세요."
+      "플랫폼에서 compute-resources 입력이 지정할 수 있는 Kubernetes 클러스터는 여기서 고를 수 없습니다. 단독으로 실행되는 Meridian은 clusters.yaml의 클러스터와 workspace만 압니다. 그런 워크플로는 그 Kubernetes 클러스터를 제공하는 플랫폼에서 실행하세요."
     ]
   },
   "clusters_none": {
