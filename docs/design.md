@@ -5567,32 +5567,34 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   user database has none for the user, no session can be named
   (`login_name_unknown`).
 - **Where a step points it**, as format 1 reads `update-session`'s
-  `with:`, whose `type` is the session's own where its `sessions:` gives
-  one, as format 1 gives a step that names the session by `${{
-  sessions.<key> }}` the session's type; Meridian gives it every step that
-  points the session. A link, `type: link`, is its `url`, an absolute http
-  or https URL (`session_url_invalid`), which the run's output says, and
-  nothing serves. A tunnel is a service at `remotePort`, and `remoteHost`,
-  as its `target` reaches it: none, `""`, `localhost` or `user-workspace`
-  is the workspace, this machine, at `localhost` whatever `remoteHost`
-  says, as format 1 has it; a cluster of `clusters.yaml`, by its id, is
-  reached over SSH through the cluster's host, as its jobs' workers are,
-  where its host connects to `remoteHost`, `localhost` by default
-  (`session_target_unknown` for another). `localhost` is resolved as
-  127.0.0.1, where a service that listens on one loopback address alone
+  `with:`, whose `type` is the session's own, for a step whose `name` is
+  written `${{ sessions.<key> }}` and nothing else, where the workflow's
+  `sessions:` gives the session one, `null` a tunnel's, as format 1 gives
+  such a step its session's type. A link, `type: link`, is its `url`, an
+  absolute http or https URL (`session_url_invalid`), which the run's
+  output says, and nothing serves. A tunnel is a service at `remotePort`,
+  and `remoteHost`, as its `target` reaches it: none, `""`, `localhost` or
+  `user-workspace` is the workspace, this machine, at `localhost` whatever
+  `remoteHost` says, as format 1 has it; a cluster of `clusters.yaml`, by
+  its id, is reached over SSH through the cluster's host, as its jobs'
+  workers are, where its host connects to `remoteHost`, `localhost` by
+  default (`session_target_unknown` for another). `localhost` is resolved
+  as 127.0.0.1, where a service that listens on one loopback address alone
   listens, and never by a resolver, which can give `[::1]` first, where
   another user of the machine could listen at the same port and take the
   session's requests: on this machine, a service that refuses at 127.0.0.1
-  is tried at `[::1]`, as one that listens there alone is, and a cluster's
-  host is asked for 127.0.0.1. `remotePort` is a whole number from 1 to
-  65535, or text of one (`session_port_invalid`). The session is served at
-  the port it is served at already, or at one the system picks:
-  `localPort`, format 1 ignores, and so does Meridian. What only a
-  platform does is refused, failing the step
-  (`session_update_unsupported`): `targetInfo`'s Kubernetes resource,
-  `openAI` and `apiKey`; and so is a tunnel to the workspace of a session
-  whose `useTLS` is true, which Meridian can't yet reach over TLS that it
-  checks, and doesn't reach over plain HTTP instead
+  is tried at `[::1]`, as one that listens there alone is, until it has
+  answered at one of them, which it is asked at alone from then, and a
+  cluster's host is asked for 127.0.0.1. `remotePort` is a whole number
+  from 1 to 65535, or text of one (`session_port_invalid`). The session is
+  served at the port it is served at already, or at one the system picks:
+  `localPort`, format 1 ignores, and so does Meridian, though a step whose
+  `localPort` isn't a whole number, or text of one, fails, as in format 1
+  (`session_port_invalid`). What only a platform does is refused, failing
+  the step (`session_update_unsupported`): `targetInfo`'s Kubernetes
+  resource, `openAI` and `apiKey`; and so is a tunnel to the workspace of
+  a session whose `useTLS` is true, which Meridian can't yet reach over
+  TLS that it checks, and doesn't reach over plain HTTP instead
   (`session_tls_unsupported`). A tunnel to a cluster ignores `useTLS`, as
   format 1 does.
 - **Saying so.** As a process serves a session, its run's output says
@@ -5611,9 +5613,13 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   `meridian resume` of its tree's root serves again
   (`session_not_served`): its code would be redeemed by none.
 - **A port another program took.** A process that takes a session over
-  serves it at the port it was served at, or, where another program holds
-  that now, at one the system picks, which the store keeps, so that every
-  process shows it.
+  forgets the port it was served at as it takes it, so that no link is
+  made to it meanwhile (`session_not_ready`); serves it at that port, or,
+  where another program holds that now, at one the system picks; and says
+  which in the store, so that every process shows it. Where it can serve
+  it at none, it says why there, once (`session_local_port_refused`),
+  which `meridian session url` says too, and tries again each time it
+  looks.
 
 - **The host name.** A browser sends a cookie to its host alone, whatever
   the port, and keeps a host's storage, and service workers, apart from

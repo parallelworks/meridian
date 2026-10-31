@@ -209,32 +209,36 @@ func TestSessionPoint(t *testing.T) {
 	h, _, _ := newTestSessionHost(t)
 	s := testSession(map[string]any{})
 	s.Port = 4321
-	point := func(with map[string]any, def map[string]any) (coordinator.SessionPoint, error) {
+	pointAs := func(key string, with map[string]any, def map[string]any) (coordinator.SessionPoint, error) {
 		s := s
 		if def != nil {
 			s.Def = def
 		}
-		return h.Point(t.Context(), s, compile.SessionUpdate{Name: s.Name, With: with}, false)
+		return h.Point(t.Context(), s, compile.SessionUpdate{Name: s.Name, SessionKey: key, With: with}, false)
+	}
+	point := func(with map[string]any, def map[string]any) (coordinator.SessionPoint, error) {
+		return pointAs("", with, def)
 	}
 	for _, tc := range []struct {
-		with      map[string]any
-		point     string
-		port      int
-		portGiven bool
+		with  map[string]any
+		point string
+		port  int
 	}{
-		{map[string]any{"remotePort": float64(8888)}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321, false},
-		{map[string]any{"remotePort": "8888", "remoteHost": "elsewhere", "target": "user-workspace"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321, false},
+		{map[string]any{"remotePort": float64(8888)}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
+		{map[string]any{"remotePort": "8888", "remoteHost": "elsewhere", "target": "user-workspace"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
 		// localPort, format 1 ignores.
-		{map[string]any{"remotePort": "8888", "target": "localhost", "localPort": "9000"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321, false},
-		{map[string]any{"remotePort": "8888", "localPort": "nonsense"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321, false},
-		{map[string]any{"remotePort": float64(80), "target": "hpc", "remoteHost": "node-1", "slug": "lab?x=1"}, `{"type":"tunnel","cluster":"hpc","remoteHost":"node-1","remotePort":80,"slug":"lab?x=1"}`, 4321, false},
-		{map[string]any{"remotePort": float64(80), "target": "hpc"}, `{"type":"tunnel","cluster":"hpc","remoteHost":"localhost","remotePort":80}`, 4321, false},
-		{map[string]any{"type": "link", "url": "https://example.com/x"}, `{"type":"link","url":"https://example.com/x"}`, 0, false},
-		{map[string]any{"remotePort": float64(1), "status": "running", "targetInfo": nil, "openAI": false}, `{"type":"tunnel","remoteHost":"localhost","remotePort":1}`, 4321, false},
+		{map[string]any{"remotePort": "8888", "target": "localhost", "localPort": "9000"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
+		{map[string]any{"remotePort": "8888", "localPort": float64(0)}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
+		{map[string]any{"remotePort": "8888", "localPort": "-5"}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
+		{map[string]any{"remotePort": "8888", "localPort": nil}, `{"type":"tunnel","remoteHost":"localhost","remotePort":8888}`, 4321},
+		{map[string]any{"remotePort": float64(80), "target": "hpc", "remoteHost": "node-1", "slug": "lab?x=1"}, `{"type":"tunnel","cluster":"hpc","remoteHost":"node-1","remotePort":80,"slug":"lab?x=1"}`, 4321},
+		{map[string]any{"remotePort": float64(80), "target": "hpc"}, `{"type":"tunnel","cluster":"hpc","remoteHost":"localhost","remotePort":80}`, 4321},
+		{map[string]any{"type": "link", "url": "https://example.com/x"}, `{"type":"link","url":"https://example.com/x"}`, 0},
+		{map[string]any{"remotePort": float64(1), "status": "running", "targetInfo": nil, "openAI": false}, `{"type":"tunnel","remoteHost":"localhost","remotePort":1}`, 4321},
 	} {
 		got, err := point(tc.with, nil)
-		if err != nil || string(got.Point) != tc.point || got.Port != tc.port || got.PortGiven != tc.portGiven {
-			t.Errorf("Point(%v) = %s, %d, %t, %v; want %s, %d, %t", tc.with, got.Point, got.Port, got.PortGiven, err, tc.point, tc.port, tc.portGiven)
+		if err != nil || string(got.Point) != tc.point || got.Port != tc.port {
+			t.Errorf("Point(%v) = %s, %d, %v; want %s, %d", tc.with, got.Point, got.Port, err, tc.point, tc.port)
 		}
 	}
 	for _, tc := range []struct {
@@ -248,6 +252,11 @@ func TestSessionPoint(t *testing.T) {
 		{map[string]any{"remotePort": float64(65536)}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": float64(1.5)}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": "+80"}, nil, problems.SessionPortInvalid},
+		// localPort, which format 1 ignores, it still reads as a whole
+		// number.
+		{map[string]any{"remotePort": float64(1), "localPort": "nonsense"}, nil, problems.SessionPortInvalid},
+		{map[string]any{"remotePort": float64(1), "localPort": float64(1.5)}, nil, problems.SessionPortInvalid},
+		{map[string]any{"remotePort": float64(1), "localPort": true}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": "-1"}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": float64(1), "target": "nowhere"}, nil, problems.SessionTargetUnknown},
 		{map[string]any{"type": "link", "url": "ftp://example.com/"}, nil, problems.SessionURLInvalid},
@@ -261,14 +270,29 @@ func TestSessionPoint(t *testing.T) {
 			t.Errorf("Point(%v) of %v = %v, want %s", tc.with, tc.def, err, tc.kind.Code())
 		}
 	}
-	// The session's own type is the step's, as format 1 gives a step that
-	// names the session: a link session's url, with no type of the
-	// step's, and a tunnel's port, whatever type the step gives.
-	if got, err := point(map[string]any{"url": "https://example.com/"}, map[string]any{"type": "link"}); err != nil || string(got.Point) != `{"type":"link","url":"https://example.com/"}` {
-		t.Errorf("a link session pointed without a type = %s, %v", got.Point, err)
+	// The session's own type is the step's where the step names it by its
+	// key, as format 1 gives such a step: a link session's url, with no
+	// type of the step's; a tunnel's port, whatever type the step gives,
+	// and null's too. A step that names it otherwise, or a session whose
+	// sessions: gives no type, has the step's type.
+	link := map[string]any{"type": "link"}
+	if got, err := pointAs("web", map[string]any{"url": "https://example.com/"}, link); err != nil || string(got.Point) != `{"type":"link","url":"https://example.com/"}` {
+		t.Errorf("a link session pointed by its key without a type = %s, %v", got.Point, err)
 	}
-	if got, err := point(map[string]any{"type": "link", "url": "https://example.com/", "remotePort": float64(2)}, map[string]any{"type": "tunnel"}); err != nil || string(got.Point) != `{"type":"tunnel","remoteHost":"localhost","remotePort":2}` {
-		t.Errorf("a tunnel session pointed as a link = %s, %v", got.Point, err)
+	if _, err := pointAs("", map[string]any{"url": "https://example.com/"}, link); !isKind(err, problems.SessionPortInvalid) {
+		t.Errorf("a link session pointed by a name without a type = %v, want a tunnel's", err)
+	}
+	if _, err := pointAs("other", map[string]any{"url": "https://example.com/"}, link); !isKind(err, problems.SessionPortInvalid) {
+		t.Errorf("a link session pointed by another session's key = %v, want a tunnel's", err)
+	}
+	asLink := map[string]any{"type": "link", "url": "https://example.com/", "remotePort": float64(2)}
+	for _, def := range []map[string]any{{"type": "tunnel"}, {"type": nil}} {
+		if got, err := pointAs("web", asLink, def); err != nil || string(got.Point) != `{"type":"tunnel","remoteHost":"localhost","remotePort":2}` {
+			t.Errorf("a session of %v pointed by its key as a link = %s, %v", def, got.Point, err)
+		}
+	}
+	if got, err := pointAs("web", asLink, map[string]any{}); err != nil || string(got.Point) != `{"type":"link","url":"https://example.com/"}` {
+		t.Errorf("a session of no type pointed by its key as a link = %s, %v", got.Point, err)
 	}
 	// A target's problem lists the clusters, or says there are none.
 	_, err := point(map[string]any{"remotePort": float64(1), "target": "nowhere"}, nil)
@@ -439,9 +463,17 @@ func TestSessionHostServesAgain(t *testing.T) {
 	link := testSession(map[string]any{})
 	link.ID, link.Key, link.Name = "link", "docs", "docs-1"
 	link.Point = []byte(`{"type":"link","url":"https://example.com/a"}`)
-	h.Serve(t.Context(), []coordinator.Session{moved, link})
+	// One whose port is free still: served there, which the store, which
+	// forgot it as the process took it over, keeps again.
+	free := listenOn(t, "tcp4", "127.0.0.1", 0)
+	freePort := free.Addr().(*net.TCPAddr).Port
+	_ = free.Close()
+	same := testSession(map[string]any{})
+	same.ID, same.Key, same.Name = "same", "same", "same-1"
+	same.Point, same.Port = []byte(`{"type":"tunnel","remoteHost":"localhost","remotePort":1}`), freePort
+	h.Serve(t.Context(), []coordinator.Session{moved, link, same})
 	records := store.records()
-	if len(records) != 1 || !strings.HasPrefix(records[0], "abc ") || records[0] == "abc "+strconv.Itoa(taken) {
+	if len(records) != 2 || !strings.HasPrefix(records[0], "abc ") || records[0] == "abc "+strconv.Itoa(taken) || records[1] != "same "+strconv.Itoa(freePort) {
 		t.Fatalf("the store keeps %q", records)
 	}
 	newPort, _ := strconv.Atoi(strings.TrimPrefix(records[0], "abc "))
@@ -449,17 +481,17 @@ func TestSessionHostServesAgain(t *testing.T) {
 	// and nothing is said again.
 	moved.Port = newPort
 	for range 2 {
-		h.Serve(t.Context(), []coordinator.Session{moved, link})
+		h.Serve(t.Context(), []coordinator.Session{moved, link, same})
 	}
-	if again := store.records(); len(again) != 1 {
+	if again := store.records(); len(again) != 2 {
 		t.Errorf("the store keeps %q, said again", again)
 	}
-	if lines := said.lines(); len(lines) != 2 || lines[0] != "7 web " || lines[1] != "7 docs https://example.com/a" {
+	if lines := said.lines(); len(lines) != 3 || lines[0] != "7 web " || lines[1] != "7 docs https://example.com/a" || lines[2] != "7 same " {
 		t.Errorf("the host said %q", lines)
 	}
 	link.Point = []byte(`{"type":"link","url":"https://example.com/b"}`)
-	h.Serve(t.Context(), []coordinator.Session{moved, link})
-	if lines := said.lines(); len(lines) != 3 || lines[2] != "7 docs https://example.com/b" {
+	h.Serve(t.Context(), []coordinator.Session{moved, link, same})
+	if lines := said.lines(); len(lines) != 4 || lines[3] != "7 docs https://example.com/b" {
 		t.Errorf("pointed elsewhere, the link is said as %q", lines)
 	}
 
@@ -622,5 +654,109 @@ func TestSessionDialer(t *testing.T) {
 	}
 	if got := *dials; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("the cluster's host was asked for %q, want %q", got, want)
+	}
+}
+
+// TestSessionHostCantServe checks a session a host takes over and can't
+// serve, at its port or any: it says why in the store, once, which a link
+// refuses with, and serves it once it can, which the store keeps; and a
+// host without a login name serves none, nor makes a link to one.
+func TestSessionHostCantServe(t *testing.T) {
+	t.Parallel()
+	h, store, _ := newTestSessionHost(t)
+	refused := problems.SessionLocalPortRefused.Problem(problems.Params{"port": "0"})
+	h.mu.Lock()
+	h.listen = func(context.Context, int) (*sessionproxy.Listener, error) { return nil, refused }
+	h.mu.Unlock()
+	s := testSession(map[string]any{})
+	s.Point, s.Port = []byte(`{"type":"tunnel","remoteHost":"localhost","remotePort":1}`), 5000
+	h.Serve(t.Context(), []coordinator.Session{s})
+	if got := store.records(); len(got) != 1 || got[0] != "abc "+string(problems.SessionLocalPortRefused.Code()) {
+		t.Fatalf("the store keeps %q", got)
+	}
+	s.Problem, s.Port = refused, 0
+	for range 2 {
+		h.Serve(t.Context(), []coordinator.Session{s})
+	}
+	if got := store.records(); len(got) != 1 {
+		t.Errorf("the store keeps %q, said again", got)
+	}
+	if _, err := h.Link(t.Context(), s); !isKind(err, problems.SessionLocalPortRefused) {
+		t.Errorf("a link to a session that can't be served = %v", err)
+	}
+	h.mu.Lock()
+	h.listen = sessionproxy.Listen
+	h.mu.Unlock()
+	h.Serve(t.Context(), []coordinator.Session{s})
+	if got := store.records(); len(got) != 2 || !strings.HasPrefix(got[1], "abc ") || got[1] == "abc 0" {
+		t.Errorf("served at last, the store keeps %q", got)
+	}
+
+	cfg, err := LoadConfig(configDir(t, nil), lookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameless, err := NewSessionHost(cfg, Login{Err: errors.New("no such user")}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nameless.Close()
+	nameless.Attach("store", &testSessionStore{})
+	if _, err := nameless.Point(t.Context(), testSession(map[string]any{}), compile.SessionUpdate{Name: "web-1", With: map[string]any{"remotePort": float64(1)}}, true); !isKind(err, problems.LoginNameUnknown) {
+		t.Errorf("serving without a login name = %v", err)
+	}
+	s.Problem, s.Port = nil, 8000
+	if _, err := nameless.Link(t.Context(), s); !isKind(err, problems.LoginNameUnknown) {
+		t.Errorf("a link without a login name = %v", err)
+	}
+	s.Point = []byte(`{"type":"link","url":"https://example.com/"}`)
+	if got, err := nameless.Link(t.Context(), s); err != nil || got != "https://example.com/" {
+		t.Errorf("a link session's link without a login name = %q, %v", got, err)
+	}
+}
+
+// TestSessionDialerPinned checks that a session's service, once it has
+// answered at one loopback address, is asked at that one alone: one that
+// answered at 127.0.0.1, and then refuses there, as a full listen queue
+// can, is never asked at [::1], where another program can listen; and one
+// that answered at [::1] alone is asked there, whatever listens at
+// 127.0.0.1 since.
+func TestSessionDialerPinned(t *testing.T) {
+	t.Parallel()
+	h, _, _ := newTestSessionHost(t)
+	service := listenOn(t, "tcp4", "127.0.0.1", 0)
+	port := service.Addr().(*net.TCPAddr).Port
+	serveText(t, service, "the service")
+	serveText(t, listenOn(t, "tcp6", "::1", port), "another program")
+	dial := h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})
+	conn, err := dial(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	_ = service.Close()
+	if conn, err := dial(t.Context()); err == nil {
+		conn.Close()
+		t.Error("a service that answered at 127.0.0.1, and then refused, was asked at [::1]")
+	}
+
+	free := listenOn(t, "tcp4", "127.0.0.1", 0)
+	alone := free.Addr().(*net.TCPAddr).Port
+	_ = free.Close()
+	serveText(t, listenOn(t, "tcp6", "::1", alone), "a service on [::1]")
+	dial = h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: alone})
+	conn, err = dial(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	serveText(t, listenOn(t, "tcp4", "127.0.0.1", alone), "another program")
+	conn, err = dial(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if a, _ := conn.RemoteAddr().(*net.TCPAddr); a == nil || a.IP.To4() != nil {
+		t.Errorf("a service that answered at [::1] alone was asked at %v", conn.RemoteAddr())
 	}
 }

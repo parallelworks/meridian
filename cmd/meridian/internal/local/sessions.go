@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -76,6 +77,9 @@ type SessionHost struct {
 	// announced, by the IDs of their sessions.
 	served map[string]*served
 	links  map[string]string
+	// listen listens at a session's port (sessionproxy.Listen), which a
+	// test replaces.
+	listen func(ctx context.Context, port int) (*sessionproxy.Listener, error)
 }
 
 // A served session is one a SessionHost serves: its proxy, on its
@@ -128,7 +132,7 @@ func NewSessionHost(cfg *Config, user Login, key []byte, dialCluster func(ctx co
 	}
 	h := &SessionHost{
 		cfg: cfg, user: user, keys: keys, dialCluster: dialCluster, log: log,
-		served: map[string]*served{}, links: map[string]string{},
+		served: map[string]*served{}, links: map[string]string{}, listen: sessionproxy.Listen,
 	}
 	h.life, h.end = context.WithCancel(context.Background()) //nolint:forbidigo // the host's own life, which Close ends
 	return h, nil
@@ -295,9 +299,10 @@ func newSessionName(key string) string {
 // serves, which serves it there as it next looks at the store, it serves
 // nothing, and returns the port s is served at.
 //
-//   - Its type is the session's own, where its sessions: gives one, as
-//     format 1 gives a step that names the session the session's type, or
-//     else with:'s.
+//   - Its type is with:'s; or, for a step that names the session by its
+//     key, as ${{ sessions.<key> }} (u.SessionKey), the session's own,
+//     where its sessions: gives one, as format 1 gives such a step, null
+//     as a tunnel's.
 //   - A link, type: link, is its url, an absolute http or https URL
 //     (session_url_invalid), which is announced, and served by none.
 //   - A tunnel, any other type, is a service at remoteHost, localhost by
@@ -308,7 +313,9 @@ func newSessionName(key string) string {
 //     (session_target_unknown), reached over SSH through its host.
 //     remotePort is a whole number from 1 to 65535, or text of one
 //     (session_port_invalid). localPort, format 1 ignores, and so does
-//     Point: a session is served at a port of the system's choosing.
+//     Point, which serves a session at a port of the system's choosing,
+//     once it is a whole number, or text of one, as format 1 reads it
+//     (session_port_invalid too).
 //
 // What a platform alone does, targetInfo's Kubernetes resource, openAI and
 // apiKey, is session_update_unsupported; a tunnel to the workspace whose
@@ -323,8 +330,8 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 		}
 	}
 	typ := expr.Text(w["type"])
-	if own := expr.Text(s.Def["type"]); own != "" {
-		typ = own
+	if own, ok := s.Def["type"]; ok && u.SessionKey != "" && u.SessionKey == s.Key {
+		typ = expr.Text(own)
 	}
 	if typ == "link" {
 		link, err := url.Parse(expr.Text(w["url"]))
@@ -343,6 +350,9 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 	remotePort, ok := portOf(w["remotePort"])
 	if !ok {
 		return coordinator.SessionPoint{}, problems.SessionPortInvalid.Problem(problems.Params{"key": "remotePort", "value": problems.Show(w["remotePort"])})
+	}
+	if v, ok := w["localPort"]; ok && v != nil && !wholeNumber(v) {
+		return coordinator.SessionPoint{}, problems.SessionPortInvalid.Problem(problems.Params{"key": "localPort", "value": problems.Show(v)})
 	}
 	p := sessionPoint{Type: "tunnel", RemoteHost: expr.Text(w["remoteHost"]), RemotePort: remotePort, Slug: expr.Text(w["slug"])}
 	switch target := expr.Text(w["target"]); target {
@@ -375,6 +385,21 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 		return coordinator.SessionPoint{}, err
 	}
 	return coordinator.SessionPoint{Point: data, Port: served}, nil
+}
+
+// wholeNumber reports whether v is a whole number, as JSON gives one, or
+// text of one, as format 1 reads localPort, which it ignores then.
+func wholeNumber(v any) bool {
+	switch v := v.(type) {
+	case float64:
+		return v == math.Trunc(v) && !math.IsInf(v, 0)
+	case int64, int:
+		return true
+	case string:
+		_, err := strconv.Atoi(v)
+		return err == nil
+	}
+	return false
 }
 
 // portOf returns v as a port, a whole number from 1 to 65535, as JSON
@@ -430,6 +455,9 @@ func (h *SessionHost) start(ctx context.Context, s coordinator.Session, p sessio
 	if h.codes == nil {
 		return nil, errors.New("local: the session host serves no session before Attach")
 	}
+	if h.user.Err != nil {
+		return nil, problems.LoginNameUnknown.Problem(problems.Params{"reason": h.user.Err.Error()})
+	}
 	secret, err := h.keys.Secret(h.store, s.ID, s.Salt)
 	if err != nil {
 		return nil, err
@@ -441,7 +469,7 @@ func (h *SessionHost) start(ctx context.Context, s coordinator.Session, p sessio
 	if err != nil {
 		return nil, err
 	}
-	l, err := sessionproxy.Listen(ctx, port)
+	l, err := h.listen(ctx, port)
 	if err != nil {
 		_ = proxy.Close()
 		return nil, err
@@ -472,15 +500,32 @@ func (r redeemer) Redeem(ctx context.Context, session string, mac []byte) bool {
 // first, where another user of the machine could listen at the same port
 // and take the session's requests, its cookies and passwords with them.
 // On this machine, a service that refuses on 127.0.0.1 is tried on [::1],
-// as one that listens there alone does; nothing else is.
+// as one that listens there alone does, until it has answered at one of
+// them, which its connections go to alone from then: so a refusal of a
+// service that answered at 127.0.0.1 before, as a host whose full listen
+// queue refuses connections does, sends nothing to [::1].
 func (h *SessionHost) dialer(p sessionPoint) sessionproxy.DialFunc {
 	port := strconv.Itoa(p.RemotePort)
 	if p.Cluster == "" {
+		v4, v6 := net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("::1", port)
+		// family is where the service answered first: 4, 6, or 0 before
+		// it has.
+		var family atomic.Int32
 		return func(ctx context.Context) (net.Conn, error) {
 			var d net.Dialer
-			conn, err := d.DialContext(ctx, "tcp4", net.JoinHostPort("127.0.0.1", port))
-			if errors.Is(err, syscall.ECONNREFUSED) {
-				return d.DialContext(ctx, "tcp6", net.JoinHostPort("::1", port))
+			if family.Load() == 6 {
+				return d.DialContext(ctx, "tcp6", v6)
+			}
+			conn, err := d.DialContext(ctx, "tcp4", v4)
+			switch {
+			case err == nil:
+				family.CompareAndSwap(0, 4)
+				return conn, nil
+			case family.Load() != 0 || !errors.Is(err, syscall.ECONNREFUSED):
+				return nil, err
+			}
+			if conn, err = d.DialContext(ctx, "tcp6", v6); err == nil {
+				family.CompareAndSwap(0, 6)
 			}
 			return conn, err
 		}
@@ -559,22 +604,33 @@ func (h *SessionHost) Serve(ctx context.Context, live []coordinator.Session) {
 
 // serveAgain serves the session s, which points where p says, and which
 // this process doesn't serve yet, as one that took it over finds it: at
-// its port, or, where that is another program's now, at one the system
-// picks, which the store keeps; and tries again as Serve is called again
-// where it can't.
+// the port it was served at, s.Port, which the takeover kept from the
+// store, or, where that is another program's now, at one the system picks;
+// and says where in the store (SessionStore.SessionServed), which forgot
+// the port as the process took the session. Where it can't serve it, it
+// says why in the store, once, so that no link is made to it, and tries
+// again as Serve is called again.
 func (h *SessionHost) serveAgain(ctx context.Context, s coordinator.Session, p sessionPoint) {
 	next, err := h.start(ctx, s, p, string(s.Point), s.Port)
 	if err != nil && s.Port != 0 {
 		next, err = h.start(ctx, s, p, string(s.Point), 0)
 	}
 	if err != nil {
-		h.log.Warn("local: couldn't serve a session", "session", s.Name, "err", err)
+		prob, isProblem := errors.AsType[*problem.Problem](err)
+		switch {
+		case isProblem && s.Problem != nil && s.Problem.Code == prob.Code:
+			// The store says so already.
+		case isProblem:
+			if err := h.codes.SessionServed(ctx, s.ID, 0, prob); err != nil {
+				h.log.Warn("local: couldn't say why a session isn't served", "session", s.Name, "err", err)
+			}
+		default:
+			h.log.Warn("local: couldn't serve a session", "session", s.Name, "err", err)
+		}
 		return
 	}
-	if port := next.listener.Port(); port != s.Port || s.Problem != nil {
-		if err := h.codes.SessionServed(ctx, s.ID, port, nil); err != nil {
-			h.log.Warn("local: couldn't store a session's port", "session", s.Name, "err", err)
-		}
+	if err := h.codes.SessionServed(ctx, s.ID, next.listener.Port(), nil); err != nil {
+		h.log.Warn("local: couldn't store a session's port", "session", s.Name, "err", err)
 	}
 	h.served[s.ID] = next
 	h.announceTunnel(ctx, s, next.listener.Port(), p)
@@ -683,6 +739,8 @@ func (h *SessionHost) Link(ctx context.Context, s coordinator.Session) (string, 
 		return "", s.Problem
 	case s.Port == 0:
 		return "", notReady
+	case h.user.Err != nil:
+		return "", problems.LoginNameUnknown.Problem(problems.Params{"reason": h.user.Err.Error()})
 	}
 	h.mu.Lock()
 	codes := h.codes

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -181,6 +182,12 @@ type SessionUpdate struct {
 	// text: as sessions.<key> reads one of a run's sessions (Check), or
 	// any other.
 	Name string
+	// SessionKey is the key of the session of the run's own sessions:
+	// whose name the step's with: writes its name as, ${{ sessions.<key> }}
+	// and nothing else (SessionKeyNamed), or "": format 1 gives such a step
+	// the type that the session's sessions: gives it, where it gives one,
+	// whatever the step's with: says.
+	SessionKey string
 	// With is the rest of the step's with:, as it was evaluated: where the
 	// session points, as url, or remoteHost and remotePort.
 	With map[string]any
@@ -235,6 +242,24 @@ func UpdateSession(ctx context.Context, s Sessions, u SessionUpdate, path string
 		return nil, &sessionNotUpdated{ctx: contextEnd(err)}
 	}
 	return nil, err
+}
+
+// sessionNamed is how format 1 tells a step that names one of its
+// workflow's sessions by its key, as its with:'s name is written.
+var sessionNamed = regexp.MustCompile(`^\$\{\{\s*sessions\.([-\w]+)\s*\}\}$`)
+
+// SessionKeyNamed returns the key of the workflow's session whose name
+// with, a step's with: as the workflow writes it (plan.Value.Written),
+// gives as its name, as format 1 reads it: a name written as
+// ${{ sessions.<key> }} and nothing else, under the key name exactly; or
+// "" for any other.
+func SessionKeyNamed(with any) string {
+	m, _ := with.(map[string]any)
+	name, _ := m["name"].(string)
+	if match := sessionNamed.FindStringSubmatch(name); match != nil {
+		return match[1]
+	}
+	return ""
 }
 
 // updateSessionKeys are the keys of parallelworks/update-session's with:,

@@ -41,6 +41,7 @@ type testHost struct {
 	mu     sync.Mutex
 	n      int
 	called []bool
+	keys   []string
 	points []string
 	served [][]Session
 }
@@ -76,7 +77,8 @@ func (h *testHost) Point(_ context.Context, s Session, u compile.SessionUpdate, 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.points = append(h.points, fmt.Sprintf("%s %s %v %s serve=%t", s.Name, s.Key, s.Def, data, serve))
-	return SessionPoint{Point: data, Port: 20000 + len(h.points), PortGiven: u.With["localPort"] != nil}, nil
+	h.keys = append(h.keys, u.SessionKey)
+	return SessionPoint{Point: data, Port: 20000 + len(h.points)}, nil
 }
 
 func (h *testHost) Serve(_ context.Context, live []Session) {
@@ -233,7 +235,7 @@ func TestSessionsUpdate(t *testing.T) {
 	if err != nil || len(sessions) != 1 {
 		t.Fatal(sessions, err)
 	}
-	if s := sessions[0]; string(s.Point) != `{"localPort":7000,"remotePort":9999}` || s.Port != 20002 || !s.PortGiven {
+	if s := sessions[0]; string(s.Point) != `{"localPort":7000,"remotePort":9999}` || s.Port != 20002 {
 		t.Errorf("the session as the store keeps it: %+v", s)
 	}
 	waitFor(t, func() bool {
@@ -410,9 +412,14 @@ jobs:
 	h.mu.Lock()
 	points := slices.Clone(h.points)
 	served := slices.Clone(h.served)
+	keys := slices.Clone(h.keys)
 	h.mu.Unlock()
 	if len(points) != 1 || !strings.HasPrefix(points[0], "desktop-run desktop ") {
 		t.Errorf("the host pointed %q", points)
+	}
+	// The step names it by its key, as format 1 reads its name as written.
+	if !slices.Equal(keys, []string{"desktop"}) {
+		t.Errorf("the host was told the step names the session by %q", keys)
 	}
 	if !slices.ContainsFunc(served, func(live []Session) bool { return len(live) == 1 && live[0].Point != nil }) {
 		t.Error("the host was never asked to serve the session where the step pointed it")
@@ -774,7 +781,7 @@ func TestSessionsServedPastOneUnopened(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return tx.PointSession(bad.ID, nil, []byte("damaged"), bad.Generation+1, bad.Port, false)
+		return tx.PointSession(bad.ID, nil, []byte("damaged"), bad.Generation+1, bad.Port)
 	}); err != nil {
 		t.Fatal(err)
 	}

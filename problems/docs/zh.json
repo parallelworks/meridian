@@ -834,16 +834,16 @@
   },
   "session_local_port_taken": {
     "title": "会话的端口已被占用",
-    "why": "Meridian 在本机回环地址 127.0.0.1 的各自端口上提供每个会话：即 update-session 的 localPort 给出的端口，或 Meridian 选择的端口。工作流给出的端口上已有其他程序在监听。由于工作流可能会让用户打开那个端口，Meridian 不会改用别的端口。",
+    "why": "Meridian 在本机回环地址 127.0.0.1 上由系统选择的各自端口提供每个会话。接管会话的进程（例如在提供它的 meridian run 结束之后）会在它之前所用的端口上提供它，如果该端口现在被其他程序占用，则改用另一个端口；这就是它发现已被占用的端口。",
     "fix": [
-      "停止在该端口上监听的程序，或给 localPort 一个空闲的端口，或去掉 localPort，让 Meridian 自己选择。"
+      "无需处理：Meridian 会在另一个端口上提供该会话，meridian session url 会给出它。"
     ]
   },
   "session_local_port_refused": {
     "title": "本机不允许监听的会话端口",
-    "why": "Meridian 在本机回环地址 127.0.0.1 的各自端口上提供每个会话：即 update-session 的 localPort 给出的端口，或 Meridian 选择的端口。系统拒绝了工作流给出的端口：在大多数系统上，1024 以下的端口是特权端口，而 Meridian 以你的身份运行，没有该特权。",
+    "why": "Meridian 在本机回环地址 127.0.0.1 上由系统选择的各自端口提供每个会话；对于进程接管的会话，则使用它之前所用的端口。系统拒绝让 Meridian 在那里监听，例如有策略限制程序可以监听的端口。",
     "fix": [
-      "给 localPort 一个 1024 到 65535 之间的端口，或去掉 localPort，让 Meridian 自己选择。"
+      "允许 Meridian 在系统选择的 127.0.0.1 和 [::1] 端口上监听，然后再次运行 meridian resume 或 meridian session url。"
     ]
   },
   "session_name_taken": {
@@ -904,9 +904,9 @@
   },
   "session_port_invalid": {
     "title": "不是 1 到 65535 之间端口的值",
-    "why": "remotePort（服务的端口）按格式 1 的读法，是 1 到 65535 之间的整数或其文本，隧道需要它。格式 1 接受更多形式，如 -1 或 +80，Meridian 会拒绝。",
+    "why": "remotePort（服务的端口）按格式 1 的读法，是 1 到 65535 之间的整数或其文本，隧道需要它；格式 1 接受更多形式，如 -1 或 +80，Meridian 会拒绝。localPort 被格式 1 忽略，Meridian 也忽略它，并在系统选择的端口上提供会话；但格式 1 仍会让 localPort 既不是整数也不是整数文本的步骤失败，Meridian 也是如此。",
     "fix": [
-      "以 1 到 65535 之间的数字给出端口，例如 remotePort: 8888。"
+      "以 1 到 65535 之间的数字给出 remotePort，例如 remotePort: 8888，并去掉 localPort。"
     ]
   },
   "session_target_unknown": {

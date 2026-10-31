@@ -834,16 +834,16 @@
   },
   "session_local_port_taken": {
     "title": "사용 중인 세션 포트",
-    "why": "Meridian은 각 세션을 이 컴퓨터의 루프백 주소 127.0.0.1의 자기 포트에서 제공합니다. update-session의 localPort가 주는 포트이거나 Meridian이 고르는 포트입니다. 워크플로가 준 포트에서 다른 것이 수신 대기하고 있습니다. 워크플로가 사용자에게 그 포트를 열라고 알려 줄 수 있으므로, Meridian은 다른 포트를 쓰지 않습니다.",
+    "why": "Meridian은 각 세션을 이 컴퓨터의 루프백 주소 127.0.0.1에서 시스템이 고르는 자기 포트로 제공합니다. 제공하던 meridian run이 끝난 뒤 등에 세션을 맡은 프로세스는 이전에 제공되던 포트에서 제공하고, 지금 다른 프로그램이 그 포트를 갖고 있으면 다른 포트에서 제공합니다. 이것은 사용 중이던 포트입니다.",
     "fix": [
-      "그 포트에서 듣는 것을 멈추거나, localPort에 비어 있는 포트를 주거나, localPort를 빼서 Meridian이 고르게 하세요."
+      "할 일은 없습니다. Meridian이 다른 포트에서 세션을 제공하며, meridian session url이 그 포트를 알려 줍니다."
     ]
   },
   "session_local_port_refused": {
     "title": "이 컴퓨터가 듣기를 허용하지 않는 세션 포트",
-    "why": "Meridian은 각 세션을 이 컴퓨터의 루프백 주소 127.0.0.1의 자기 포트에서 제공합니다. update-session의 localPort가 주는 포트이거나 Meridian이 고르는 포트입니다. 시스템이 워크플로가 준 포트를 거부했습니다. 대부분의 시스템에서 1024 미만의 포트는 특권 포트이며, Meridian은 그 특권 없이 당신으로 실행됩니다.",
+    "why": "Meridian은 각 세션을 이 컴퓨터의 루프백 주소 127.0.0.1에서 시스템이 고르는 자기 포트로 제공하며, 프로세스가 맡은 세션은 이전에 제공되던 포트에서 제공합니다. 시스템이 Meridian이 그곳에서 수신 대기하는 것을 거부했습니다. 프로그램이 수신 대기할 수 있는 포트를 정책이 제한하는 경우 등입니다.",
     "fix": [
-      "localPort에 1024부터 65535까지의 포트를 주거나, localPort를 빼서 Meridian이 고르게 하세요."
+      "시스템이 고르는 127.0.0.1과 [::1]의 포트에서 Meridian이 수신 대기할 수 있게 하고, meridian resume이나 meridian session url을 다시 실행하세요."
     ]
   },
   "session_name_taken": {
@@ -904,9 +904,9 @@
   },
   "session_port_invalid": {
     "title": "1부터 65535까지의 포트가 아닌 값",
-    "why": "서비스의 포트인 remotePort는 형식 1이 읽는 대로 1부터 65535까지의 정수이거나 그 문자열이며, 터널에 필요합니다. 형식 1은 -1이나 +80처럼 그 이상을 받지만, Meridian은 거부합니다.",
+    "why": "서비스의 포트인 remotePort는 형식 1이 읽는 대로 1부터 65535까지의 정수이거나 그 문자열이며, 터널에 필요합니다. 형식 1은 -1이나 +80처럼 그 이상을 받지만 Meridian은 거부합니다. localPort는 형식 1도 Meridian도 무시하며, Meridian은 시스템이 고르는 포트에서 세션을 제공합니다. 다만 형식 1은 localPort가 정수도 그 문자열도 아닌 단계를 실패시키므로, Meridian도 그렇게 합니다.",
     "fix": [
-      "remotePort: 8888처럼 포트를 1부터 65535까지의 수로 주세요."
+      "remotePort: 8888처럼 remotePort를 1부터 65535까지의 수로 주고, localPort는 빼세요."
     ]
   },
   "session_target_unknown": {

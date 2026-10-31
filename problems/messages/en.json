@@ -129,7 +129,7 @@
   "session_name_needed": "The session {key} asks for its name, which meridian run asks no one for: give its prompt-for-name a default of letters, digits, ., _, -, @ and ~.",
   "session_update_unsupported": "The {field} of update-session, for the session {name}, needs what meridian run doesn't have, so the step fails.",
   "session_url_invalid": "A link session's url must be an http or https URL, not {value}.",
-  "session_port_invalid": "The {key} of update-session must be a port from 1 to 65535, not {value}.",
+  "session_port_invalid": "The {key} of update-session must be {key, select, localPort {a whole number} other {a port from 1 to 65535}}, not {value}.",
   "session_target_unknown": "The target \"{target}\" of update-session isn't the workspace, nor a cluster of clusters.yaml{listed, select, true {, whose clusters are {clusters}} other {, which has none}}.",
   "session_tls_unsupported": "The session {name}'s useTLS: true asks for HTTPS to a service on this machine, which meridian run can't reach yet with its certificate checked, so the step fails.",
 
@@ -365,7 +365,7 @@
   "session_key_unknown": "Run {run} has no session {key} that hasn't ended{listed, select, true {; the sessions it has are {keys}} other {, nor any other}}.",
   "session_not_ready": "Run {run}'s session {key} isn't served yet: its update-session step hasn't run, or the process that serves it hasn't served it at a port yet.",
   "session_not_served": "No process serves run {run}'s session {key} now, as after the one that served it ended: meridian resume {root} serves it again.",
-  "login_name_unknown": "Meridian can't tell the login name of the user who runs it, which a session's path holds: {reason}.",
+  "login_name_unknown": "Meridian can't tell the login name of the user who runs it, which a session's path holds. The system says: {reason}.",
   "source_server_unknown": "The GitLab server \"{server}\" that the step's with: $host names isn't one registered here.",
   "compute_target_unknown": "There is no compute target \"{target}\" in the mode {mode} here.",
   "gitlab_server_invalid": "The GitLab server \"{server}\" isn't a host name, with no port, such as git.example.com.",

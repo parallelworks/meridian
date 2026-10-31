@@ -716,15 +716,15 @@
     ]
   },
   "session_local_port_taken": {
-    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address: the port update-session's localPort gives, or one Meridian picks. Something else listens on the port the workflow gave. Meridian doesn't take another, since the workflow can tell the user to open that one.",
+    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address, one the system picks. A process that takes a session over, as after the meridian run that served it ended, serves it at the port it was served at before, and, where another program holds that now, at another; this is the port it found taken.",
     "fix": [
-      "Stop what listens on the port, give localPort a port that is free, or leave localPort out, so that Meridian picks one."
+      "Nothing: Meridian serves the session at another port, which meridian session url gives."
     ]
   },
   "session_local_port_refused": {
-    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address: the port update-session's localPort gives, or one Meridian picks. The system refused the port the workflow gave: ports below 1024 are privileged on most systems, and Meridian runs as you, without the privilege.",
+    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address, one the system picks, or, for a session a process takes over, the one it was served at before. The system refused to let Meridian listen there, as where a policy restricts the ports a program may listen on.",
     "fix": [
-      "Give localPort a port from 1024 to 65535, or leave it out, so that Meridian picks one."
+      "Allow Meridian to listen on ports of 127.0.0.1 and [::1] that the system picks, and run meridian resume, or meridian session url, again."
     ]
   },
   "session_name_taken": {
@@ -776,9 +776,9 @@
     ]
   },
   "session_port_invalid": {
-    "why": "remotePort, the service's port, is a whole number from 1 to 65535, or text of one, as format 1 reads it, and a tunnel needs it. Format 1 takes more, as -1 or +80, which Meridian refuses.",
+    "why": "remotePort, the service's port, is a whole number from 1 to 65535, or text of one, as format 1 reads it, and a tunnel needs it; format 1 takes more, as -1 or +80, which Meridian refuses. localPort, format 1 ignores, and so does Meridian, which serves a session at a port the system picks; but format 1 still fails a step whose localPort isn't a whole number, or text of one, and so does Meridian.",
     "fix": [
-      "Give the port as a number from 1 to 65535, as remotePort: 8888."
+      "Give remotePort as a number from 1 to 65535, as remotePort: 8888, and leave localPort out."
     ]
   },
   "session_target_unknown": {

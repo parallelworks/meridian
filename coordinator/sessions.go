@@ -86,9 +86,8 @@ type Session struct {
 	Def   map[string]any
 	Point []byte
 	// Port is the port of 127.0.0.1 the session is served at, or 0 before
-	// it points somewhere, and PortGiven whether the step gave it.
-	Port      int
-	PortGiven bool
+	// its process serves it at one.
+	Port int
 	// Problem is why the process that serves the session can't, as its
 	// host last said (Coordinator.SessionServed), or nil.
 	Problem *problem.Problem
@@ -106,10 +105,9 @@ type Session struct {
 type SessionPoint struct {
 	// Point is where it points, encoded as the host reads it again: JSON.
 	Point []byte
-	// Port is the port of 127.0.0.1 the host serves the session at, and
-	// PortGiven whether the step gave it.
-	Port      int
-	PortGiven bool
+	// Port is the port of 127.0.0.1 the host serves the session at, or
+	// the one it is served at already, for a host that doesn't serve it.
+	Port int
 }
 
 // sessionData is what the store keeps of a session as its data
@@ -417,14 +415,14 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 			return err
 		}
 		if now.Sealed == nil && !s.Private && !u.Read.Private && !u.Read.Marked {
-			return tx.PointSession(s.ID, data, nil, 0, point.Port, point.PortGiven)
+			return tx.PointSession(s.ID, data, nil, 0, point.Port)
 		}
 		gen := now.Generation + 1
 		sealed, err := c.sealSession(ctx, tx, s.Root, s.ID, gen, data)
 		if err != nil {
 			return err
 		}
-		return tx.PointSession(s.ID, nil, sealed, gen, point.Port, point.PortGiven)
+		return tx.PointSession(s.ID, nil, sealed, gen, point.Port)
 	})
 	if err != nil {
 		return err
@@ -804,7 +802,7 @@ func (r *sessionsRead) open(ctx context.Context, i int) (Session, error) {
 func sessionOf(s store.Session) Session {
 	return Session{
 		ID: s.ID, Root: s.Root, Run: s.Run, Key: s.Key, Name: s.Name, Type: s.Type, Redirect: s.Redirect,
-		Label: s.Label, Salt: s.Salt, Port: s.Port, PortGiven: s.PortGiven, Problem: s.Problem, Private: s.Sealed != nil,
+		Label: s.Label, Salt: s.Salt, Port: s.Port, Problem: s.Problem, Private: s.Sealed != nil,
 		UpdatedAt: s.UpdatedAt, EndedAt: s.EndedAt,
 	}
 }

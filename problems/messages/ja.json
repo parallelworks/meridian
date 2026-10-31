@@ -126,7 +126,7 @@
   "session_name_needed": "セッション {key} は名前を求めますが、meridian run は誰にも名前を尋ねません。prompt-for-name に英字、数字、.、_、-、@、~ からなる既定値を与えてください。",
   "session_update_unsupported": "セッション {name} に対する update-session の {field} は meridian run にないものを必要とするため、ステップは失敗します。",
   "session_url_invalid": "リンクのセッションの url は http か https の URL でなければならず、{value} ではいけません。",
-  "session_port_invalid": "update-session の {key} は 1 から 65535 までのポートでなければならず、{value} ではいけません。",
+  "session_port_invalid": "update-session の {key} は {key, select, localPort {整数} other {1 から 65535 までのポート}}でなければならず、{value} ではいけません。",
   "session_target_unknown": "update-session の target「{target}」は workspace でも clusters.yaml のクラスターでもありません。{listed, select, true {clusters.yaml のクラスターは {clusters} です。} other {clusters.yaml にクラスターはありません。}}",
   "session_tls_unsupported": "セッション {name} の useTLS: true はこのマシンのサービスへの HTTPS を求めますが、meridian run はまだ証明書を確かめてそこへ到達できないため、ステップは失敗します。",
 
@@ -359,7 +359,7 @@
   "session_key_unknown": "実行 {run} には終わっていないセッション {key} がありません。{listed, select, true {この実行のセッションは {keys} です。} other {ほかのセッションもありません。}}",
   "session_not_ready": "実行 {run} のセッション {key} はまだ提供されていません。update-session のステップが実行されていないか、提供するプロセスがまだポートで提供していません。",
   "session_not_served": "実行 {run} のセッション {key} を今提供しているプロセスはありません。提供していたプロセスが終わった後などです。meridian resume {root} で再び提供されます。",
-  "login_name_unknown": "Meridian を実行しているユーザーのログイン名がわかりません。セッションのパスにはこれが含まれます: {reason}。",
+  "login_name_unknown": "Meridian を実行しているユーザーのログイン名がわかりません。セッションのパスにはこれが含まれます。システムの説明: {reason}。",
   "source_server_unknown": "ステップの with: $host が指定する GitLab サーバー「{server}」は、ここで登録されていません。",
   "compute_target_unknown": "ここにはモード {mode} のコンピュートターゲット「{target}」がありません。",
   "gitlab_server_invalid": "GitLab サーバー「{server}」は、git.example.com のような、ポートを付けないホスト名ではありません。",

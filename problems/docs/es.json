@@ -834,16 +834,16 @@
   },
   "session_local_port_taken": {
     "title": "Puerto de la sesión en uso",
-    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina: el puerto que da el localPort de update-session, o uno que elige Meridian. Otra cosa escucha en el puerto que dio el flujo de trabajo. Meridian no toma otro, ya que el flujo de trabajo puede decirle al usuario que abra ese.",
+    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina, uno que elige el sistema. Un proceso que toma una sesión, como después de que terminara el meridian run que la servía, la sirve en el puerto en que se servía antes, y, donde otro programa lo tiene ahora, en otro; este es el puerto que encontró en uso.",
     "fix": [
-      "Detén lo que escucha en el puerto, da a localPort un puerto libre, o quita localPort, para que Meridian elija uno."
+      "Nada: Meridian sirve la sesión en otro puerto, que da meridian session url."
     ]
   },
   "session_local_port_refused": {
     "title": "Puerto de la sesión en el que esta máquina no deja escuchar",
-    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina: el puerto que da el localPort de update-session, o uno que elige Meridian. El sistema rechazó el puerto que dio el flujo de trabajo: los puertos por debajo de 1024 son privilegiados en la mayoría de los sistemas, y Meridian se ejecuta como tú, sin ese privilegio.",
+    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina, uno que elige el sistema, o, para una sesión que toma un proceso, aquel en que se servía antes. El sistema no dejó que Meridian escuchara allí, como donde una política restringe los puertos en que un programa puede escuchar.",
     "fix": [
-      "Da a localPort un puerto de 1024 a 65535, o quítalo, para que Meridian elija uno."
+      "Permite que Meridian escuche en los puertos de 127.0.0.1 y [::1] que elige el sistema, y vuelve a ejecutar meridian resume, o meridian session url."
     ]
   },
   "session_name_taken": {
@@ -904,9 +904,9 @@
   },
   "session_port_invalid": {
     "title": "Puerto que no es uno de 1 a 65535",
-    "why": "remotePort, el puerto del servicio, es un número entero de 1 a 65535, o el texto de uno, como lo lee el formato 1, y un túnel lo necesita. El formato 1 acepta más, como -1 o +80, que Meridian rechaza.",
+    "why": "remotePort, el puerto del servicio, es un número entero de 1 a 65535, o el texto de uno, como lo lee el formato 1, y un túnel lo necesita; el formato 1 acepta más, como -1 o +80, que Meridian rechaza. localPort, el formato 1 lo ignora, y también Meridian, que sirve una sesión en un puerto que elige el sistema; pero el formato 1 aún hace fallar un paso cuyo localPort no es un número entero, o el texto de uno, y también Meridian.",
     "fix": [
-      "Da el puerto como un número de 1 a 65535, como remotePort: 8888."
+      "Da remotePort como un número de 1 a 65535, como remotePort: 8888, y quita localPort."
     ]
   },
   "session_target_unknown": {
@@ -918,7 +918,7 @@
   },
   "session_tls_unsupported": {
     "title": "Sesión por TLS a la que meridian run aún no llega",
-    "why": "Un túnel a esta máquina cuya sesión tiene useTLS: true se sirve por HTTPS hasta su servicio. meridian run aún no puede comprobar el certificado de un servicio de esta máquina, y no llega a él por HTTP en su lugar. Un túnel a un clúster ignora useTLS, como el formato 1.",
+    "why": "Un túnel a esta máquina cuya sesión tiene useTLS: true se sirve por HTTPS hacia su servicio. meridian run aún no puede comprobar el certificado de un servicio de esta máquina, y no llega a él por HTTP en su lugar. Un túnel a un clúster ignora useTLS, como el formato 1.",
     "fix": [
       "Sirve la aplicación por HTTP en la dirección de bucle local de esta máquina, y quita useTLS de la sesión."
     ]

@@ -41,10 +41,9 @@ type Session struct {
 	Sealed     []byte
 	Generation uint64
 	// Port is the port of 127.0.0.1 the session is served at, or 0
-	// before it points somewhere, and PortGiven whether the step that
-	// pointed it gave it.
-	Port      int
-	PortGiven bool
+	// before its process serves it at one, as after another took it over
+	// (ServeSession).
+	Port int
 	// Problem is why the process that serves the session can't, as it
 	// last said (SessionServed), or nil.
 	Problem *problem.Problem
@@ -58,7 +57,7 @@ type Session struct {
 var ErrSessionNameTaken = errors.New("store: a live session has the name")
 
 // sessionColumns are what Session reads of a session, in order.
-const sessionColumns = "id, root_id, run_id, call_path, key, name, type, redirect, label, salt, data, data_sealed, data_gen, port, port_given, serve_problem, updated_at, ended_at"
+const sessionColumns = "id, root_id, run_id, call_path, key, name, type, redirect, label, salt, data, data_sealed, data_gen, port, serve_problem, updated_at, ended_at"
 
 // MakeSession stores s, a session the run s.Run's sessions: made, under
 // its key s.Key, whose tree's root is s.Root, called at s.CallPath, with
@@ -133,7 +132,7 @@ func (tx *Tx) LiveSessions() ([]Session, error) {
 // served at: ErrNotFound for a session the store hasn't, and ErrState for
 // one that has ended. Data sealed once is never stored in the clear again,
 // which is ErrState too, nor sealed again as an older generation.
-func (tx *Tx) PointSession(id string, data, sealed []byte, gen uint64, port int, portGiven bool) error {
+func (tx *Tx) PointSession(id string, data, sealed []byte, gen uint64, port int) error {
 	s, err := tx.Session(id)
 	if err != nil {
 		return err
@@ -150,8 +149,8 @@ func (tx *Tx) PointSession(id string, data, sealed []byte, gen uint64, port int,
 	if err != nil {
 		return err
 	}
-	_, err = tx.exec("UPDATE meridian_sessions SET data = ?, data_sealed = ?, data_gen = ?, port = ?, port_given = ?, serve_problem = NULL, updated_at = ? WHERE id = ?",
-		nullText(data), sealed, gen, nullInt(port), portGiven, now, id)
+	_, err = tx.exec("UPDATE meridian_sessions SET data = ?, data_sealed = ?, data_gen = ?, port = ?, serve_problem = NULL, updated_at = ? WHERE id = ?",
+		nullText(data), sealed, gen, nullInt(port), now, id)
 	return err
 }
 
@@ -236,8 +235,11 @@ var sessionID = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
 // session's codes go with it. No other process can take the session
 // between the two, and its holder serves it only once ServeSession has
 // returned, so the session is never served with the salt it had before.
-// A session the store hasn't is ErrNotFound, and one that has ended
-// ErrState, and the lock is let go of.
+// It forgets the port the session was served at too, in the same
+// transaction, until its new process says where it serves it
+// (SessionServed): no link is made to a port that another program can
+// hold by now. A session the store hasn't is ErrNotFound, and one that
+// has ended ErrState, and the lock is let go of.
 func (s *Store) ServeSession(ctx context.Context, id string, salt []byte) (release func(), err error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
@@ -252,7 +254,13 @@ func (s *Store) ServeSession(ctx context.Context, id string, salt []byte) (relea
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Tx(ctx, func(tx *Tx) error { return tx.ResetSession(id, salt) }); err != nil {
+	if err := s.Tx(ctx, func(tx *Tx) error {
+		if err := tx.ResetSession(id, salt); err != nil {
+			return err
+		}
+		_, err := tx.exec("UPDATE meridian_sessions SET port = NULL WHERE id = ?", id)
+		return err
+	}); err != nil {
 		release()
 		return nil, err
 	}
@@ -372,17 +380,17 @@ func (tx *Tx) sessions(query string, args ...any) ([]Session, error) {
 	var out []Session
 	for rows.Next() {
 		var (
-			s             Session
-			root, run     int64
-			data          sql.NullString
-			port          sql.NullInt64
-			updated       int64
-			ended         sql.NullInt64
-			gen           int64
-			redirect, pgv bool
-			prob          []byte
+			s         Session
+			root, run int64
+			data      sql.NullString
+			port      sql.NullInt64
+			updated   int64
+			ended     sql.NullInt64
+			gen       int64
+			redirect  bool
+			prob      []byte
 		)
-		if err := rows.Scan(&s.ID, &root, &run, &s.CallPath, &s.Key, &s.Name, &s.Type, &redirect, &s.Label, &s.Salt, &data, &s.Sealed, &gen, &port, &pgv, &prob, &updated, &ended); err != nil {
+		if err := rows.Scan(&s.ID, &root, &run, &s.CallPath, &s.Key, &s.Name, &s.Type, &redirect, &s.Label, &s.Salt, &data, &s.Sealed, &gen, &port, &prob, &updated, &ended); err != nil {
 			return nil, err
 		}
 		if prob != nil {
@@ -391,7 +399,7 @@ func (tx *Tx) sessions(query string, args ...any) ([]Session, error) {
 				return nil, fmt.Errorf("%w: the problem session %s is served with: %w", ErrMalformed, s.ID, err)
 			}
 		}
-		s.Root, s.Run, s.Redirect, s.PortGiven = runID(root), runID(run), redirect, pgv
+		s.Root, s.Run, s.Redirect = runID(root), runID(run), redirect
 		if data.Valid {
 			s.Data = []byte(data.String)
 		}
