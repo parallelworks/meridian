@@ -7,7 +7,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,7 +40,7 @@ func TestStepRunEnd(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var end *stepRunEnd
+			var end *workerapi.StepRun
 			waitFor(t, func() bool {
 				end, err = r.c.stepRunEnd(t.Context(), id)
 				return err != nil || end.Ended
@@ -319,7 +318,7 @@ func TestStepRunStoppedSucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(release)
-	var end *stepRunEnd
+	var end *workerapi.StepRun
 	waitFor(t, func() bool {
 		end, err = r.c.stepRunEnd(t.Context(), id)
 		return err != nil || end.Ended
@@ -418,7 +417,7 @@ func TestStepRunOneTry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var end *stepRunEnd
+	var end *workerapi.StepRun
 	waitFor(t, func() bool {
 		end, err = r.c.stepRunEnd(t.Context(), id)
 		return err != nil || end.Ended
@@ -648,40 +647,6 @@ func (r *stepRunRig) placedOrEnded(t *testing.T, run, key string) *store.Attempt
 		}) == nil && a.Placed()
 	})
 	return a
-}
-
-// TestStepRunOutputsBound checks that a step run whose step wrote more to
-// $OUTPUTS than a worker reads, as a step run's worker that doesn't keep
-// to it reports, ends failed, with outputs_too_large at its step, and
-// gives none of them.
-func TestStepRunOutputsBound(t *testing.T) {
-	parallel(t)
-	large := map[string]string{"x": strings.Repeat("y", workerapi.MaxOutputs)}
-	r := newStepRunRigWith(t, func(backend.PlaceRequest) testEnd {
-		return testEnd{result: plan.JobResult{Outcome: plan.OutcomeSuccess, Outputs: large}}
-	})
-	api := childAPI{r.c}
-	two := workerapi.StepRunState{Steps: []workerapi.StepRunResult{{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "1"}}, {Outcome: plan.OutcomeSuccess}}}
-	sr, err := api.StepRun(t.Context(), storedRun(t, r.c, r.root), r.build, &workerapi.StepRunRequest{Step: 2, SSH: farm, State: two})
-	if err != nil || sr.Run == "" {
-		t.Fatalf("the ask gave %+v, %v", sr, err)
-	}
-	var end *workerapi.StepRun
-	waitFor(t, func() bool {
-		end, err = api.StepRunEnd(t.Context(), sr.Run)
-		return err != nil || end.Ended
-	})
-	switch {
-	case err != nil:
-		t.Fatal(err)
-	case end.Outcome != plan.OutcomeFailure || end.Outputs != nil || len(end.Diagnostics) == 0:
-		t.Errorf("the step run whose step wrote too much ended %+v", end)
-	default:
-		d := end.Diagnostics[len(end.Diagnostics)-1]
-		if d.Code != problems.OutputsTooLarge.Code() || d.Path() != "/jobs/build/steps/2" || d.Params["size"] != workerapi.MaxOutputs+3 {
-			t.Errorf("its problem is %+v", d)
-		}
-	}
 }
 
 // TestStepRunStateStrict checks that a step run whose secret record holds

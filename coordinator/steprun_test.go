@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/parallelworks/meridian/backend"
@@ -28,8 +29,9 @@ import (
 // with a retry:, a timeout:, an early-cancel: and a cleanup:, and outputs:
 // of its own; whose job hosted
 // runs on farm, with a step whose ssh: is null; whose job failover, on
-// farm, runs again once its worker is lost, and has a step whose host its
-// retry counter names; and whose matrix job fan has a step on farm.
+// farm, runs again once its worker is lost, and has steps whose host their
+// retry counter names, farm and then backup, and no host and then backup;
+// and whose matrix job fan has a step on farm.
 const stepRunRoot = `jobs:
   build:
     env: {JOBV: "${{ vars.JOBV }}"}
@@ -88,6 +90,9 @@ const stepRunRoot = `jobs:
       - run: echo failover
         retry: {max-retries: 1}
         ssh: {remoteHost: "${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY == '0' && 'farm' || 'backup' }}"}
+      - run: echo away
+        retry: {max-retries: 1}
+        ssh: {remoteHost: "${{ env.PW_WORKFLOW_STEP_CURRENT_RETRY != '0' && 'backup' || '' }}"}
   fan:
     strategy:
       matrix: {n: [1, 2]}
@@ -168,8 +173,9 @@ func (r *stepRunRig) placed(t *testing.T, run, key string) *store.Attempt {
 // finisher would: its attempts, if it has any, end, and then the run.
 func (r *stepRunRig) endStepRun(t *testing.T, id string, outcome plan.Outcome) {
 	t.Helper()
+	name, _, _ := strings.Cut(storedRun(t, r.c, id).Parent.Job, "#")
 	if err := r.c.store.Tx(t.Context(), func(tx *store.Tx) error {
-		a, err := tx.LatestAttempt(id, "build")
+		a, err := tx.LatestAttempt(id, name)
 		if err == nil && a.State != store.AttemptEnded {
 			err = tx.EndAttempt(a.ID, store.AttemptEnd{Kind: store.EndWithdrawn})
 		}
@@ -198,14 +204,14 @@ func (r *stepRunRig) ask(t *testing.T, a *store.Attempt, req stepRunRequest) (st
 func (r *stepRunRig) askDiags(t *testing.T, a *store.Attempt, req stepRunRequest) (string, problems.Diagnostics, error) {
 	t.Helper()
 	run := storedRun(t, r.c, a.Run)
-	p, step, err := r.c.planStep(run, a, req.Step)
+	p, j, step, err := r.c.planStep(run, a, req.Step)
 	if err != nil {
 		return "", nil, err
 	}
 	if step == nil {
 		return "", nil, errNotStepRun
 	}
-	return r.c.createStepRun(t.Context(), a, p, step, &req)
+	return r.c.createStepRun(t.Context(), a, p, j, step, &req)
 }
 
 // TestStepRun checks a step run: a child of the step's try, which a
@@ -277,7 +283,7 @@ func TestStepRun(t *testing.T) {
 
 	// It reads its own step of the plan, and no other.
 	for i, ok := range []bool{false, false, true, false, false, false, false, false, false, false} {
-		if _, step, err := c.planStep(run, a, i); err != nil || (step != nil) != ok {
+		if _, _, step, err := c.planStep(run, a, i); err != nil || (step != nil) != ok {
 			t.Errorf("the step run's step %d is %+v, %v", i, step, err)
 		}
 	}
@@ -285,7 +291,7 @@ func TestStepRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, step, err := c.planStep(storedRun(t, c, checkout), &store.Attempt{Job: "build"}, 1); err != nil || step == nil || step.Checkout == nil || step.Checkout.Commit != childCommit {
+	if _, _, step, err := c.planStep(storedRun(t, c, checkout), &store.Attempt{Job: "build"}, 1); err != nil || step == nil || step.Checkout == nil || step.Checkout.Commit != childCommit {
 		t.Errorf("the checkout's step run reads the step %+v, %v", step, err)
 	}
 	// A job with a step whose own ssh: can make it a step run needs
@@ -412,8 +418,24 @@ func TestStepRunRefuses(t *testing.T) {
 	}
 	// One whose try before ran in its job, on its job's host, as a
 	// failover from it does, has one without a step run of the try before.
-	if _, err := r.ask(t, r.placed(t, r.root, "failover"), stepRunRequest{Step: 0, Try: 1, SSH: host(map[string]any{"remoteHost": "backup"})}); err != nil {
+	failover := r.placed(t, r.root, "failover")
+	backup := host(map[string]any{"remoteHost": "backup"})
+	if _, err := r.ask(t, failover, stepRunRequest{Step: 0, Try: 1, SSH: backup}); err != nil {
 		t.Errorf("a failover from the job's host: %v", err)
+	}
+	// But one whose try before named no host, in a job on a host, ran as
+	// a step run, where the job would without its ssh:, so it has none
+	// until that one has ended.
+	if _, err := r.ask(t, failover, stepRunRequest{Step: 1, Try: 1, SSH: backup}); !errors.Is(err, errNotStepRun) {
+		t.Errorf("a try whose try before, on no host in a job on one, has no step run: %v", err)
+	}
+	away, err := r.ask(t, failover, stepRunRequest{Step: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.endStepRun(t, away, plan.OutcomeFailure)
+	if _, err := r.ask(t, failover, stepRunRequest{Step: 1, Try: 1, SSH: backup}); err != nil {
+		t.Errorf("a try once the step run of the try before, on no host, ended: %v", err)
 	}
 	// A null ssh: in a job whose ssh: names no host runs in its job.
 	if _, err := r.ask(t, r.placed(t, r.root, "blank"), stepRunRequest{Step: 0}); !errors.Is(err, errNotStepRun) {
