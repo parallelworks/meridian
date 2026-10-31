@@ -11,7 +11,9 @@ import (
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
 	"github.com/parallelworks/meridian/internal/kindtest"
+	"github.com/parallelworks/meridian/internal/leaktest"
 	"github.com/parallelworks/meridian/internal/opensshtest"
+	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -119,5 +121,66 @@ func TestOpenSSHUnapproved(t *testing.T) {
 	p := kindtest.Want(t, err, problems.SSHAlgorithmsUnapproved).Params
 	if p["category"] != "key-exchange" || p["offered"] != "curve25519-sha256, curve25519-sha256@libssh.org" || p["host"] != s.Addr() {
 		t.Errorf("the problem's params are %v", p)
+	}
+}
+
+// TestOpenSSHDialTCP checks that an sshd that forwards TCP connections for
+// its clients (AllowTcpForwarding local) connects to an address for the
+// connection, by its IP address or a name it resolves, and that one it
+// couldn't connect to is ErrTCPConnectFailed, which leaves the connection
+// up.
+func TestOpenSSHDialTCP(t *testing.T) {
+	requireSSH(t)
+	leaktest.Check(t)
+	h := newHome(t)
+	s, target := h.openSSH(opensshtest.Options{TCPForwarding: "local"})
+	h.knownHosts(s.KnownHosts(""))
+	c := dial(t, h.dialer(), target)
+	port := sshtest.Echo(t)
+	for _, host := range []string{"127.0.0.1", "localhost"} {
+		conn, err := c.DialTCP(t.Context(), host, port)
+		if err != nil {
+			t.Fatalf("%s: %v", host, err)
+		}
+		ping(t, conn)
+		_ = conn.Close()
+	}
+	_, err := c.DialTCP(t.Context(), "127.0.0.1", closedPort(t))
+	if !errors.Is(err, sshconn.ErrTCPConnectFailed) {
+		t.Errorf("an address nothing listens on gave %v, want ErrTCPConnectFailed", err)
+	}
+	if out := run(t, c, "echo up"); out != "up\n" {
+		t.Errorf("after the failed dial, the command printed %q", out)
+	}
+}
+
+// TestOpenSSHDialTCPRefused checks that an sshd that won't connect to an
+// address for its clients is ErrTCPForwardingRefused, and that the
+// connection stays up: one that forwards no TCP connections, or only
+// those of remote forwards, and one whose PermitOpen doesn't allow the
+// address.
+func TestOpenSSHDialTCPRefused(t *testing.T) {
+	requireSSH(t)
+	for _, tc := range []struct {
+		name string
+		opts opensshtest.Options
+	}{
+		{"AllowTcpForwarding no", opensshtest.Options{TCPForwarding: "no"}},
+		{"AllowTcpForwarding remote", opensshtest.Options{TCPForwarding: "remote"}},
+		{"PermitOpen", opensshtest.Options{PermitOpen: []string{"127.0.0.1:1"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leaktest.Check(t)
+			h := newHome(t)
+			s, target := h.openSSH(tc.opts)
+			h.knownHosts(s.KnownHosts(""))
+			c := dial(t, h.dialer(), target)
+			if _, err := c.DialTCP(t.Context(), "127.0.0.1", sshtest.Echo(t)); !errors.Is(err, sshconn.ErrTCPForwardingRefused) {
+				t.Errorf("gave %v, want ErrTCPForwardingRefused", err)
+			}
+			if out := run(t, c, "echo up"); out != "up\n" {
+				t.Errorf("after the refusal, the command printed %q", out)
+			}
+		})
 	}
 }

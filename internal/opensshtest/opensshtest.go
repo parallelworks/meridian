@@ -51,6 +51,11 @@ type Options struct {
 	// NoForwarding refuses to forward Unix sockets
 	// (AllowStreamLocalForwarding no).
 	NoForwarding bool
+	// TCPForwarding is sshd's AllowTcpForwarding, as yes, local, remote
+	// or no, or its default, yes, for "", and PermitOpen the addresses
+	// it forwards TCP connections to, as host:port, or any for nil.
+	TCPForwarding string
+	PermitOpen    []string
 	// KeyExchanges and Ciphers are what sshd offers (KexAlgorithms,
 	// Ciphers), or its defaults for nil.
 	KeyExchanges []string
@@ -171,6 +176,12 @@ func configOf(opts Options, addr, hostKey, authorized, pidFile string) []byte {
 	line("LogLevel VERBOSE")
 	if opts.NoForwarding {
 		line("AllowStreamLocalForwarding no")
+	}
+	if opts.TCPForwarding != "" {
+		line("AllowTcpForwarding %s", opts.TCPForwarding)
+	}
+	if len(opts.PermitOpen) > 0 {
+		line("PermitOpen %s", strings.Join(opts.PermitOpen, " "))
 	}
 	if len(opts.KeyExchanges) > 0 {
 		line("KexAlgorithms %s", strings.Join(opts.KeyExchanges, ","))

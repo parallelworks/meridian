@@ -381,6 +381,8 @@
   "ssh_unreachable": "Meridian couldn't reach the host {host} over SSH in four tries: {reason}.",
   "ssh_host_helper_failed": "Meridian's helper on {host}, meridian host, stopped before it answered {op}: {reason}.",
   "ssh_forwarding_refused": "The sshd of {host} won't listen on {path} for Meridian's workers there, so they can't reach the coordinator.",
+  "ssh_tcp_forwarding_refused": "The sshd of {host} won't connect to {address} for Meridian, so Meridian can't reach that address through it.",
+  "ssh_tcp_address_invalid": "Meridian doesn't ask a host to connect to \"{value}\" at port {port}: it takes a host's name or IP address alone, and a port from 1 to 65535.",
   "ssh_host_release_mismatch": "Meridian's helper on {host}, meridian host, is of release {release}, not {expected}, the coordinator's, so Meridian doesn't drive it.",
   "ssh_placement_elsewhere": "Meridian's connection to {host} reaches another of its nodes than the one the worker was placed on, so it can't tell whether the worker still runs.",
   "worker_token_not_taken": "The worker Meridian started didn't take its bootstrap token: {ended, select, true {it ended first, with exit status {exit}} other {it didn't ask for it within a minute, so Meridian stopped it}}. What it wrote on its standard error is in {log}.",

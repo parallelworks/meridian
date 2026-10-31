@@ -614,6 +614,11 @@ var (
 	// path is the socket on the host that the coordinator asked sshd to
 	// listen on for the host's workers.
 	SSHForwardingRefused = define(Error, "ssh_forwarding_refused", "Host that won't forward a socket to the coordinator", "host", "path")
+	// address is what the host was asked to connect to, as host:port;
+	// value and port a host and a port, as they were given, which
+	// Meridian asks no host to connect to.
+	SSHTCPForwardingRefused = define(Error, "ssh_tcp_forwarding_refused", "Host that won't connect to an address for Meridian", "host", "address")
+	SSHTCPAddressInvalid    = define(Error, "ssh_tcp_address_invalid", "Address Meridian doesn't ask a host to connect to", "value", "port")
 )
 
 // The meridian command's directories. mode is a file's or directory's
