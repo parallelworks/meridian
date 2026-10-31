@@ -341,7 +341,8 @@ jobs:
 
 // TestSSHStepRunPrivateHost checks a step whose ssh: names its host from a
 // variable, which is private: the host is never in the clear, in what
-// meridian shows, or in its state where the run started.
+// meridian run shows, or meridian logs or status, of the run or of its
+// step run, or in its state where the run started.
 func TestSSHStepRunPrivateHost(t *testing.T) {
 	parallel(t)
 	env := runEnv(t)
@@ -350,16 +351,22 @@ func TestSSHStepRunPrivateHost(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(env[local.EnvConfigDir], local.VariablesFile), []byte("vars:\n  HOST: "+alias+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	logs := runSucceeds(t, env, hosts[alias].setUp, `jobs:
+	r := endedWithin(t, startCommand(t, env, hosts[alias].setUp, "run", writeFile(t, "w.yaml", `jobs:
   main:
     steps:
       - run: echo "on $HOME"
         ssh: {remoteHost: "${{ vars.HOST }}"}
-`)
-	if !strings.Contains(logs, "| on "+hosts[alias].home+"\n") {
-		t.Errorf("the step didn't run on the host the variable names:\n%s", logs)
+`)))
+	if r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
+		t.Fatalf("meridian run = %+v", r)
 	}
-	for _, args := range [][]string{{"logs", "1"}, {"status", "-all"}, {"status", "--format", "json", "1"}, {"status", "--format", "json", "2"}} {
+	if strings.Contains(r.stdout+r.stderr, alias) {
+		t.Errorf("meridian run shows the host: %+v", r)
+	}
+	if logs := commandTest(t, env, "logs", "1"); !strings.Contains(logs.stdout, "| on "+hosts[alias].home+"\n") {
+		t.Errorf("the step didn't run on the host the variable names: %+v", logs)
+	}
+	for _, args := range [][]string{{"logs", "1"}, {"logs", "2"}, {"status", "-all"}, {"status", "--format", "json", "1"}, {"status", "--format", "json", "2"}} {
 		if r := commandTest(t, env, args...); strings.Contains(r.stdout+r.stderr, alias) {
 			t.Errorf("meridian %s shows the host: %+v", strings.Join(args, " "), r)
 		}

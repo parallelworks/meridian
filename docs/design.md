@@ -261,7 +261,13 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     ([Outputs](#outputs));
   - how a job's `ssh:` reaches its host, where its run's directory is
     there, and what an outage or a cancel does to its steps
-    ([The `ssh` backend](#the-ssh-backend)).
+    ([The `ssh` backend](#the-ssh-backend));
+  - a step whose `ssh:` puts it on another host than its job's, which runs
+    there as a run of its own, with a placement for each try, an
+    `OUTPUTS` of its own and its own log, and runs in the run's default
+    group where its `ssh:` is null in a job on a host; and such a step
+    whose `ssh:` reads what only its job's worker knows, which fails
+    ([Steps on another host](#steps-on-another-host)).
 
 ### Conformance
 
@@ -1648,11 +1654,20 @@ sees one version.
   (`Plan.Calls`), the variables the tree reads (`Run.TreeVariables`), each
   pin's remote context (`Source.Remote`), and a child run's link to its
   step (`Run.Parent`), with what its secret record holds of the step
-  (`Record.Inherited`); and the pins of `parallelworks/checkout` steps, a
+  (`Record.Inherited`); the pins of `parallelworks/checkout` steps, a
   run's own (`Step.Checkout`) and its called workflows'
-  (`Plan.Checkouts`). So a run that calls no workflow, and checks out
-  nothing, is of version 1. A release reads every version up to its own,
-  each by its own schemas, under `plan/schema/<version>/`, and refuses
+  (`Plan.Checkouts`); and what a step run's secret record holds of the
+  step's try it runs (`Record.StepRun`, [Steps on another
+  host](#steps-on-another-host)). So a run that calls no workflow, and
+  checks out nothing, is of version 1. A step run's secret record is of
+  version 2 whatever its plan's version, as it holds `Record.StepRun`,
+  while the step run's row keeps its plan's version, its caller's, which
+  can be 1: a replica of a release that reads only version 1 would claim
+  the step run, and fail to read its record. No release has written
+  either version yet, so it is harmless; before one does, a step run's
+  row is to keep its record's version. A release reads every version up
+  to its own, each by its own schemas, under `plan/schema/<version>/`,
+  and refuses
   what a later version added in an earlier one's plan
   (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
@@ -2598,7 +2613,8 @@ does, whatever the version, a step that calls a workflow.
   a host never chooses where the coordinator connects with the user's
   keys, and a host that a variable or a password names is placed
   privately. Its tries come in order, each once the one before has
-  failed, so the retry counter is the try's. A step whose `ssh:` reads
+  ended, however it ended, or ran in its job, so the retry counter is
+  the try's. A step whose `ssh:` reads
   what only the job's worker knows, as its earlier steps' outputs, its
   own job's outputs through `needs`, a job of `needs` that only
   evaluating it names, the job's status, or `env` but the retry counter,
@@ -2631,7 +2647,10 @@ does, whatever the version, a step that calls a workflow.
   caller's worker masked at the try, as a workflow a step calls masks its
   caller's secrets, and names an output that holds what it masks a
   secret; the caller's worker masks each output named private or secret
-  as a secret of its job's, at least. Its `OUTPUTS` starts empty, and
+  as a secret of its job's, at least, but one shorter than what the
+  phases mask of what is made from a secret (`plan.MinDerived`), which
+  would mask common text, as the step run only says it holds what the
+  caller's worker masks already. Its `OUTPUTS` starts empty, and
   what the step
   writes there comes back to the caller's worker, as the values it
   reads, which appends them to the file the step would have written, the
@@ -2681,7 +2700,11 @@ Where format 1 does otherwise, none of it in the known workflows:
   each try, a second or two once the host has the binary, where format 1
   reuses its connection. A host that can't be reached fails the try
   after the backend's tries (`ssh_unreachable`), as format 1's connection
-  fails it after its own, and the step's `retry:` applies in both.
+  fails it after its own, and the step's `retry:` applies in both. A
+  later optimization could place a job whose steps all name one host on
+  that host, once for the job, at the cost that a host that can't be
+  reached fails the job as it is placed, before a step's `retry:` could
+  try another.
 - **`OUTPUTS` starts empty on the host**, so the step doesn't read what
   its job's earlier steps wrote there, and a step that writes it with
   `>` doesn't erase that, as format 1's copy back does. All 9 of the
@@ -4222,15 +4245,16 @@ own runs.
   the host it names, and a step's runs it on its own: `ssh: null` runs the
   step where the job runs without its `ssh:`, and an empty or null
   `remoteHost` runs it there too, with a note in its log, as format 1 does
-  (`ssh_host_empty`). A step whose `ssh:` names a host of its own is to
-  run there as a run of its own, and so is such a step in a job on a host
-  ([Steps on another host](#steps-on-another-host)); until that is built, a
-  worker on the host a job's `ssh:` names fails such a step
-  (`step_off_job_host`) rather than run it on the wrong host, and any
-  worker fails one whose `ssh:` names a host of its own
-  (`step_ssh_not_supported`), but for one whose `ssh:` names the same host
-  and login as its job's, as a step that repeats its job's `remoteHost`
-  does, which runs where its job runs: the same `remoteHost`,
+  (`ssh_host_empty`). A step whose `ssh:` names a host of its own runs
+  there as a run of its own, and so does one whose `ssh:` is null, or
+  gives no `remoteHost`, in a job on a host ([Steps on another
+  host](#steps-on-another-host)). In an attempt of version 2 of the
+  worker API or earlier, as a worker or a coordinator of an older release
+  serves, such a step fails instead, rather than run on the wrong host:
+  one off its job's host (`step_off_job_host`), and one whose `ssh:` names
+  a host of its own (`step_ssh_not_supported`). A step whose `ssh:` names
+  the same host and login as its job's, as a step that repeats its job's
+  `remoteHost` does, runs where its job runs: the same `remoteHost`,
   `remoteUser`, `jumpNodeHost` and `jumpNodeUser`, by which format 1 keys
   the connections it reuses, with
   null and none as `""`, whatever else it says, such as its
@@ -4337,13 +4361,15 @@ own runs.
 Today the worker runs steps only on the host. A job whose steps are to run
 in a container fails before its first step, with a problem that says so,
 rather than run them on the host, and a step that `uses:` a built-in
-action the worker doesn't run, or runs on another host with `ssh:`, fails,
-as does one whose `ssh:` is null, or gives no `remoteHost`, on a worker
-that a job's `ssh:` placed on a host, until steps on another host are
-built ([Steps on another host](#steps-on-another-host)); one that uses an
-action only a platform provides fails saying so (`action_needs_platform`, [Built-in
-actions](#built-in-actions)). A step that `uses:` a workflow runs it as a
-run of its own ([Workflows a step calls](#workflows-a-step-calls)), whose
+action the worker doesn't run fails; one that uses an action only a
+platform provides fails saying so (`action_needs_platform`, [Built-in
+actions](#built-in-actions)). A step on another host with `ssh:`, and one
+whose `ssh:` is null, or gives no `remoteHost`, on a worker that a job's
+`ssh:` placed on a host, runs there as a run of its own, from version 3
+of the worker API, and fails in an attempt of an earlier version ([Steps
+on another host](#steps-on-another-host)). A step that `uses:` a
+workflow runs it as a run of its own ([Workflows a step
+calls](#workflows-a-step-calls)), whose
 directory its `clean-on-retry:` cleans on the machine the run started
 on, never on a host. Its events are kept in memory
 while the coordinator is unreachable, since each is small but for a step's
@@ -4728,17 +4754,18 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   workers' placements, and the runs' directories. ACTIVATE keeps the
   job's directory alone.
 - **A step on another host than its job's**, as a step's `ssh:` that
-  names one, fails (`step_ssh_not_supported`) until it runs there as a run
-  of its own ([Steps on another host](#steps-on-another-host)), which
-  differs from ACTIVATE's run of it as that section says. ACTIVATE runs
-  it there, but for a step that calls a workflow, whose child it runs
-  where its caller runs, which Meridian refuses.
+  names one, runs there as a run of its own ([Steps on another
+  host](#steps-on-another-host)), which differs from ACTIVATE's run of it
+  as that section says, and fails (`step_ssh_not_supported`) only in an
+  attempt of an earlier version of the worker API. ACTIVATE runs it
+  there, over its job's connection, but for a step that calls a workflow,
+  whose child it runs where its caller runs, which Meridian refuses.
 - **A step off its job's host.** In a job on a host, a step whose `ssh:`
-  is null, or gives no `remoteHost`, would run where its job runs without
-  its `ssh:`, the machine the run started on, which a worker on the host
-  can't reach, so it fails (`step_off_job_host`) until it runs there as a
-  run of its own. ACTIVATE runs it on that machine. None of the known
-  workflows has one.
+  is null, or gives no `remoteHost`, runs as a run of its own in the
+  run's default group ([Steps on another host](#steps-on-another-host)),
+  and fails (`step_off_job_host`) only in an attempt of an earlier
+  version of the worker API. ACTIVATE runs it where the job would run
+  without its `ssh:`. None of the known workflows has one.
 - **An unreachable host** is tried again after about 1, 2 and 4 seconds,
   where ACTIVATE waits 2, 4 and 8.
 - **Host keys.** Meridian checks every host's key against known_hosts,
