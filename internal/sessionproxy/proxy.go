@@ -239,9 +239,12 @@ func New(ctx context.Context, cfg Config) (*Proxy, error) {
 		errorLog = slog.NewLogLogger(cfg.Log.Handler(), slog.LevelWarn)
 	}
 	p.private.Store(cfg.Private)
+	// The reverse proxy's and the server's own logs say nothing of a
+	// private session (privateLog).
+	quiet := log.New(privateLog{p, errorLog}, "", 0)
 	p.target = p.newTarget(cfg.Dial)
 	p.reverse = &httputil.ReverseProxy{
-		Rewrite: p.rewrite, Transport: switching{p}, ModifyResponse: p.modify, ErrorLog: log.New(privateLog{p, errorLog}, "", 0),
+		Rewrite: p.rewrite, Transport: switching{p}, ModifyResponse: p.modify, ErrorLog: quiet,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if errors.Is(err, errBusy) {
 				page(w, r, http.StatusServiceUnavailable, problems.SessionBusy, problems.Params{"name": cfg.Name, "limit": cfg.MaxConns})
@@ -253,7 +256,7 @@ func New(ctx context.Context, cfg Config) (*Proxy, error) {
 			page(w, r, http.StatusBadGateway, problems.SessionUnreachable, problems.Params{"name": cfg.Name})
 		},
 	}
-	p.server = &http.Server{Handler: p, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, ErrorLog: errorLog}
+	p.server = &http.Server{Handler: p, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, ErrorLog: quiet}
 	return p, nil
 }
 
@@ -285,9 +288,12 @@ func (p *Proxy) logFailed(err error) {
 	p.cfg.Log.Warn("sessionproxy: the session's service didn't answer", "session", p.cfg.Name, "problem", code)
 }
 
-// privateLog writes the reverse proxy's own log, as of a body it couldn't
-// copy, to log, but for a private session, of which it writes nothing,
-// since what an error says can be what the session read.
+// privateLog writes the reverse proxy's and the server's own logs, as of a
+// body the proxy couldn't copy, to log, but for a private session, of
+// which it writes nothing, since what an error says can be what the
+// session read: the server's say what they do of the browser's side, which
+// would hold none of it, but whatever they say, a private session's stays
+// out.
 type privateLog struct {
 	p   *Proxy
 	log *log.Logger

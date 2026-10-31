@@ -83,14 +83,13 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	coord, sessions, err := coordinate(ctx, c, w.dirs, w.cfg, db)
+	co, err := coordinate(ctx, c, w.dirs, w.cfg, db)
 	if err != nil {
 		return c.fail(err)
 	}
-	// The coordinator is closed once it has stopped serving, and its
-	// sessions' host before it.
-	defer func() { _ = coord.Close() }()
-	defer sessions.Close()
+	// Closed once the coordinator has stopped serving.
+	defer func() { _ = co.close() }()
+	coord := co.coord
 	storeID := coord.StoreID()
 	logs, err := local.NewLogs(w.dirs.State, storeID)
 	if err != nil {
@@ -119,10 +118,8 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		}
 		return c.fail(p)
 	}
-	progress := local.NewProgress(c.stdout, c.stderr, c.json)
-	// Each session the run's steps point, this process says it serves
-	// as it does: on a person's terminal, with a link.
-	sessions.AnnounceTo(progress, c.showsSessionLinks())
+	// It says each session it serves as it does.
+	progress := co.progress(c)
 	if err := progress.Created(id, dir); err != nil {
 		return c.fail(err)
 	}

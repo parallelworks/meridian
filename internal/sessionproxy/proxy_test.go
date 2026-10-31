@@ -25,6 +25,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/internal/leaktest"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -657,6 +658,7 @@ func TestPages(t *testing.T) {
 // it ends, so a browser that retries a service that doesn't answer can't
 // have more going on; and once they end, a request connects again.
 func TestLimits(t *testing.T) {
+	leaktest.Check(t)
 	defer func(w time.Duration) { dialWait = w }(dialWait)
 	dialWait = 200 * time.Millisecond
 	var (
@@ -740,6 +742,7 @@ func TestLimits(t *testing.T) {
 // request's headers, and that a connection that waits for its next
 // request is closed after a bounded time.
 func TestTimeouts(t *testing.T) {
+	leaktest.Check(t)
 	defer func(h, i time.Duration) { readHeaderTimeout, idleTimeout = h, i }(readHeaderTimeout, idleTimeout)
 	readHeaderTimeout, idleTimeout = 200*time.Millisecond, 300*time.Millisecond
 	r := newRig(t, nil)
@@ -784,6 +787,7 @@ func closedWithin(t *testing.T, conn net.Conn, d time.Duration, what string) {
 // new service for new requests, and that closing the proxy closes the
 // connections to the service, a WebSocket's among them.
 func TestRepointAndClose(t *testing.T) {
+	leaktest.Check(t)
 	r := newRig(t, nil)
 	cookie := r.login()
 	conn, status := r.upgrade("http://"+r.host, cookie)
@@ -1014,6 +1018,18 @@ func TestListenPicksBoth(t *testing.T) {
 	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionLocalPortRefused.Code() || p.Params["picked"] != "true" {
 		t.Errorf("a port the system won't pick gave %v", err)
 	}
+	// One the system picked on 127.0.0.1 that it won't let the process
+	// listen on at [::1] is one it picked too.
+	listen = func(ctx context.Context, network, address string) (net.Listener, error) {
+		if network == "tcp6" {
+			return nil, &net.OpError{Op: "listen", Net: network, Err: syscall.EACCES}
+		}
+		return real(ctx, network, address)
+	}
+	_, err = Listen(t.Context(), 0)
+	if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SessionLocalPortRefused.Code() || p.Params["picked"] != "true" || p.Params["port"] == "0" {
+		t.Errorf("a picked port refused on [::1] gave %v", err)
+	}
 }
 
 // anyAddress is a listener that says it listens on every address, which
@@ -1106,6 +1122,7 @@ func TestRedeemPageEscapes(t *testing.T) {
 // request after it goes to the new one, over connections of its own: none
 // that the request going on used, which the old service's transport keeps.
 func TestRepointInFlight(t *testing.T) {
+	leaktest.Check(t)
 	release := make(chan struct{})
 	var oldHits atomic.Int32
 	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1294,8 +1311,9 @@ func TestFailureLog(t *testing.T) {
 }
 
 // TestPrivateProxyLog checks that what the reverse proxy logs itself, as a
-// body it couldn't copy from the service, a private session's proxy logs
-// nothing of, since what an error says can be what the session read.
+// body it couldn't copy from the service, and what the server does, a
+// private session's proxy logs nothing of, since what an error says can be
+// what the session read.
 func TestPrivateProxyLog(t *testing.T) {
 	for _, private := range []bool{false, true} {
 		var out lockedLog
@@ -1326,9 +1344,11 @@ func TestPrivateProxyLog(t *testing.T) {
 			resp.Body.Close()
 		}
 		_ = r.p.Close()
+		// The server's own log too.
+		r.p.server.ErrorLog.Print("a server's own message")
 		logged := out.String()
-		if private == strings.Contains(logged, "body copy") {
-			t.Errorf("private %t, the reverse proxy logged:\n%s", private, logged)
+		if private == strings.Contains(logged, "body copy") || private == strings.Contains(logged, "a server's own message") {
+			t.Errorf("private %t, the reverse proxy and the server logged:\n%s", private, logged)
 		}
 	}
 }

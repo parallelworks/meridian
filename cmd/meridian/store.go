@@ -4,6 +4,7 @@ import (
 	"context"
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -19,7 +20,6 @@ import (
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/harden"
-	"github.com/parallelworks/meridian/internal/login"
 	"github.com/parallelworks/meridian/internal/sessionproxy"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -39,28 +39,34 @@ func startQueue(id string) string { return "meridian.start." + id }
 // variables that hold secret variables' values (local.Config.SecretEnv);
 // and the ssh backend, which reaches hosts as the user's ssh would, and
 // names them by a key derived from the state directory's key file. It logs
-// what no answer says to c's standard error. Its session host, which it
-// returns too, serves the store's sessions on this machine, once
-// ServeSessions has it serve them, reaching a cluster's services through
-// the ssh backend's connections, under a key derived from the key file
-// too; the caller closes it once the coordinator stops serving them.
+// what no answer says to c's standard error. Its session host serves the
+// store's sessions on this machine, once ServeSessions has it serve them,
+// reaching a cluster's services through the ssh backend's connections,
+// under a key derived from the key file too, at the path of the login name
+// that PW_USER gives its runs' steps, which it reads once for both. The
+// caller closes the two, the host first, once the coordinator stops
+// serving (coordination.close).
 //
 // First it keeps the user's other processes, the steps of its runs' jobs
 // among them, out of the process's memory, where it holds the runs' secret
 // records, as a worker does (internal/harden): it refuses to coordinate
 // where it can't.
-func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config, db string) (*coordinator.Coordinator, *local.SessionHost, error) {
+func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config, db string) (*coordination, error) {
 	if err := c.hardenProcess(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	keys := local.NewKeys(dirs.State)
 	sshKey, err := keys.Derive("ssh member names", backendssh.MinKeyLen)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	sessionKey, err := keys.Derive(sessionproxy.KeyLabel, sessionproxy.KeyLen)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	members, err := clusterMembers(cfg)
+	if err != nil {
+		return nil, err
 	}
 	version, _ := buildVersion()
 	opts := backendssh.Options{
@@ -75,15 +81,16 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	// A session that points at a cluster's service is reached through
 	// the cluster's host, as its jobs' workers are.
 	dialCluster := func(ctx context.Context, clusterHost, host string, port int) (net.Conn, error) {
-		settings, err := jsonv2.Marshal(map[string]any{"remoteHost": clusterHost})
-		if err != nil {
-			return nil, err
+		m := members[clusterHost]
+		if m == nil {
+			return nil, fmt.Errorf("meridian: no cluster of the clusters file has the host %q", clusterHost)
 		}
-		return ssh.DialTCP(ctx, &backend.Member{Name: clusterHost, Backend: "ssh", Settings: settings}, host, port)
+		return ssh.DialTCP(ctx, m, host, port)
 	}
-	host, err := local.NewSessionHost(cfg, local.UserLogin(), sessionKey, dialCluster, log)
+	user := local.UserLogin()
+	host, err := local.NewSessionHost(ctx, cfg, user, sessionKey, dialCluster, log)
 	if err != nil {
-		return nil, nil, errors.Join(err, ssh.Close())
+		return nil, errors.Join(err, ssh.Close())
 	}
 	var trees coordinator.Trees = &cacheSources{dirs: dirs, servers: cfg.GitLabServers(), workflows: cfg.Workflows()}
 	if c.trees != nil {
@@ -91,7 +98,7 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	}
 	coord, err := coordinator.Open(ctx, coordinator.Options{
 		Database: db, Keys: keys,
-		Variables: cfg, Inputs: cfg, Groups: cfg, Env: platformEnv(),
+		Variables: cfg, Inputs: cfg, Groups: cfg, Env: platformEnv(user),
 		Trees: trees,
 		Drivers: map[string]backend.Driver{
 			"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()},
@@ -104,26 +111,64 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	})
 	if err != nil {
 		host.Close()
-		return nil, nil, errors.Join(err, ssh.Close())
+		return nil, errors.Join(err, ssh.Close())
 	}
 	// The store names runs' directories on hosts, with their runs, and
 	// its sessions' secrets.
 	ssh.Store = coord.StoreID()
 	host.Attach(coord.StoreID(), coord)
-	return coord, host, nil
+	return &coordination{coord: coord, sessions: host}, nil
+}
+
+// A coordination is what coordinate opens: a coordinator of the store,
+// and its session host.
+type coordination struct {
+	coord    *coordinator.Coordinator
+	sessions *local.SessionHost
+}
+
+// close closes the session host, and then the coordinator, once it has
+// stopped serving.
+func (co *coordination) close() error {
+	co.sessions.Close()
+	return co.coord.Close()
+}
+
+// progress returns the command's progress display (local.Progress), on
+// which the session host says each session it serves, with a link where
+// c's output shows one (cli.showsSessionLinks).
+func (co *coordination) progress(c *cli) *local.Progress {
+	p := local.NewProgress(c.stdout, c.stderr, c.json)
+	co.sessions.AnnounceTo(p, c.showsSessionLinks())
+	return p
+}
+
+// clusterMembers returns the member of the ssh backend that reaches each
+// cluster of cfg's clusters file, by its host, through which a session
+// that points at the cluster's service is reached.
+func clusterMembers(cfg *local.Config) (map[string]*backend.Member, error) {
+	members := map[string]*backend.Member{}
+	for _, name := range cfg.ClusterNames() {
+		host, _ := cfg.ClusterHost(name)
+		settings, err := jsonv2.Marshal(map[string]any{"remoteHost": host})
+		if err != nil {
+			return nil, err
+		}
+		members[host] = &backend.Member{Name: host, Backend: "ssh", Settings: settings}
+	}
+	return members, nil
 }
 
 // platformEnv returns the variables a platform gives every job's steps
 // that meridian gives them too (coordinator.Options.Env): PW_USER, format
-// 1's name of the person who runs the workflow, as the login name of the
-// user who runs meridian (login.Name), which a session's path holds too,
-// or none where there is none. Every run of the store is theirs.
-func platformEnv() map[string]workerapi.EnvVar {
-	name, err := login.Name()
-	if err != nil {
+// 1's name of the person who runs the workflow, as user, the login name of
+// the user who runs meridian, which a session's path holds too, or none
+// where there is none. Every run of the store is theirs.
+func platformEnv(user local.Login) map[string]workerapi.EnvVar {
+	if user.Err != nil {
 		return nil
 	}
-	return map[string]workerapi.EnvVar{"PW_USER": {Value: name}}
+	return map[string]workerapi.EnvVar{"PW_USER": {Value: user.Name}}
 }
 
 // hardenProcess keeps the user's other processes out of the process's
