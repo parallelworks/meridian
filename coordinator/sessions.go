@@ -12,6 +12,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/seal"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
@@ -81,6 +83,9 @@ type Session struct {
 	// it points somewhere, and PortGiven whether the step gave it.
 	Port      int
 	PortGiven bool
+	// Problem is why the process that serves the session can't, as its
+	// host last said (Coordinator.SessionServed), or nil.
+	Problem *problem.Problem
 	// Private is set where what the session is, or where it points, read
 	// a variable, a password or a secret: the store keeps its data sealed,
 	// and whoever shows it shows none of it.
@@ -123,66 +128,66 @@ func (p sessionProvider) Check(ctx context.Context, sessions map[string]any) (ma
 // Make keeps the sessions of the run runID, under the names Check gave
 // them, each with a salt of its own, owned by the root of the run's tree:
 // in the clear, or sealed under the root's data key where evaluating them
-// read a variable, a password or a secret (read). A session the run made
-// already is made no more, as for a run started again; one whose name
-// another session that hasn't ended has is session_name_taken, which
-// fails the run.
+// read a variable, a password or a secret (read). It keeps all of them, or
+// none, in one transaction. A session the run made already is made no
+// more, as for a run started again; one whose name another session that
+// hasn't ended has is session_name_taken, which fails the run. A session
+// made points nowhere, so its host has nothing to serve yet.
 func (p sessionProvider) Make(ctx context.Context, runID string, sessions map[string]any, names map[string]string, read expr.Read) error {
 	c := p.c
-	var root string
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
+	private := read.Private || read.Marked
+	var taken string
+	err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		taken = ""
 		run, err := tx.Run(runID)
 		if err != nil {
 			return err
 		}
-		root = run.ID
+		root := run.ID
 		if run.Parent != nil {
 			root = run.Parent.Root
 		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	private := read.Private || read.Marked
-	for _, key := range slices.Sorted(maps.Keys(sessions)) {
-		name, ok := names[key]
-		if !ok {
-			return fmt.Errorf("coordinator: the session %q has no name", key)
-		}
-		def, _ := sessions[key].(map[string]any)
-		s := store.Session{
-			ID: newSessionID(), Root: root, Run: runID, Key: key, Name: name,
-			Type: "tunnel", Redirect: def["redirect"] == true, Label: sessionproxy.NewLabel(), Salt: newSalt(),
-		}
-		if def["type"] == "link" {
-			s.Type = "link"
-		}
-		data, err := jsonv2.Marshal(sessionData{Def: def}, jsonv2.Deterministic(true))
-		if err != nil {
-			return err
-		}
-		err = c.store.Tx(ctx, func(tx *store.Tx) error {
-			s.Data, s.Sealed, s.Generation = data, nil, 0
+		for _, key := range slices.Sorted(maps.Keys(sessions)) {
+			name, ok := names[key]
+			if !ok {
+				return fmt.Errorf("coordinator: the session %q has no name", key)
+			}
+			def, _ := sessions[key].(map[string]any)
+			s := store.Session{
+				ID: newSessionID(), Root: root, Run: runID, Key: key, Name: name,
+				Type: "tunnel", Redirect: def["redirect"] == true, Label: sessionproxy.NewLabel(), Salt: newSalt(),
+			}
+			if def["type"] == "link" {
+				s.Type = "link"
+			}
+			data, err := jsonv2.Marshal(sessionData{Def: def}, jsonv2.Deterministic(true))
+			if err != nil {
+				return err
+			}
+			s.Data = data
 			if private {
-				sealed, err := c.sealSession(ctx, tx, root, s.ID, 1, data)
+				s.Sealed, err = c.sealSession(ctx, tx, root, s.ID, 1, data)
+				clear(data)
 				if err != nil {
 					return err
 				}
-				s.Data, s.Sealed, s.Generation = nil, sealed, 1
+				s.Data, s.Generation = nil, 1
 			}
-			_, err := tx.MakeSession(s)
-			return err
-		})
-		clear(data)
-		if errors.Is(err, store.ErrSessionNameTaken) {
-			return problems.SessionNameTaken.Problem(problems.Params{"name": name})
+			_, err = tx.MakeSession(s)
+			clear(data)
+			if errors.Is(err, store.ErrSessionNameTaken) {
+				taken = name
+			}
+			if err != nil {
+				return err
+			}
 		}
-		if err != nil {
-			return err
-		}
+		return nil
+	})
+	if taken != "" {
+		return problems.SessionNameTaken.Problem(problems.Params{"name": taken})
 	}
-	c.wakeSessions()
-	return nil
+	return err
 }
 
 // Update points the session u.Name names, as a step of the run u.Run that
@@ -203,21 +208,22 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 	}
 	c.sessionsMu.Lock()
 	defer c.sessionsMu.Unlock()
-	var stored *store.Session
-	err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		stored, err = tx.SessionNamed(u.Name)
-		return err
+	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) {
+		s, err := tx.SessionNamed(u.Name)
+		if err != nil {
+			return nil, err
+		}
+		return []store.Session{*s}, nil
 	})
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return problems.SessionUnknown.Problem(problems.Params{"name": u.Name})
 	case err != nil:
 		return err
-	case stored.Root != u.Root && !slices.Contains(u.Permissions, "*"):
+	case read.stored[0].Root != u.Root && !slices.Contains(u.Permissions, "*"):
 		return problems.SessionNotPermitted.Problem(problems.Params{"name": u.Name})
 	}
-	s, err := c.openSession(ctx, *stored)
+	s, err := read.open(ctx, 0)
 	if err != nil {
 		return err
 	}
@@ -262,7 +268,7 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 // (SessionHost.Serve), until ctx is done: at once, as a process that takes
 // over from another serves those it served, and then whenever they may
 // have changed in this process, as a step points one or a run ends, and
-// every pollInterval, for what another process changed, as one that served
+// every sessionsPoll, for what another process changed, as one that served
 // a session stopped. It needs a session host. As it stops, it has the host
 // serve none, and lets them go.
 //
@@ -295,7 +301,7 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 		}
 		c.sessionLeases = nil
 	}()
-	ticker := time.NewTicker(c.pollInterval)
+	ticker := time.NewTicker(c.sessionsPoll)
 	defer ticker.Stop()
 	for {
 		err := c.serveSessions(ctx)
@@ -395,27 +401,17 @@ func (c *Coordinator) wakeSessions() {
 // one is, and where it points, only where the coordinator holds the keys
 // to open it, which one opened only to read the store doesn't.
 func (c *Coordinator) RunSessions(ctx context.Context, root string) ([]Session, error) {
-	var stored []store.Session
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		stored, err = tx.Sessions(root)
-		return err
-	}); err != nil {
+	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) { return tx.Sessions(root) })
+	if err != nil {
 		return nil, err
 	}
-	out := make([]Session, len(stored))
-	for i, s := range stored {
-		if c.sealer == nil || s.Sealed == nil {
+	out := make([]Session, len(read.stored))
+	for i, s := range read.stored {
+		if c.sealer == nil && s.Sealed != nil {
 			out[i] = sessionOf(s)
-			if s.Sealed == nil {
-				if err := decodeSession(&out[i], s.Data); err != nil {
-					return nil, err
-				}
-			}
 			continue
 		}
-		var err error
-		if out[i], err = c.openSession(ctx, s); err != nil {
+		if out[i], err = read.open(ctx, i); err != nil {
 			return nil, err
 		}
 	}
@@ -451,6 +447,19 @@ func (c *Coordinator) RedeemSessionCode(ctx context.Context, id string, mac []by
 	return ok
 }
 
+// SessionServed records how the host serves the session id, which this
+// process serves, as it serves it anew, or at another port than before, or
+// can't (store.Tx.SessionServed): the port it serves it at, and, where p is
+// nil, no problem; or, where p is set, why it can't, which leaves the port
+// as it is. What shows the session, as meridian status and meridian
+// session url do, in any process, shows it so.
+func (c *Coordinator) SessionServed(ctx context.Context, id string, port int, p *problem.Problem) error {
+	if err := c.writable(); err != nil {
+		return err
+	}
+	return c.store.Tx(ctx, func(tx *store.Tx) error { return tx.SessionServed(id, port, p) })
+}
+
 // ResetSession replaces the salt of the session id, which signs out every
 // browser that holds its secret, and deletes its one-time codes.
 func (c *Coordinator) ResetSession(ctx context.Context, id string) error {
@@ -464,42 +473,76 @@ func (c *Coordinator) ResetSession(ctx context.Context, id string) error {
 	return nil
 }
 
-// liveSessions returns the store's sessions that haven't ended, opened.
+// liveSessions returns the store's sessions that haven't ended, opened,
+// but those it can't open, which it leaves out, and logs, so that one
+// doesn't keep the others from being served.
 func (c *Coordinator) liveSessions(ctx context.Context) ([]Session, error) {
-	var stored []store.Session
-	if err := c.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		stored, err = tx.LiveSessions()
-		return err
-	}); err != nil {
+	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) { return tx.LiveSessions() })
+	if err != nil {
 		return nil, err
 	}
-	out := make([]Session, 0, len(stored))
-	for _, s := range stored {
-		opened, err := c.openSession(ctx, s)
+	out := make([]Session, 0, len(read.stored))
+	for i, s := range read.stored {
+		opened, err := read.open(ctx, i)
 		if err != nil {
-			return nil, err
+			c.log.Warn("coordinator: couldn't open a session to serve it", "session", s.ID, "err", err)
+			continue
 		}
 		out = append(out, opened)
 	}
 	return out, nil
 }
 
-// openSession returns s, as the store holds it, as a Session: its data in
-// the clear, or, where it is sealed, opened with its root's data key.
-func (c *Coordinator) openSession(ctx context.Context, s store.Session) (Session, error) {
+// sessionsRead are sessions as the store holds them, read with the data
+// keys that open those sealed (readSessions).
+type sessionsRead struct {
+	c      *Coordinator
+	stored []store.Session
+	// wrapped are the wrapped data keys of the roots of the sessions that
+	// are sealed, by root.
+	wrapped map[string][]byte
+}
+
+// readSessions reads the sessions that read returns, and, where the
+// coordinator holds the keys to open them, the wrapped data keys of the
+// roots of those that are sealed, in one View, so that each is opened with
+// the key it was sealed under, as the store had both at once. Every root
+// that hasn't ended has its key.
+func (c *Coordinator) readSessions(ctx context.Context, read func(*store.Tx) ([]store.Session, error)) (*sessionsRead, error) {
+	r := &sessionsRead{c: c, wrapped: map[string][]byte{}}
+	err := c.store.View(ctx, func(tx *store.Tx) error {
+		clear(r.wrapped)
+		var err error
+		if r.stored, err = read(tx); err != nil || c.sealer == nil {
+			return err
+		}
+		for _, s := range r.stored {
+			if s.Sealed == nil {
+				continue
+			}
+			if _, ok := r.wrapped[s.Root]; ok {
+				continue
+			}
+			if r.wrapped[s.Root], err = tx.WrappedKey(s.Root); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return r, err
+}
+
+// open returns the i'th session read as a Session: its data in the clear,
+// or, where it is sealed, opened with its root's data key.
+func (r *sessionsRead) open(ctx context.Context, i int) (Session, error) {
+	s := r.stored[i]
 	out := sessionOf(s)
 	data := s.Data
 	if s.Sealed != nil {
-		var wrapped []byte
-		if err := c.store.View(ctx, func(tx *store.Tx) error {
-			var err error
-			wrapped, err = tx.WrappedKey(s.Root)
-			return err
-		}); err != nil {
-			return Session{}, err
+		if r.c.sealer == nil {
+			return Session{}, fmt.Errorf("coordinator: no keys to open session %s, which is sealed", s.ID)
 		}
-		opened, err := c.sealer.OpenParts(ctx, s.Root, wrapped, []seal.SealedPart{{
+		opened, err := r.c.sealer.OpenParts(ctx, s.Root, r.wrapped[s.Root], []seal.SealedPart{{
 			Purpose: seal.PurposeSession, ID: s.ID, Generation: s.Generation, Sealed: s.Sealed,
 		}})
 		if err != nil {
@@ -519,7 +562,7 @@ func (c *Coordinator) openSession(ctx context.Context, s store.Session) (Session
 func sessionOf(s store.Session) Session {
 	return Session{
 		ID: s.ID, Root: s.Root, Run: s.Run, Key: s.Key, Name: s.Name, Type: s.Type, Redirect: s.Redirect,
-		Label: s.Label, Salt: s.Salt, Port: s.Port, PortGiven: s.PortGiven, Private: s.Sealed != nil,
+		Label: s.Label, Salt: s.Salt, Port: s.Port, PortGiven: s.PortGiven, Problem: s.Problem, Private: s.Sealed != nil,
 		UpdatedAt: s.UpdatedAt, EndedAt: s.EndedAt,
 	}
 }

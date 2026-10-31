@@ -3,12 +3,16 @@ package store
 import (
 	"context"
 	"database/sql"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"regexp"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/internal/flock"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // A Session is a session a run's sessions: made, as the store holds it
@@ -37,6 +41,9 @@ type Session struct {
 	// pointed it gave it.
 	Port      int
 	PortGiven bool
+	// Problem is why the process that serves the session can't, as it
+	// last said (SessionServed), or nil.
+	Problem *problem.Problem
 	// UpdatedAt is when the session last changed, and EndedAt when its
 	// root ended, or the zero time while it hasn't.
 	UpdatedAt, EndedAt time.Time
@@ -47,7 +54,7 @@ type Session struct {
 var ErrSessionNameTaken = errors.New("store: a live session has the name")
 
 // sessionColumns are what Session reads of a session, in order.
-const sessionColumns = "id, root_id, run_id, key, name, type, redirect, label, salt, data, data_sealed, data_gen, port, port_given, updated_at, ended_at"
+const sessionColumns = "id, root_id, run_id, key, name, type, redirect, label, salt, data, data_sealed, data_gen, port, port_given, serve_problem, updated_at, ended_at"
 
 // MakeSession stores s, a session the run s.Run's sessions: made, under
 // its key s.Key, whose tree's root is s.Root, with its ID, name, type,
@@ -137,8 +144,42 @@ func (tx *Tx) PointSession(id string, data, sealed []byte, gen uint64, port int,
 	if err != nil {
 		return err
 	}
-	_, err = tx.exec("UPDATE meridian_sessions SET data = ?, data_sealed = ?, data_gen = ?, port = ?, port_given = ?, updated_at = ? WHERE id = ?",
+	_, err = tx.exec("UPDATE meridian_sessions SET data = ?, data_sealed = ?, data_gen = ?, port = ?, port_given = ?, serve_problem = NULL, updated_at = ? WHERE id = ?",
 		nullText(data), sealed, gen, nullInt(port), portGiven, now, id)
+	return err
+}
+
+// SessionServed records how the process that serves the session id serves
+// it, as it serves it anew, as at another port than before, or can't: the
+// port it serves it at, and, where p is nil, no problem; or, where p is
+// set, why it can't, which leaves the port as it is, masked for a session
+// whose data is sealed, since what it quotes can come from what the
+// session read. ErrNotFound for a session the store hasn't, and ErrState
+// for one that has ended.
+func (tx *Tx) SessionServed(id string, port int, p *problem.Problem) error {
+	s, err := tx.Session(id)
+	if err != nil {
+		return err
+	}
+	if !s.EndedAt.IsZero() {
+		return fmt.Errorf("%w: session %s has ended", ErrState, id)
+	}
+	now, err := tx.now()
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		_, err = tx.exec("UPDATE meridian_sessions SET port = ?, serve_problem = NULL, updated_at = ? WHERE id = ?", nullInt(port), now, id)
+		return err
+	}
+	if s.Sealed != nil {
+		p = problems.MaskProblem(p)
+	}
+	prob, err := jsonv2.Marshal(p, jsonv2.Deterministic(true))
+	if err != nil {
+		return err
+	}
+	_, err = tx.exec("UPDATE meridian_sessions SET serve_problem = ?, updated_at = ? WHERE id = ?", prob, now, id)
 	return err
 }
 
@@ -300,9 +341,16 @@ func (tx *Tx) sessions(query string, args ...any) ([]Session, error) {
 			ended         sql.NullInt64
 			gen           int64
 			redirect, pgv bool
+			prob          []byte
 		)
-		if err := rows.Scan(&s.ID, &root, &run, &s.Key, &s.Name, &s.Type, &redirect, &s.Label, &s.Salt, &data, &s.Sealed, &gen, &port, &pgv, &updated, &ended); err != nil {
+		if err := rows.Scan(&s.ID, &root, &run, &s.Key, &s.Name, &s.Type, &redirect, &s.Label, &s.Salt, &data, &s.Sealed, &gen, &port, &pgv, &prob, &updated, &ended); err != nil {
 			return nil, err
+		}
+		if prob != nil {
+			s.Problem = new(problem.Problem)
+			if err := jsonv2.Unmarshal(prob, s.Problem, jsonv2.RejectUnknownMembers(true)); err != nil {
+				return nil, fmt.Errorf("%w: the problem session %s is served with: %w", ErrMalformed, s.ID, err)
+			}
 		}
 		s.Root, s.Run, s.Redirect, s.PortGiven = runID(root), runID(run), redirect, pgv
 		if data.Valid {

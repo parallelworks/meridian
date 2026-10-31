@@ -848,9 +848,9 @@
   },
   "session_name_taken": {
     "title": "另一个会话已有的会话名",
-    "why": "会话的名称就是它的路径 /me/session/<user>/<name>/，也是 update-session 指代它所用的名称，因此两个尚未结束的会话不能同名。这个名称是工作流选择的，例如 prompt-for-name 的默认值，而该工作流另一个仍在进行的运行也选择了它。",
+    "why": "会话的名称就是它的路径 /me/session/<user>/<name>/，也是 update-session 指代它所用的名称，因此两个尚未结束的会话不能同名。这个名称是工作流选择的，例如 prompt-for-name 的默认值，而另一个尚未结束的会话也有这个名称：工作流 sessions: 中的另一个会话，或另一个仍在进行的运行的会话。",
     "fix": [
-      "用 meridian cancel 结束另一个运行，或给会话取别的名称。"
+      "给工作流的每个会话取不同的名称，或用 meridian cancel 结束另一个运行。"
     ]
   },
   "session_name_empty": {

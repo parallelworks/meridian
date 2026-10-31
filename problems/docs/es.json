@@ -848,9 +848,9 @@
   },
   "session_name_taken": {
     "title": "Nombre de sesión que tiene otra sesión",
-    "why": "El nombre de una sesión es su ruta, /me/session/<usuario>/<nombre>/, y aquello por lo que update-session la nombra, así que dos sesiones que no han terminado no tienen el mismo nombre. El nombre es uno que eligió el flujo de trabajo, como el valor por defecto de prompt-for-name, que también eligió otra ejecución suya, que sigue en marcha.",
+    "why": "El nombre de una sesión es su ruta, /me/session/<usuario>/<nombre>/, y aquello por lo que update-session la nombra, así que dos sesiones que no han terminado no tienen el mismo nombre. El nombre es uno que eligió el flujo de trabajo, como el valor por defecto de prompt-for-name, que también tiene otra sesión que no ha terminado: otra de las sessions: del flujo de trabajo, o una de otra ejecución, que sigue en marcha.",
     "fix": [
-      "Termina la otra ejecución, con meridian cancel, o nombra la sesión de otra forma."
+      "Nombra cada una de las sesiones del flujo de trabajo de otra forma, o termina la otra ejecución, con meridian cancel."
     ]
   },
   "session_name_empty": {

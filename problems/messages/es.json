@@ -118,7 +118,7 @@
   "session_user_unsupported": "El nombre de inicio de sesión “{user}” no es uno que la ruta de una URL contenga tal cual, así que Meridian no puede servir una sesión en la ruta que los flujos de trabajo construyen a partir de PW_USER, /me/session/{user}/….",
   "session_local_port_taken": "El puerto {port} de 127.0.0.1 está en uso, así que Meridian no puede servir la sesión allí.",
   "session_local_port_refused": "Esta máquina no deja que Meridian escuche en el puerto {port} de 127.0.0.1, así que Meridian no puede servir la sesión allí.",
-  "session_name_taken": "La sesión de otra ejecución se llama “{name}” y no ha terminado, así que esta ejecución no puede crear una sesión con ese nombre.",
+  "session_name_taken": "Otra sesión se llama “{name}” y no ha terminado, así que esta ejecución no puede crear una sesión con ese nombre.",
   "session_name_empty": "El name de update-session está vacío, así que no nombra ninguna sesión.",
   "session_unknown": "No hay ninguna sesión “{name}” que no haya terminado, así que update-session no puede apuntarla.",
   "session_not_permitted": "La sesión “{name}” es de otra ejecución, que esta ejecución no puede apuntar sin permissions: ['*'].",

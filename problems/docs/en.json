@@ -728,9 +728,9 @@
     ]
   },
   "session_name_taken": {
-    "why": "A session's name is its path, /me/session/<user>/<name>/, and what update-session names it by, so no two sessions that haven't ended have one name. The name is one the workflow chose, as prompt-for-name's default, which another run of it, still running, chose too.",
+    "why": "A session's name is its path, /me/session/<user>/<name>/, and what update-session names it by, so no two sessions that haven't ended have one name. The name is one the workflow chose, as prompt-for-name's default, which another session that hasn't ended has too: another of the workflow's sessions:, or one of another run, still running.",
     "fix": [
-      "End the other run, with meridian cancel, or name the session otherwise."
+      "Name each of the workflow's sessions otherwise, or end the other run, with meridian cancel."
     ]
   },
   "session_name_empty": {

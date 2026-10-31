@@ -118,7 +118,7 @@ func open(t testing.TB, opts Options) *Coordinator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.retry, c.supervision, c.pollInterval = fastStart, fastSupervision, testPollInterval
+	c.retry, c.supervision, c.pollInterval, c.sessionsPoll = fastStart, fastSupervision, testPollInterval, testPollInterval
 	t.Cleanup(func() {
 		if err := c.Close(); err != nil {
 			t.Error(err)

@@ -78,9 +78,9 @@ type Options struct {
 	Inputs    compile.InputResolver
 	Sessions  compile.Sessions
 	// SessionHost serves the store's sessions where the coordinator runs.
-	// With one, and no Sessions, the coordinator provides Sessions itself,
-	// keeping the sessions in the store, which ServeSessions has the host
-	// serve. Nil means none.
+	// With one, and no Sessions, a coordinator that may write the store
+	// provides Sessions itself, keeping the sessions in the store, which
+	// ServeSessions has the host serve. Nil means none.
 	SessionHost SessionHost
 	// Env are the variables a platform gives every job's steps, by name,
 	// as format 1's PW_USER, which each claim gives the worker
@@ -218,6 +218,9 @@ type Coordinator struct {
 	supervision  supervision
 	startTimeout time.Duration
 	pollInterval time.Duration
+	// sessionsPoll is how often ServeSessions looks at the store's
+	// sessions, for changes another process made.
+	sessionsPoll time.Duration
 	stopTimeout  time.Duration
 	followEvery  time.Duration
 	followHold   time.Duration
@@ -360,11 +363,11 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	*c = Coordinator{
 		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
-		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
+		startTimeout: 5 * time.Minute, pollInterval: time.Second, sessionsPoll: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, seenFailed: map[string]int{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
 		outlives: map[string]bool{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
 	}
-	if opts.SessionHost != nil && opts.Sessions == nil {
+	if opts.SessionHost != nil && opts.Sessions == nil && !opts.ReadOnly {
 		c.opts.Sessions = sessionProvider{c}
 	}
 	c.wakersCtx, c.stopWakers = context.WithCancel(context.WithoutCancel(ctx))
@@ -441,8 +444,8 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 // background, and waits for them (wakeLaterGo); closes what members'
 // drivers set up for their workers to reach the coordinator, and the
 // drivers that are io.Closers; releases its holds on runs' Starts; and
-// closes the coordinator's store. Serve, ServeWorkers and ServeMembers
-// must have returned.
+// closes the coordinator's store. Serve, ServeWorkers, ServeMembers and
+// ServeSessions must have returned.
 func (c *Coordinator) Close() error {
 	c.wakersMu.Lock()
 	c.stopWakers()

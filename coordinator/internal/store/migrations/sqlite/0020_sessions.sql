@@ -15,8 +15,10 @@
 -- part of the root's secrets (data_sealed), of generation data_gen, which
 -- is kept apart from it, and is sealed from then on. port is the port of
 -- 127.0.0.1 the session is served at, once it points somewhere, and
--- port_given whether the step gave it, which a session served again keeps.
--- ended_at is set as its root ends, which erases its data.
+-- port_given whether the step gave it, which a session served again keeps;
+-- serve_problem is why the process that serves the session can't, as it
+-- last said, a problem's JSON, or NULL, which a step that points it again
+-- clears. ended_at is set as its root ends, which erases its data.
 CREATE TABLE meridian_sessions (
   id TEXT PRIMARY KEY,
   root_id INTEGER NOT NULL REFERENCES meridian_runs (id),
@@ -32,6 +34,7 @@ CREATE TABLE meridian_sessions (
   data_gen INTEGER NOT NULL DEFAULT 0,
   port INTEGER,
   port_given INTEGER NOT NULL DEFAULT 0,
+  serve_problem BLOB,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   ended_at INTEGER

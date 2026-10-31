@@ -21,6 +21,7 @@ import (
 	"github.com/parallelworks/meridian/internal/sessionproxy"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // testHost is a session host of a test's. It names each session by its key
@@ -239,10 +240,18 @@ func TestSessionsPrivate(t *testing.T) {
 	if err := p.Make(t.Context(), root, map[string]any{"secret": sessions["secret"]}, map[string]string{"secret": "secret-1"}, expr.Read{Private: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Make(t.Context(), root, map[string]any{"plain": sessions["plain"]}, map[string]string{"plain": "plain-1"}, expr.Read{}); err != nil {
+	// What reads a secret's mark, as a value a step made of one, is
+	// private too, as what reads a password is.
+	if err := p.Make(t.Context(), root, map[string]any{"marked": map[string]any{}}, map[string]string{"marked": "marked-1"}, expr.Read{Marked: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Make(t.Context(), root, map[string]any{"plain": sessions["plain"], "other": map[string]any{}}, map[string]string{"plain": "plain-1", "other": "other-1"}, expr.Read{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Update(t.Context(), compile.SessionUpdate{Root: root, Name: "plain-1", With: map[string]any{"remoteHost": "from-a-secret"}, Read: expr.Read{Marked: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Update(t.Context(), compile.SessionUpdate{Root: root, Name: "other-1", With: map[string]any{"remoteHost": "from-a-password"}, Read: expr.Read{Private: true}}); err != nil {
 		t.Fatal(err)
 	}
 	stored := map[string]store.Session{}
@@ -260,8 +269,8 @@ func TestSessionsPrivate(t *testing.T) {
 			t.Errorf("the %s session is kept %q, sealed %q", key, s.Data, s.Sealed)
 		}
 	}
-	if stored["plain"].Generation != 1 {
-		t.Errorf("the plain session, sealed once it pointed from a secret, is of generation %d", stored["plain"].Generation)
+	if len(stored) != 4 || stored["plain"].Generation != 1 || stored["other"].Generation != 1 {
+		t.Errorf("the plain and other sessions, sealed once they pointed from a secret and a password, are %+v", stored)
 	}
 	opened, err := c.RunSessions(t.Context(), root)
 	if err != nil {
@@ -350,11 +359,13 @@ func TestSessionCodesAndReset(t *testing.T) {
 // TestSessionsEndWithRun checks sessions end to end, as meridian's worker
 // runs a run whose step points its session: the host reads where the step
 // points it, and is asked to serve it, and to serve none once the run
-// ends, as its tree's root, when the store keeps it as ended.
+// ends, as its tree's root, when the store keeps it as ended: at once, not
+// at its process's next look at the store.
 func TestSessionsEndWithRun(t *testing.T) {
 	parallel(t)
 	h := &testHost{}
 	r := newWorkerRigOf(t, Options{SessionHost: h})
+	r.c.sessionsPoll = time.Hour
 	serveSessions(t, r.c)
 	contexts := conformancetest.Variables{}.Contexts()
 	contexts["sessions"] = map[string]any{"desktop": "desktop-run"}
@@ -393,7 +404,8 @@ jobs:
 }
 
 // TestServeSessionsNeedsHost checks that a coordinator without a session
-// host, or opened only to read the store, serves no sessions.
+// host, or opened only to read the store, serves no sessions, and the
+// latter makes and points none.
 func TestServeSessionsNeedsHost(t *testing.T) {
 	parallel(t)
 	c := open(t, Options{})
@@ -403,6 +415,9 @@ func TestServeSessionsNeedsHost(t *testing.T) {
 	ro := open(t, Options{Database: c.opts.Database, ReadOnly: true, SessionHost: &testHost{}})
 	if err := ro.ServeSessions(t.Context()); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("ServeSessions read only = %v", err)
+	}
+	if ro.opts.Sessions != nil {
+		t.Error("a coordinator opened only to read the store provides Sessions")
 	}
 }
 
@@ -445,7 +460,7 @@ func TestSessionsTakenOver(t *testing.T) {
 	}
 	// c looks at the store only when the test says, so that it is a that
 	// takes over from b.
-	c.pollInterval = time.Hour
+	c.sessionsPoll = time.Hour
 	stopB, stopC := serving(b), serving(c)
 	defer stopC()
 	point(b, "one-1", 1)
@@ -532,5 +547,215 @@ func TestSessionsTakenOver(t *testing.T) {
 	}
 	if !a.RedeemSessionCode(t.Context(), was["two-1"].ID, []byte("code")) {
 		t.Error("two's code, which c still serves, was gone")
+	}
+}
+
+// TestSessionsOfAChild checks the sessions a child run's sessions: make,
+// as a step's try that calls a workflow makes them: the root of the tree
+// owns them, whose end ends them, and those private are sealed under the
+// root's data key, which opens them.
+func TestSessionsOfAChild(t *testing.T) {
+	parallel(t)
+	vars := &closingVariables{Variables: conformancetest.Variables{"vars.CHILD_VAR": {Value: "from-the-root"}}}
+	c := open(t, Options{Variables: vars, SessionHost: &testHost{}})
+	buildGo := make(chan struct{})
+	defer close(buildGo)
+	byJob(c, map[string]testEnd{"build": {wait: buildGo, result: plan.JobResult{Outcome: plan.OutcomeSuccess}}})
+	root, _ := createTree(t, c, vars)
+	serve(t, c)
+	var attempt *store.Attempt
+	waitFor(t, func() bool {
+		return c.store.View(t.Context(), func(tx *store.Tx) error {
+			var err error
+			attempt, err = tx.LatestAttempt(root, "build")
+			return err
+		}) == nil
+	})
+	child, diags, err := askChild(t, c, attempt.ID, workerapi.ChildRequest{
+		Step: 0, Try: 0, With: plan.DataOf(map[string]any{"$yaml": "w.yaml", "region": "east"}),
+	})
+	if err != nil || diags.HasErrors() {
+		t.Fatal(diags, err)
+	}
+	if err := c.opts.Sessions.Make(t.Context(), child, map[string]any{"desktop": map[string]any{"redirect": true}}, map[string]string{"desktop": "child-desktop"}, expr.Read{Private: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.RunSessions(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Root != root || got[0].Run != child || got[0].Key != "desktop" || !got[0].Private || got[0].Def["redirect"] != true {
+		t.Errorf("the root's sessions are %+v", got)
+	}
+}
+
+// TestSessionsWake checks that ServeSessions has its host serve what
+// changed in this process as it changes, without waiting for its next
+// look at the store: a session a step points, and one reset; and that it
+// looks at the store every so often, for what another process changed, as
+// a reset another process made.
+func TestSessionsWake(t *testing.T) {
+	parallel(t)
+	h := &testHost{}
+	c := open(t, Options{SessionHost: h})
+	c.sessionsPoll = time.Hour
+	serveSessions(t, c)
+	root, _ := create(t, c, plainWorkflow, nil, nil)
+	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.opts.Sessions.Update(t.Context(), compile.SessionUpdate{Root: root, Name: "desktop-1", With: map[string]any{"remotePort": float64(1)}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { live := h.lastServed(); return len(live) == 1 && live[0].Point != nil })
+	salt := h.lastServed()[0].Salt
+	if err := c.ResetSession(t.Context(), h.lastServed()[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { live := h.lastServed(); return len(live) == 1 && string(live[0].Salt) != string(salt) })
+
+	// Another process's reset: only a look at the store finds it.
+	other := open(t, Options{Database: c.opts.Database, Keys: c.opts.Keys, SessionHost: &testHost{}})
+	h2 := &testHost{}
+	c2 := open(t, Options{Database: c.opts.Database, Keys: c.opts.Keys, SessionHost: h2})
+	serveSessions(t, c2)
+	root2, _ := create(t, c2, plainWorkflow, nil, nil)
+	if err := c2.opts.Sessions.Make(t.Context(), root2, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-2"}, expr.Read{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.opts.Sessions.Update(t.Context(), compile.SessionUpdate{Root: root2, Name: "desktop-2", With: map[string]any{"remotePort": float64(2)}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { live := h2.lastServed(); return len(live) == 1 && live[0].Point != nil })
+	salt2 := h2.lastServed()[0].Salt
+	if err := other.ResetSession(t.Context(), h2.lastServed()[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { live := h2.lastServed(); return len(live) == 1 && string(live[0].Salt) != string(salt2) })
+}
+
+// TestSessionsOfAnEndedRun checks that a run that has ended makes no
+// sessions, as one started again after it ended would.
+func TestSessionsOfAnEndedRun(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{SessionHost: &testHost{}})
+	root, _ := create(t, c, plainWorkflow, nil, nil)
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error { return tx.EndRun(root, plan.OutcomeCancelled, "") }); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); !errors.Is(err, store.ErrState) {
+		t.Errorf("Make for an ended run = %v, want ErrState", err)
+	}
+	if got, err := c.RunSessions(t.Context(), root); err != nil || len(got) != 0 {
+		t.Errorf("the ended run's sessions are %+v, %v", got, err)
+	}
+}
+
+// TestSessionsMadeTogether checks that a run's sessions are made together,
+// or not at all: one whose name another session has makes none of them.
+func TestSessionsMadeTogether(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{SessionHost: &testHost{}})
+	first, _ := create(t, c, plainWorkflow, nil, nil)
+	if err := c.opts.Sessions.Make(t.Context(), first, map[string]any{"b": map[string]any{}}, map[string]string{"b": "taken"}, expr.Read{}); err != nil {
+		t.Fatal(err)
+	}
+	root, _ := create(t, c, plainWorkflow, nil, nil)
+	// a is made before b, whose name is taken.
+	wantProblem(t, c.opts.Sessions.Make(t.Context(), root, map[string]any{"a": map[string]any{}, "b": map[string]any{}}, map[string]string{"a": "free", "b": "taken"}, expr.Read{}),
+		problems.SessionNameTaken)
+	if got, err := c.RunSessions(t.Context(), root); err != nil || len(got) != 0 {
+		t.Errorf("the run's sessions, once one's name was taken, are %+v, %v", got, err)
+	}
+}
+
+// TestSessionsServedPastOneUnopened checks that a session its process
+// can't open, as one whose sealed data is damaged, keeps none of the
+// others from being served: its host serves the others, as they change,
+// and stops serving it.
+func TestSessionsServedPastOneUnopened(t *testing.T) {
+	parallel(t)
+	h := &testHost{}
+	c := open(t, Options{SessionHost: h})
+	serveSessions(t, c)
+	root, _ := create(t, c, plainWorkflow, nil, nil)
+	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"good": map[string]any{}, "bad": map[string]any{}}, map[string]string{"good": "good-1", "bad": "bad-1"}, expr.Read{Private: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"good-1", "bad-1"} {
+		if err := c.opts.Sessions.Update(t.Context(), compile.SessionUpdate{Root: root, Name: name, With: map[string]any{"remotePort": float64(1)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool { return len(h.lastServed()) == 2 })
+	byName := map[string]Session{}
+	for _, s := range h.lastServed() {
+		byName[s.Name] = s
+	}
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		bad, err := tx.Session(byName["bad-1"].ID)
+		if err != nil {
+			return err
+		}
+		return tx.PointSession(bad.ID, nil, []byte("damaged"), bad.Generation+1, bad.Port, false)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResetSession(t.Context(), byName["good-1"].ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		live := h.lastServed()
+		return len(live) == 1 && live[0].Name == "good-1" && string(live[0].Salt) != string(byName["good-1"].Salt)
+	})
+}
+
+// TestSessionServed checks what a session's host records of how it serves
+// it: the port it serves it at, or why it can't, which leaves the port as
+// it was, and which any process shows, until a step points the session
+// again.
+func TestSessionServed(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{SessionHost: &testHost{}})
+	root, _ := create(t, c, plainWorkflow, nil, nil)
+	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); err != nil {
+		t.Fatal(err)
+	}
+	update := func() {
+		t.Helper()
+		if err := c.opts.Sessions.Update(t.Context(), compile.SessionUpdate{Root: root, Name: "desktop-1", With: map[string]any{"remotePort": float64(1)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update()
+	ro := open(t, Options{Database: c.opts.Database, ReadOnly: true})
+	shown := func() Session {
+		t.Helper()
+		got, err := ro.RunSessions(t.Context(), root)
+		if err != nil || len(got) != 1 {
+			t.Fatal(got, err)
+		}
+		return got[0]
+	}
+	id := shown().ID
+	if err := c.SessionServed(t.Context(), id, 31000, nil); err != nil {
+		t.Fatal(err)
+	}
+	if s := shown(); s.Port != 31000 || s.Problem != nil {
+		t.Errorf("served at another port, the session shows %+v", s)
+	}
+	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "31000"})
+	if err := c.SessionServed(t.Context(), id, 0, taken); err != nil {
+		t.Fatal(err)
+	}
+	if s := shown(); s.Port != 31000 || s.Problem == nil || s.Problem.Code != problems.SessionLocalPortTaken.Code() {
+		t.Errorf("unserved, the session shows %+v", s)
+	}
+	update()
+	if s := shown(); s.Problem != nil {
+		t.Errorf("pointed again, the session shows the problem %+v", s.Problem)
+	}
+	if err := ro.SessionServed(t.Context(), id, 1, nil); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("SessionServed read only = %v", err)
 	}
 }

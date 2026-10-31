@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/parallelworks/meridian/plan"
+	"github.com/parallelworks/meridian/problems"
 )
 
 // testSession returns a session of the run run, whose root is root, under
@@ -142,6 +143,17 @@ func TestSessionCodes(t *testing.T) {
 		}
 		if err := tx.AddSessionCode("nothing", []byte("x"), later); !errors.Is(err, ErrNotFound) {
 			t.Errorf("a code of a session the store hasn't = %v", err)
+		}
+		return nil
+	})
+	// The next code added deletes those expired, of any session's.
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.AddSessionCode("b", []byte("next"), time.Hour); err != nil {
+			return err
+		}
+		var expired int
+		if err := tx.queryRow("SELECT count(*) FROM meridian_session_codes WHERE mac = ?", []byte("expired")).Scan(&expired); err != nil || expired != 0 {
+			t.Errorf("%d expired codes are kept once another is added, %v", expired, err)
 		}
 		return nil
 	})
@@ -345,4 +357,67 @@ func TestServeSession(t *testing.T) {
 	if _, err := ro.ServeSession(t.Context(), "c", []byte("x")); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("ServeSession read only = %v, want ErrReadOnly", err)
 	}
+}
+
+// TestSessionServed checks what the store keeps of how a session's process
+// serves it: the port, or why it can't, which leaves the port as it was,
+// masked for a session whose data is sealed, and which a step that points
+// it again clears; never of a session that has ended.
+func TestSessionServed(t *testing.T) {
+	t.Parallel()
+	s := open(t)
+	root := createRun(t, s)
+	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "7000"})
+	inTx(t, s, func(tx *Tx) error {
+		for _, id := range []string{"a", "b"} {
+			if _, err := tx.MakeSession(testSession(id, root, root, id, id+"-1")); err != nil {
+				return err
+			}
+		}
+		if err := tx.PointSession("a", []byte(`{}`), nil, 0, 7000, true); err != nil {
+			return err
+		}
+		if err := tx.PointSession("b", nil, []byte("sealed"), 1, 7001, true); err != nil {
+			return err
+		}
+		if err := tx.SessionServed("a", 0, taken); err != nil {
+			return err
+		}
+		if err := tx.SessionServed("b", 0, taken); err != nil {
+			return err
+		}
+		a, _ := tx.Session("a")
+		if a.Port != 7000 || a.Problem == nil || a.Problem.Code != problems.SessionLocalPortTaken.Code() || a.Problem.Params["port"] != "7000" {
+			t.Errorf("a session that can't be served is %+v, its problem %+v", a, a.Problem)
+		}
+		b, _ := tx.Session("b")
+		if b.Problem == nil || b.Problem.Code != problems.SessionLocalPortTaken.Code() || b.Problem.Params["port"] == "7000" {
+			t.Errorf("a sealed session that can't be served has the problem %+v", b.Problem)
+		}
+		if err := tx.SessionServed("a", 7002, nil); err != nil {
+			return err
+		}
+		a, _ = tx.Session("a")
+		if a.Port != 7002 || a.Problem != nil {
+			t.Errorf("a session served at another port is %+v", a)
+		}
+		if err := tx.PointSession("b", nil, []byte("sealed again"), 2, 7001, true); err != nil {
+			return err
+		}
+		b, _ = tx.Session("b")
+		if b.Problem != nil {
+			t.Errorf("a session pointed again has the problem %+v", b.Problem)
+		}
+		if err := tx.SessionServed("nothing", 1, nil); !errors.Is(err, ErrNotFound) {
+			t.Errorf("SessionServed of a session the store hasn't = %v", err)
+		}
+		return tx.EndRun(root, plan.OutcomeSuccess, "")
+	})
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.SessionServed("a", 1, nil); !errors.Is(err, ErrState) {
+			t.Errorf("SessionServed of an ended session = %v, want ErrState", err)
+		}
+		return nil
+	})
+	checkIntegrity(t, s)
 }
