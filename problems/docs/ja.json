@@ -2728,6 +2728,29 @@
       "同じマシンから同じユーザーで ssh -R <path>:/dev/null <host> true を実行し、そこにソケットを転送できるか確かめてください。"
     ]
   },
+  "ssh_tcp_forwarding_refused": {
+    "title": "Meridian のためにアドレスへ接続しないホスト",
+    "why": "Meridian は ssh -L や ssh -W と同じように、ホストを通じてアドレスに到達します。ホストとの SSH 接続を通じて、ホストの sshd にそのアドレスへ接続するよう求め、その接続を運びます (direct-tcpip)。Meridian はホスト上でポートを開きません。sshd は拒否しました。sshd_config の AllowTcpForwarding no や remote、DisableForwarding yes のようにクライアントのための TCP 接続を転送しないか、そこにある PermitOpen がそのアドレスを許可していないか、Meridian がログインに使う鍵に authorized_keys で no-port-forwarding や restrict が付いています。",
+    "fix": [
+      "ホストの管理者に、そのアドレスへの TCP 接続の転送を許可するよう依頼してください。sshd_config の AllowTcpForwarding yes または local と、PermitOpen が設定されている場合はそのアドレスを許可する PermitOpen です。",
+      "同じマシンから同じユーザーで ssh -W <address> <host> を実行し、接続できるか確かめてください。"
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "title": "Meridian のためにアドレスへ接続できなかったホスト",
+    "why": "Meridian は ssh -L や ssh -W と同じように、ホストを通じてアドレスに到達します。ホストとの SSH 接続を通じて、ホストの sshd にそのアドレスへ接続するよう求めます (direct-tcpip)。sshd は試みましたが、接続できませんでした。そのアドレスで何も待ち受けていないか、その名前がホスト上で解決できないか、ホストがそこに到達できないか、sshd が今は新しい接続を開けません。メッセージは sshd が言ったことを示します。",
+    "fix": [
+      "そのアドレスで待ち受けるはずのものが動いていて、ホストから見て、ワークフローが与えたアドレスとポートで待ち受けているか確かめてください。",
+      "同じマシンから同じユーザーで ssh -W <address> <host> を実行し、接続できるか確かめてください。"
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "title": "Meridian がホストに接続を求めないアドレス",
+    "why": "Meridian は、ホストの sshd にアドレスへ接続するよう求めて、ホストを通じてそのアドレスに到達します (ssh -L と同じ direct-tcpip)。アドレスはセッションの remoteHost と remotePort のようにワークフローから来るため、Meridian はホストがアドレス以上のものとして読み取れない形でだけ接続を求めます。英字、数字、-、_、ドットからなり - で始まらないホストの名前か、角かっこのない IPv4 または IPv6 アドレスと、1 から 65535 までのポートです。メッセージは値の制御文字を \\n のようにエスケープして示します。",
+    "fix": [
+      "ワークフローが想定するとおり、ポートや角かっこを付けずにホストの名前かアドレスだけを与え、ポートは 1 から 65535 までの数で与えてください。"
+    ]
+  },
   "ssh_host_release_mismatch": {
     "title": "別のリリースの meridian host",
     "why": "Meridian は自分のバイナリをホストにコピーし、そこで meridian host を操作します。meridian host は、コピーしたバイナリと同じくコーディネーターのリリースでなければなりません。meridian host は別のリリースだと答えました。ホストのバイナリキャッシュにあるバイナリが Meridian のコピーしたものではないか、ホストのシステム向けに取得したバイナリが別のリリースです。",

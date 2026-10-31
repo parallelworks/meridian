@@ -2728,6 +2728,29 @@
       "같은 머신에서 같은 사용자로 ssh -R <path>:/dev/null <host> true를 실행해, 그곳에 소켓을 전달할 수 있는지 확인하세요."
     ]
   },
+  "ssh_tcp_forwarding_refused": {
+    "title": "Meridian을 위해 주소에 연결하지 않는 호스트",
+    "why": "Meridian은 ssh -L과 ssh -W처럼 호스트를 거쳐 주소에 닿습니다. 호스트와의 SSH 연결로 호스트의 sshd에 그 주소에 연결하라고 요청하고, 그 연결을 실어 나릅니다(direct-tcpip). Meridian은 호스트에서 포트를 열지 않습니다. sshd가 거부했습니다. sshd_config의 AllowTcpForwarding no나 remote, DisableForwarding yes처럼 클라이언트를 위한 TCP 연결을 전달하지 않거나, 그곳의 PermitOpen이 그 주소를 허용하지 않거나, Meridian이 로그인하는 키에 authorized_keys의 no-port-forwarding이나 restrict가 붙어 있습니다.",
+    "fix": [
+      "호스트 관리자에게 그 주소로의 TCP 연결 전달을 허용해 달라고 요청하세요. sshd_config의 AllowTcpForwarding yes 또는 local과, PermitOpen이 설정되어 있다면 그 주소를 허용하는 PermitOpen입니다.",
+      "같은 머신에서 같은 사용자로 ssh -W <address> <host>를 실행해, 연결되는지 확인하세요."
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "title": "Meridian을 위해 주소에 연결하지 못한 호스트",
+    "why": "Meridian은 ssh -L과 ssh -W처럼 호스트를 거쳐 주소에 닿습니다. 호스트와의 SSH 연결로 호스트의 sshd에 그 주소에 연결하라고 요청합니다(direct-tcpip). sshd가 시도했지만 연결하지 못했습니다. 그 주소에서 아무것도 듣고 있지 않거나, 그 이름이 호스트에서 확인되지 않거나, 호스트가 그곳에 닿을 수 없거나, sshd가 지금은 연결을 더 열 수 없습니다. 메시지는 sshd가 말한 것을 보여 줍니다.",
+    "fix": [
+      "그 주소에서 들어야 할 것이 실행 중이고, 호스트에서 보기에 워크플로가 준 주소와 포트에서 듣고 있는지 확인하세요.",
+      "같은 머신에서 같은 사용자로 ssh -W <address> <host>를 실행해, 연결되는지 확인하세요."
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "title": "Meridian이 호스트에 연결을 요청하지 않는 주소",
+    "why": "Meridian은 호스트의 sshd에 주소에 연결하라고 요청해 호스트를 거쳐 그 주소에 닿습니다(ssh -L과 같은 direct-tcpip). 주소는 세션의 remoteHost와 remotePort처럼 워크플로에서 오므로, Meridian은 호스트가 주소 이상으로 읽을 수 없는 형태로만 연결을 요청합니다. 영문자, 숫자, -, _, 점으로 이루어지고 -로 시작하지 않는 호스트 이름이나 대괄호 없는 IPv4 또는 IPv6 주소와, 1부터 65535까지의 포트입니다. 메시지는 값의 제어 문자를 \\n처럼 이스케이프해 보여 줍니다.",
+    "fix": [
+      "워크플로가 기대하는 대로 포트나 대괄호 없이 호스트의 이름이나 주소만 주고, 포트는 1부터 65535까지의 수로 주세요."
+    ]
+  },
   "ssh_host_release_mismatch": {
     "title": "다른 릴리스의 meridian host",
     "why": "Meridian은 자기 바이너리를 호스트에 복사하고 그곳에서 meridian host를 구동하는데, meridian host는 복사한 바이너리처럼 코디네이터의 릴리스여야 합니다. meridian host가 다른 릴리스라고 답했습니다. 호스트의 바이너리 캐시에 있는 바이너리가 Meridian이 복사한 것이 아니거나, 호스트의 시스템용으로 가져온 바이너리가 다른 릴리스입니다.",
