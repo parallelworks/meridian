@@ -1585,10 +1585,26 @@
   },
   "source_on_platform": {
     "title": "平台存储的工作流",
-    "why": "以 marketplace/ 或 workflow/ 开头的 uses: 指定的是由 ACTIVATE 等平台保存的工作流。Meridian 本身从 Git 仓库读取工作流。",
+    "why": "以 marketplace/ 或 workflow/ 开头的 uses: 指定的是由 ACTIVATE 等平台保存的工作流。Meridian 本身从 Git 仓库读取工作流，只有通过你的映射才会读取平台存储的工作流：sources.yaml 的 workflows 把这样的 uses: 映射到 Git 仓库中的工作流，然后像 github/ 或 gitlab/ 的 uses: 一样读取并固定它。",
     "fix": [
-      "在存储所用工作流的平台上运行该工作流。",
-      "或者通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>@<修订>，并在 with: $yaml 中指定其文件。"
+      "在 sources.yaml 的 workflows 中，以 uses: 为键，把该工作流映射到 Git 中的工作流，例如 marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}。",
+      "或者在 uses: 本身中通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>@<修订>，并在 with: $yaml 中指定其文件。"
+    ]
+  },
+  "source_version_invalid": {
+    "title": "映射无法使用的市场工作流版本",
+    "why": "在 sources.yaml 的 workflows 中，键 marketplace/<slug>/{version} 映射市场工作流某个 slug 的每个版本：其 yaml 中以及其 uses 的 @ 之后的 {version} 代表 uses: 所指定的版本。版本是工作流自身的文本，因此在 Git 读取任何内容之前，它只能由字母、数字、.、_、+ 和 - 组成，不能以 . 或 - 开头，最多 255 字节，而且由它得出的修订和文件必须是 uses: 能指定的，这样它既不能指向仓库外的文件，也不会被当作选项读取。",
+    "fix": [
+      "指定映射能使用的版本，例如 v1.2。",
+      "或者在 sources.yaml 的 workflows 中用该版本自己的键 marketplace/<slug>/<版本> 映射它。"
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "未映射的市场工作流最新版本",
+    "why": "marketplace/<slug> 或 marketplace/<slug>/latest 形式的 uses: 指定的是该项目的最新版本，由其平台决定。sources.yaml 中某个 slug 的映射 marketplace/<slug>/{version} 无法知道它是哪个版本，因此 Meridian 只通过最新版本自己的键 marketplace/<slug>/latest 来映射它：这是你选择的工作流，而不是该项目的最高版本。",
+    "fix": [
+      "把消息中指出的键 marketplace/<slug>/latest 添加到 sources.yaml 的 workflows 中，映射到你认为是最新的工作流。",
+      "或者在 uses: 中指定版本，例如 marketplace/<slug>/<版本>。"
     ]
   },
   "source_revision_not_found": {
@@ -1869,7 +1885,7 @@
   },
   "cluster_name_invalid": {
     "title": "无效的集群名",
-    "why": "集群的名称是 compute-clusters 输入的值所指定的。workspace 和 user-workspace 指本机，与格式 1 指代 workspace 的方式相同。",
+    "why": "集群的名称是 compute-clusters 输入的值所指定的。workspace 和 user-workspace 指本机，与格式 1 指代 workspace 的方式相同。集群的名称也是它的 id，会话的目标会读取它，而格式 1 也把目标 localhost 读作 workspace。",
     "fix": [
       "重命名该集群。"
     ]
@@ -1880,6 +1896,27 @@
     "fix": [
       "按其键的要求更正该值。",
       "对需要更多设置的主机，如端口、登录用户、跳板主机或 IPv6 地址，请指定你的 ssh_config 中定义的别名。"
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "映射的不是平台存储的工作流",
+    "why": "sources.yaml 的 workflows 中的每个键都是一个指定平台存储的工作流的 uses:：marketplace/<slug>/<版本> 指定市场工作流的一个版本；marketplace/<slug>/{version} 指定其 slug 中没有自己的键映射的每个版本；workflow/<名称> 指定已保存的工作流。版本模板是整个版本，键的其他部分不能含有花括号。",
+    "fix": [
+      "按 uses: 的写法写键，例如 marketplace/tools/v1.2、marketplace/tools/{version} 或 workflow/nightly。"
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "同一工作流的两个映射",
+    "why": "按格式 1 读取 uses: 的方式，sources.yaml 的 workflows 中有两个键指定同一个工作流：marketplace/<slug>@<版本> 与 marketplace/<slug>/<版本> 是同一个，marketplace/<slug> 与 marketplace/<slug>/latest 也是同一个。运行会读取其中哪个映射并不明确。",
+    "fix": [
+      "只保留其中一个。"
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "映射到的不是 Git 中的工作流",
+    "why": "sources.yaml 的 workflows 中的每个映射都像步骤的 uses: 那样指定 Git 仓库中的工作流：uses 写作 github/<所有者>/<仓库>[@<修订>] 或 gitlab/<组>/<项目>[@<修订>]；yaml 是其文件，未指定其他文件时为 workflow.yaml；host 是 GitLab 项目的服务器，必须在 gitlab-servers 中注册。Git 像对待任何 uses: 一样用你的凭据访问它，因此它不能指定平台存储的另一个工作流，也不能是 URL。只有 slug 的键 marketplace/<slug>/{version} 才能在映射中以 {version} 写出版本，写在其 yaml 中和其 uses 的 @ 之后。",
+    "fix": [
+      "按步骤指定 Git 中工作流的方式写映射，例如 {uses: github/acme/flows@main, yaml: flows/tools.yaml}。"
     ]
   },
   "key_file_invalid": {
@@ -2690,6 +2727,29 @@
     "fix": [
       "请主机的管理员允许转发 Unix 套接字：在 sshd_config 中设置 AllowStreamLocalForwarding yes 或 all。",
       "在同一台机器上以同一用户运行 ssh -R <path>:/dev/null <host> true，确认能把套接字转发到那里。"
+    ]
+  },
+  "ssh_tcp_forwarding_refused": {
+    "title": "不为 Meridian 连接某个地址的主机",
+    "why": "Meridian 像 ssh -L 和 ssh -W 那样通过主机到达一个地址：通过它与主机的 SSH 连接，请主机的 sshd 连接该地址，并承载这条连接（direct-tcpip）。Meridian 不在主机上开放端口。sshd 拒绝了：它不为客户端转发 TCP 连接，例如 sshd_config 中设置了 AllowTcpForwarding no 或 remote，或 DisableForwarding yes；那里的 PermitOpen 不允许该地址；或者 Meridian 登录所用的密钥在 authorized_keys 中带有 no-port-forwarding 或 restrict。",
+    "fix": [
+      "请主机的管理员允许转发到该地址的 TCP 连接：在 sshd_config 中设置 AllowTcpForwarding yes 或 local，如果设置了 PermitOpen，则让它允许该地址。",
+      "在同一台机器上以同一用户运行 ssh -W <address> <host>，确认能够连接。"
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "title": "无法为 Meridian 连接某个地址的主机",
+    "why": "Meridian 像 ssh -L 和 ssh -W 那样通过主机到达一个地址：通过它与主机的 SSH 连接，请主机的 sshd 连接该地址（direct-tcpip）。sshd 尝试了但没能连上：该地址上没有任何程序在监听，该名称在主机上无法解析，主机无法到达它，或者 sshd 现在无法再打开连接。消息会显示 sshd 所说的内容。",
+    "fix": [
+      "确认本应在该地址监听的程序正在运行，并且从主机看来，它在工作流给出的地址和端口上监听。",
+      "在同一台机器上以同一用户运行 ssh -W <address> <host>，确认能够连接。"
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "title": "Meridian 不会让主机连接的地址",
+    "why": "Meridian 通过请主机的 sshd 连接一个地址来经由主机到达它（direct-tcpip，与 ssh -L 相同）。地址来自工作流，例如会话的 remoteHost 和 remotePort，因此 Meridian 只以主机无法读成不只是地址的形式请求连接：由字母、数字、-、_ 和点组成且不以 - 开头的主机名称，或不带方括号的 IPv4 或 IPv6 地址；以及 1 到 65535 之间的端口。消息会把值中的控制字符转义显示，例如 \\n。",
+    "fix": [
+      "按工作流的预期，只给出主机的名称或地址，不带端口或方括号，并以 1 到 65535 之间的数字给出端口。"
     ]
   },
   "ssh_host_release_mismatch": {

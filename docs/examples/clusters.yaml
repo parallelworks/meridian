@@ -13,9 +13,10 @@
 #   scheduler  optional: slurm or pbs, which a workflow reads as the
 #              cluster's schedulerType; without it, "".
 #
-# An input that names hpc sees name hpc, ip hpc-login, schedulerType slurm,
-# and type and provider existing. The name workspace needs no entry: it is
-# this machine.
+# An input that names hpc sees name and id hpc, ip hpc-login, schedulerType
+# slurm, and type and provider existing. The name workspace needs no entry:
+# it is this machine, and no cluster can be named workspace, user-workspace
+# or localhost.
 
 hpc:
   host: hpc-login

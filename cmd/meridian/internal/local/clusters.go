@@ -41,6 +41,12 @@ const (
 	workspaceShortName = "workspace"
 )
 
+// localhostName is the name no cluster can have besides the workspace's:
+// a cluster's name is its id (cluster.value), and format 1's
+// update-session reads the target localhost as the workspace, as it reads
+// user-workspace.
+const localhostName = "localhost"
+
 // loadClusters reads the clusters file at path: each cluster by its name,
 // with its host, and its scheduler, if it gives one. Other users may read
 // it, as they may the groups file, which names hosts too, but not change
@@ -61,7 +67,7 @@ func (c *Config) loadClusters(path string) error {
 	}
 	for _, p := range clusters {
 		name := p.key.Value
-		if !groupNamePattern.MatchString(name) || name == workspaceName || name == workspaceShortName {
+		if !groupNamePattern.MatchString(name) || name == workspaceName || name == workspaceShortName || name == localhostName {
 			return f.problem(problems.ClusterNameInvalid, p.key, problems.Params{"cluster": name})
 		}
 		cl, err := f.cluster(name, p.key, p.value)
@@ -162,18 +168,21 @@ func (c *Config) resolveCluster(name string) (any, error) {
 
 // value returns the details of the cluster named name, as format 1 gives
 // an existing cluster's, for what a cluster of the clusters file can know
-// of them: its name; its host as its ip, which a job's ssh: reads as its
-// remoteHost; its scheduler as its schedulerType, "" for none, as format 1
-// writes a cluster's that has none; and existing as its type and its
-// provider, as format 1 names a cluster that a platform reaches but didn't
-// make. What names a platform's own record of it, its id and its pw:// uri,
-// and its owner's platform account, its user and its namespace, it has none
-// of, and leaves out.
+// of them: its name, which is also its id, as the workspace's is, and
+// which a session's target reads (parallelworks/update-session's target:
+// ${{ inputs.<cluster>.id }}); its host as its ip, which a job's ssh: reads
+// as its remoteHost; its scheduler as its schedulerType, "" for none, as
+// format 1 writes a cluster's that has none; and existing as its type and
+// its provider, as format 1 names a cluster that a platform reaches but
+// didn't make. What names a platform's own record of it, its pw:// uri, and
+// its owner's platform account, its user and its namespace, it has none of,
+// and leaves out.
 func (cl cluster) value(name string) map[string]any {
 	return map[string]any{
 		"$type":         "computeResource",
 		"type":          "existing",
 		"provider":      "existing",
+		"id":            name,
 		"name":          name,
 		"ip":            cl.host,
 		"schedulerType": cl.scheduler,

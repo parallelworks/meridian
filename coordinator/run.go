@@ -24,6 +24,7 @@ import (
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // The coordinator's Keys are the seal package's.
@@ -76,6 +77,12 @@ type Options struct {
 	Variables compile.Variables
 	Inputs    compile.InputResolver
 	Sessions  compile.Sessions
+	// Env are the variables a platform gives every job's steps, by name,
+	// as format 1's PW_USER, which each claim gives the worker
+	// (workerapi.Claim.Env), in every run the coordinator works, whoever
+	// created it. The coordinator doesn't change them. Nil means none, as
+	// without a platform.
+	Env map[string]workerapi.EnvVar
 	// Groups gives the execution groups jobs run in. CreateRun checks a
 	// run's default group with it. Nil means it isn't checked, and that no
 	// job can be placed.

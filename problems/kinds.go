@@ -152,8 +152,14 @@ var (
 	SourceRefInvalid = define(Error, "source_ref_invalid", "Not a reference to a workflow in Git", "ref")
 	// SourceWithInvalid is a step's with: $yaml or $host, key, that isn't a
 	// file's path or a server's name: what is server or file.
-	SourceWithInvalid      = define(Error, "source_with_invalid", "Workflow's server or file not one a uses: can name", "key", "what")
-	SourceOnPlatform       = define(Error, "source_on_platform", "Workflow a platform stores", "ref")
+	SourceWithInvalid = define(Error, "source_with_invalid", "Workflow's server or file not one a uses: can name", "key", "what")
+	SourceOnPlatform  = define(Error, "source_on_platform", "Workflow a platform stores", "ref")
+	// SourceVersionInvalid is a marketplace workflow's version, as a uses:
+	// names it, that its slug's mapping in sources.yaml can't take; and
+	// SourceLatestNotMapped one that names the latest, which only a mapping
+	// of its own maps, whose key is key.
+	SourceVersionInvalid   = define(Error, "source_version_invalid", "Marketplace workflow's version a mapping can't take", "ref", "version")
+	SourceLatestNotMapped  = define(Error, "source_latest_not_mapped", "Marketplace workflow's latest version not mapped", "ref", "key")
 	SourceRevisionNotFound = define(Error, "source_revision_not_found", "No such repository or revision", "repo", "revision", "reason")
 	SourceFileNotFound     = define(Error, "source_file_not_found", "No such workflow file in the repository", "repo", "path", "commit")
 	SourceTooLarge         = define(Error, "source_too_large", "Workflow file in a repository too large", "location", "commit", "limit")
@@ -623,6 +629,13 @@ var (
 	// path is the socket on the host that the coordinator asked sshd to
 	// listen on for the host's workers.
 	SSHForwardingRefused = define(Error, "ssh_forwarding_refused", "Host that won't forward a socket to the coordinator", "host", "path")
+	// address is what the host was asked to connect to, as host:port, and
+	// reason what the host said of why it couldn't; value and port a host
+	// and a port, as they were given, which Meridian asks no host to
+	// connect to.
+	SSHTCPForwardingRefused = define(Error, "ssh_tcp_forwarding_refused", "Host that won't connect to an address for Meridian", "host", "address")
+	SSHTCPConnectFailed     = define(Error, "ssh_tcp_connect_failed", "Host that couldn't connect to an address for Meridian", "host", "address", "reason")
+	SSHTCPAddressInvalid    = define(Error, "ssh_tcp_address_invalid", "Address Meridian doesn't ask a host to connect to", "value", "port")
 )
 
 // The meridian command's directories. mode is a file's or directory's
@@ -692,6 +705,16 @@ var (
 	VariableFileHome       = defineCommand("variable_file_home", "Variable's file in an unknown home directory", "variable", "file")
 	ClusterNameInvalid     = defineCommand("cluster_name_invalid", "Invalid cluster name", "cluster")
 	ClusterInvalid         = defineCommand("cluster_invalid", "Invalid cluster", "cluster", "key", "value")
+	// A mapping of sources.yaml's workflows: key is its key, as it is
+	// written; first the key of an earlier one that names the same
+	// workflow, and first_line its line; and what is what of the workflow
+	// in Git it maps to isn't one a step's uses: can name: uses, yaml or
+	// host, server for a GitLab server gitlab-servers doesn't register,
+	// platform for another workflow a platform stores, or template for a
+	// version template where none can be.
+	WorkflowMappingKeyInvalid = defineCommand("workflow_mapping_key_invalid", "Mapping of something other than a workflow a platform stores", "key")
+	WorkflowMappingRepeated   = defineCommand("workflow_mapping_repeated", "Two mappings of one workflow", "key", "first", "first_line")
+	WorkflowMappingInvalid    = defineCommand("workflow_mapping_invalid", "Mapping to something other than a workflow in Git", "key", "what")
 )
 
 // The key that wraps runs' data keys, and git, which reads the workflows

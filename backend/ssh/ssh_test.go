@@ -120,17 +120,20 @@ func build(dir string) {
 
 // A rig is a host, the test's own machine through a test SSH server, whose
 // home is a directory of the test's, and a Driver that reaches it as the
-// member m.
+// member m, as the user whose home is client, with the key key.
 type rig struct {
 	t      *testing.T
 	home   string
 	server *sshtest.Server
 	d      *Driver
 	m      *backend.Member
+	client string
+	key    ssh.PublicKey
 }
 
 // newRig starts a host, and a Driver that reaches it, whose connections
-// find a host that stopped answering within a second and a half.
+// find a host that stopped answering within a second and a half, and which
+// puts meridian, built from this tree, on it.
 func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	t.Helper()
 	built.once.Do(func() { build(buildDir) })
@@ -140,6 +143,15 @@ func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	case built.err != nil:
 		t.Fatal(built.err)
 	}
+	r := connectRig(t, with...)
+	r.d.Binaries = &hostbin.Binaries{Version: built.version, Dir: built.dir, Self: func() (string, string, error) { return built.path, built.digest, nil }}
+	return r
+}
+
+// connectRig is newRig for a test that only connects to the host, whose
+// Driver has no binaries to put there.
+func connectRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
+	t.Helper()
 	r := &rig{t: t, home: t.TempDir()}
 	// The user's runtime directory, short enough for the host's sockets.
 	runtimeDir, err := os.MkdirTemp("", "msh")
@@ -148,10 +160,12 @@ func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
 	client := t.TempDir()
+	r.client = client
 	if err := os.Mkdir(filepath.Join(client, ".ssh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	keyFile, signer := sshtest.NewKeyFile(t)
+	r.key = signer.PublicKey()
 	write(t, filepath.Join(client, ".ssh", "id_ecdsa"), keyFile)
 	opts := sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: []string{
 		"HOME=" + r.home, "XDG_RUNTIME_DIR=" + runtimeDir,
@@ -171,11 +185,7 @@ func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	t.Cleanup(func() { _ = pool.Close() })
 	key := make([]byte, MinKeyLen)
 	_, _ = rand.Read(key)
-	r.d = &Driver{
-		Pool:     pool,
-		Binaries: &hostbin.Binaries{Version: built.version, Dir: built.dir, Self: func() (string, string, error) { return built.path, built.digest, nil }},
-		Store:    "teststore", Key: key,
-	}
+	r.d = &Driver{Pool: pool, Store: "teststore", Key: key}
 	r.m = member(t, "ssh", map[string]any{"remoteHost": r.server.Addr()})
 	return r
 }

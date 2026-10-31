@@ -142,7 +142,7 @@ func TestSourcesTree(t *testing.T) {
 func TestSourcesTreeFetches(t *testing.T) {
 	const repo = "https://example.com/acme/app.git"
 	s, o, commit := treeOrigin(t, repo)
-	fresh := NewSources(t.TempDir(), nil)
+	fresh := NewSources(t.TempDir(), nil, nil)
 	fresh.repoURL, fresh.protocols = s.repoURL, s.protocols
 	var buf bytes.Buffer
 	if err := fresh.WriteTree(t.Context(), repo, commit, []string{"README.md"}, &buf); err != nil {
@@ -158,7 +158,7 @@ func TestSourcesTreeFetches(t *testing.T) {
 	if _, err := s.SurveyTree(t.Context(), repo, commit, nil); err != nil {
 		t.Errorf("a commit the copy holds wasn't read without the repository: %v", err)
 	}
-	gone := NewSources(t.TempDir(), nil)
+	gone := NewSources(t.TempDir(), nil, nil)
 	gone.repoURL, gone.protocols = s.repoURL, s.protocols
 	if _, err := gone.SurveyTree(t.Context(), repo, commit, nil); err == nil {
 		t.Error("a commit neither the copy nor the repository holds was read")
@@ -169,7 +169,7 @@ func TestSourcesTreeFetches(t *testing.T) {
 // repository Pin refuses, a commit that isn't one's name in full, and a
 // path that isn't a literal one, before they run git.
 func TestSourcesTreeRefuses(t *testing.T) {
-	s := NewSources(t.TempDir(), nil)
+	s := NewSources(t.TempDir(), nil, nil)
 	s.git = filepath.Join(t.TempDir(), "no-git")
 	const commit = "0123456789abcdef0123456789abcdef01234567"
 	_, err := s.SurveyTree(t.Context(), "file:///srv/app.git", commit, nil)

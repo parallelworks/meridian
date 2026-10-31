@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -324,6 +325,33 @@ func TestRunEnds(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(state, local.SocketFile)); err == nil {
 		t.Error("the coordinator's socket is there once meridian run has exited")
+	}
+}
+
+// TestRunPWUser checks that a step sees PW_USER, format 1's name of the
+// person who runs the workflow, as the login name of the user who runs
+// meridian, in its environment and in the env context, over a PW_USER the
+// workflow gives, as format 1 sets it over the workflow's.
+func TestRunPWUser(t *testing.T) {
+	parallel(t)
+	u, err := user.Current()
+	if err != nil || u.Username == "" {
+		t.Skipf("no login name to give: %v", err)
+	}
+	env := runEnv(t)
+	workflow := writeFile(t, "w.yaml", `
+env:
+  PW_USER: from-the-workflow
+jobs:
+  main:
+    steps:
+      - run: echo "process=$PW_USER context=${{ env.PW_USER }}"
+`)
+	if r := runTest(t, env, nil, workflow); r.code != exitOK {
+		t.Fatalf("meridian run = %+v", r)
+	}
+	if got, want := stepLog(t, env, "1"), "process="+u.Username+" context="+u.Username+"\n"; got != want {
+		t.Errorf("the step's log is %q, want %q", got, want)
 	}
 }
 

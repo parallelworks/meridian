@@ -1585,10 +1585,26 @@
   },
   "source_on_platform": {
     "title": "플랫폼이 저장한 워크플로",
-    "why": "marketplace/나 workflow/로 시작하는 uses:는 ACTIVATE 같은 플랫폼이 보관하는 워크플로를 가리킵니다. Meridian 단독으로는 Git 저장소에서 워크플로를 읽습니다.",
+    "why": "marketplace/나 workflow/로 시작하는 uses:는 ACTIVATE 같은 플랫폼이 보관하는 워크플로를 가리킵니다. Meridian 단독으로는 Git 저장소에서 워크플로를 읽으며, 플랫폼이 저장한 워크플로는 사용자가 매핑한 경우에만 읽습니다. sources.yaml의 workflows가 그런 uses:를 Git 저장소의 워크플로에 매핑하면, 그 워크플로를 github/나 gitlab/ uses:처럼 읽고 고정합니다.",
     "fix": [
-      "사용하는 워크플로를 저장한 플랫폼에서 워크플로를 실행하세요.",
-      "또는 github/<소유자>/<저장소>@<리비전>처럼 Git 저장소로 워크플로를 지정하고, 파일은 with: $yaml로 지정하세요."
+      "sources.yaml의 workflows에서 uses:를 키로 하여 워크플로를 Git의 워크플로에 매핑하세요. 예: marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}",
+      "또는 uses: 자체에서 github/<소유자>/<저장소>@<리비전>처럼 Git 저장소로 워크플로를 지정하고, 파일은 with: $yaml로 지정하세요."
+    ]
+  },
+  "source_version_invalid": {
+    "title": "매핑이 받을 수 없는 마켓플레이스 워크플로 버전",
+    "why": "sources.yaml의 workflows에서 키 marketplace/<slug>/{version}은 마켓플레이스 워크플로 슬러그의 모든 버전을 매핑합니다. yaml 안과 uses의 @ 뒤에 있는 {version}은 uses:가 지정하는 버전을 나타냅니다. 버전은 워크플로 자체의 텍스트이므로, Git이 무엇이든 읽기 전에 문자, 숫자, ., _, +, -로만 이루어지고 .이나 -로 시작하지 않아야 하며, 255바이트 이하여야 하고, 그로부터 나오는 리비전과 파일은 uses:가 지정할 수 있는 것이어야 합니다. 그래야 저장소 밖의 파일을 가리키거나 옵션으로 읽히지 않습니다.",
+    "fix": [
+      "v1.2처럼 매핑이 받을 수 있는 버전을 지정하세요.",
+      "또는 그 버전을 자체 키 marketplace/<slug>/<버전>으로 sources.yaml의 workflows에 매핑하세요."
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "매핑되지 않은 마켓플레이스 워크플로의 최신 버전",
+    "why": "marketplace/<slug>나 marketplace/<slug>/latest인 uses:는 플랫폼이 정하는 항목의 최신 버전을 가리킵니다. sources.yaml에 있는 슬러그의 매핑 marketplace/<slug>/{version}은 그것이 어느 버전인지 알 수 없으므로, Meridian은 최신 버전을 자체 키 marketplace/<slug>/latest로만 매핑합니다. 이는 사용자가 고른 워크플로이며, 항목의 가장 높은 버전이 아닙니다.",
+    "fix": [
+      "메시지가 가리키는 키 marketplace/<slug>/latest를 sources.yaml의 workflows에 추가하고, 최신으로 여기는 워크플로에 매핑하세요.",
+      "또는 marketplace/<slug>/<버전>처럼 uses:에서 버전을 지정하세요."
     ]
   },
   "source_revision_not_found": {
@@ -1869,7 +1885,7 @@
   },
   "cluster_name_invalid": {
     "title": "올바르지 않은 클러스터 이름",
-    "why": "클러스터의 이름은 compute-clusters 입력의 값이 지정하는 것입니다. workspace와 user-workspace는 형식 1이 workspace를 가리키듯 이 컴퓨터를 가리킵니다.",
+    "why": "클러스터의 이름은 compute-clusters 입력의 값이 지정하는 것입니다. workspace와 user-workspace는 형식 1이 workspace를 가리키듯 이 컴퓨터를 가리킵니다. 클러스터의 이름은 그 id이기도 하며 세션의 대상이 그것을 읽는데, 형식 1은 대상 localhost도 workspace로 읽습니다.",
     "fix": [
       "클러스터의 이름을 바꾸세요."
     ]
@@ -1880,6 +1896,27 @@
     "fix": [
       "키에 맞게 값을 고치세요.",
       "포트, 로그인할 사용자, 점프 호스트, IPv6 주소처럼 그 이상이 필요한 호스트는 ssh_config에 정의한 별칭을 지정하세요."
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "플랫폼이 저장한 워크플로가 아닌 것의 매핑",
+    "why": "sources.yaml의 workflows의 각 키는 플랫폼이 저장한 워크플로를 가리키는 uses:입니다. marketplace/<slug>/<버전>은 마켓플레이스 워크플로의 한 버전, marketplace/<slug>/{version}은 자체 키로 매핑되지 않은 그 슬러그의 각 버전, workflow/<이름>은 저장된 워크플로를 가리킵니다. 버전 템플릿은 버전 전체이며, 키의 다른 부분에는 중괄호를 쓸 수 없습니다.",
+    "fix": [
+      "marketplace/tools/v1.2, marketplace/tools/{version}, workflow/nightly처럼 uses:와 같은 형태로 키를 쓰세요."
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "같은 워크플로의 두 매핑",
+    "why": "sources.yaml의 workflows의 두 키가, 형식 1이 uses:를 읽는 방식으로 같은 워크플로를 가리킵니다. marketplace/<slug>@<버전>과 marketplace/<slug>/<버전>은 같은 것이고, marketplace/<slug>와 marketplace/<slug>/latest도 같습니다. 실행이 어느 매핑을 읽을지 분명하지 않습니다.",
+    "fix": [
+      "둘 중 하나만 남기세요."
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "Git의 워크플로가 아닌 것으로의 매핑",
+    "why": "sources.yaml의 workflows의 각 매핑은 단계의 uses:처럼 Git 저장소의 워크플로를 가리킵니다. uses는 github/<소유자>/<저장소>[@<리비전>] 또는 gitlab/<그룹>/<프로젝트>[@<리비전>], yaml은 그 파일로 다른 것을 지정하지 않으면 workflow.yaml, host는 GitLab 프로젝트의 서버로 gitlab-servers에 등록되어 있어야 합니다. Git은 다른 uses:처럼 사용자의 자격 증명으로 그곳에 접근하므로, 플랫폼이 저장한 다른 워크플로나 URL을 지정할 수 없습니다. 매핑에 버전을 {version}으로 쓸 수 있는 것은 슬러그의 키 marketplace/<slug>/{version}뿐이며, 그 yaml 안과 uses의 @ 뒤에 씁니다.",
+    "fix": [
+      "{uses: github/acme/flows@main, yaml: flows/tools.yaml}처럼 단계가 Git의 워크플로를 지정하는 형태로 매핑을 쓰세요."
     ]
   },
   "key_file_invalid": {
@@ -2690,6 +2727,29 @@
     "fix": [
       "호스트 관리자에게 Unix 소켓 전달을 허용해 달라고 요청하세요. sshd_config의 AllowStreamLocalForwarding yes 또는 all입니다.",
       "같은 머신에서 같은 사용자로 ssh -R <path>:/dev/null <host> true를 실행해, 그곳에 소켓을 전달할 수 있는지 확인하세요."
+    ]
+  },
+  "ssh_tcp_forwarding_refused": {
+    "title": "Meridian을 위해 주소에 연결하지 않는 호스트",
+    "why": "Meridian은 ssh -L과 ssh -W처럼 호스트를 거쳐 주소에 닿습니다. 호스트와의 SSH 연결로 호스트의 sshd에 그 주소에 연결하라고 요청하고, 그 연결을 실어 나릅니다(direct-tcpip). Meridian은 호스트에서 포트를 열지 않습니다. sshd가 거부했습니다. sshd_config의 AllowTcpForwarding no나 remote, DisableForwarding yes처럼 클라이언트를 위한 TCP 연결을 전달하지 않거나, 그곳의 PermitOpen이 그 주소를 허용하지 않거나, Meridian이 로그인하는 키에 authorized_keys의 no-port-forwarding이나 restrict가 붙어 있습니다.",
+    "fix": [
+      "호스트 관리자에게 그 주소로의 TCP 연결 전달을 허용해 달라고 요청하세요. sshd_config의 AllowTcpForwarding yes 또는 local과, PermitOpen이 설정되어 있다면 그 주소를 허용하는 PermitOpen입니다.",
+      "같은 머신에서 같은 사용자로 ssh -W <address> <host>를 실행해, 연결되는지 확인하세요."
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "title": "Meridian을 위해 주소에 연결하지 못한 호스트",
+    "why": "Meridian은 ssh -L과 ssh -W처럼 호스트를 거쳐 주소에 닿습니다. 호스트와의 SSH 연결로 호스트의 sshd에 그 주소에 연결하라고 요청합니다(direct-tcpip). sshd가 시도했지만 연결하지 못했습니다. 그 주소에서 아무것도 듣고 있지 않거나, 그 이름이 호스트에서 확인되지 않거나, 호스트가 그곳에 닿을 수 없거나, sshd가 지금은 연결을 더 열 수 없습니다. 메시지는 sshd가 말한 것을 보여 줍니다.",
+    "fix": [
+      "그 주소에서 들어야 할 것이 실행 중이고, 호스트에서 보기에 워크플로가 준 주소와 포트에서 듣고 있는지 확인하세요.",
+      "같은 머신에서 같은 사용자로 ssh -W <address> <host>를 실행해, 연결되는지 확인하세요."
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "title": "Meridian이 호스트에 연결을 요청하지 않는 주소",
+    "why": "Meridian은 호스트의 sshd에 주소에 연결하라고 요청해 호스트를 거쳐 그 주소에 닿습니다(ssh -L과 같은 direct-tcpip). 주소는 세션의 remoteHost와 remotePort처럼 워크플로에서 오므로, Meridian은 호스트가 주소 이상으로 읽을 수 없는 형태로만 연결을 요청합니다. 영문자, 숫자, -, _, 점으로 이루어지고 -로 시작하지 않는 호스트 이름이나 대괄호 없는 IPv4 또는 IPv6 주소와, 1부터 65535까지의 포트입니다. 메시지는 값의 제어 문자를 \\n처럼 이스케이프해 보여 줍니다.",
+    "fix": [
+      "워크플로가 기대하는 대로 포트나 대괄호 없이 호스트의 이름이나 주소만 주고, 포트는 1부터 65535까지의 수로 주세요."
     ]
   },
   "ssh_host_release_mismatch": {
