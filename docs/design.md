@@ -4136,8 +4136,11 @@ placement on it, however long it takes. The next attempt on the member
 takes the lease again, as idle: no worker of the member's can have waited
 for it, so it starts no grace, unless another process placed an attempt
 on the member meanwhile, and lapsed leases go on counting however often
-members come and go ([Leases and fencing](#leases-and-fencing)). Taking a
-lease at a start or a takeover still starts one. A host's pooled SSH
+members come and go ([Leases and fencing](#leases-and-fencing)). It
+remembers a member it let go of so for a day, and one that comes back
+after that takes its lease as at a start, so that a long-lived
+coordinator remembers only its last day's members. Taking a lease at a
+start or a takeover still starts one. A host's pooled SSH
 connection isn't let go yet. A replica that takes the lease over,
 once its holder has stopped renewing it, sets the connection up again at
 the same address, so the
