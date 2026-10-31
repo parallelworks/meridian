@@ -1,7 +1,6 @@
 package local
 
 import (
-	"fmt"
 	"maps"
 	"regexp"
 	"slices"
@@ -229,11 +228,12 @@ func (c *Config) uriRequired(v any, name string) error {
 func clusterURI(login, name string) string { return pwPrefix + login + "/" + name }
 
 // loginName returns the login name of the user who runs meridian, which
-// names their clusters' URIs; or an error that says the Inputs couldn't
-// answer, for a user who has none.
+// names their clusters' URIs; or, for a user who has none,
+// problems.ClusterLoginUnknown, which says why, as no later try changes
+// it.
 func (c *Config) loginName() (string, error) {
 	if c.user.Err != nil {
-		return "", fmt.Errorf("local: no login name to name a cluster's URI by: %w", c.user.Err)
+		return "", problems.ClusterLoginUnknown.InputProblem(problems.Params{"reason": c.user.Err.Error()})
 	}
 	return c.user.Name, nil
 }

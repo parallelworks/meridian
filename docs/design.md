@@ -259,11 +259,11 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     the run started on ([Workflows a step calls](#workflows-a-step-calls));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
-  - what the meridian command's Inputs gives of a bucket and of a called
-    workflow's platform inputs: a bucket's details without what only the
-    platform's record holds, a bare name and `pw://name` refused, a
-    mapping among a root's inputs kept, and a called workflow's input of
-    a platform's type resolved as a root's is
+  - what the meridian command's Inputs gives of a called workflow's
+    platform inputs and of a bucket: a called workflow's input of a
+    platform's type resolved and checked as a root's is, a cluster's or
+    a bucket's keeping the details its caller passes; and a bucket's
+    details without what only the platform's record holds
     ([Interfaces](#interfaces));
   - how a job's `ssh:` reaches its host, where its run's directory is
     there, and what an outage or a cancel does to its steps
@@ -1962,7 +1962,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by their URI, `pw://<login>/<name>`, and the workspace, this machine, by its reserved names too; `compute-resources` the same, as format 1 gives a cluster that either names the same details ([Bug fixes to format 1](#bug-fixes-to-format-1)), though its form lists Kubernetes clusters too, which it never names here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by their URI, `pw://<login>/<name>`, and the workspace, this machine, by its reserved names too, where `pw://name`, an organization's cluster, names none; `compute-resources` the same, as format 1 gives a cluster that either names the same details ([Bug fixes to format 1](#bug-fixes-to-format-1)), though its form lists Kubernetes clusters too, which it never names here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
@@ -5300,7 +5300,9 @@ host itself.
   input names one by its URI, `pw://<login>/<name>`, where `<login>` is
   the login name of the user who runs meridian, as `PW_USER` is, as
   `meridian run --input cluster=pw://alice/hpc` for the user `alice`
-  ([`docs/examples/clusters.yaml`](examples/clusters.yaml)). The host is
+  ([`docs/examples/clusters.yaml`](examples/clusters.yaml)); for a user
+  the system knows no login name of, no URI names a cluster
+  (`cluster_login_unknown`). The host is
   an alias that ssh resolves, as `ssh -G` does, or a host name or an
   address, without a port: format 1 gives an existing cluster's `ip` so,
   and 21 of the known workflows run `ssh` or `scp` with it in a script. A

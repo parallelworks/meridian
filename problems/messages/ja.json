@@ -239,6 +239,7 @@
   "cluster_unknown": "入力「{input}」が指定しているクラスター {value} は、workspace でも、クラスター {clusters} のいずれでもありません。",
   "clusters_none": "入力「{input}」が指定しているクラスター {value} は workspace ではなく、ここには他のクラスターがありません。",
   "cluster_uri_required": "入力「{input}」は {uri} のようなクラスターの pw:// URI を受け取ります。{value} ではありません。",
+  "cluster_login_unknown": "入力「{input}」は pw:// URI でクラスターを指定します。この URI には meridian を実行するユーザーのログイン名が含まれますが、Meridian にはその名前がわかりません。システムの説明: {reason}。",
   "bucket_uri_invalid": "入力「{input}」は pw://user/bucket のようなバケットの pw:// URI を受け取ります。{value} ではありません。",
   "bucket_credentials_need_platform": "入力「{input}」はバケットの資格情報を求めていますが、それを作れるのはプラットフォームだけです。",
   "source_ref_invalid": "uses:「{ref}」は、github/owner/repository@revision のような Git リポジトリ内のワークフローへの参照ではありません。",

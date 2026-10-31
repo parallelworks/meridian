@@ -1689,6 +1689,13 @@
       "Da los detalles de un clúster solo a un flujo de trabajo al que llama un paso, en el with: del paso, como los pasa el formato 1."
     ]
   },
+  "cluster_login_unknown": {
+    "title": "Sin nombre de inicio de sesión con el que nombrar un clúster",
+    "why": "Una entrada compute-clusters o compute-resources nombra un clúster de clusters.yaml, o el workspace, por una URI que contiene el nombre de inicio de sesión del usuario que ejecuta Meridian, como pw://alice/hpc, como lo leen los flujos de trabajo de PW_USER. Meridian lo lee de la base de datos de usuarios del sistema, o si no de $USER, y no encontró ninguno, así que aquí ninguna URI nombra un clúster.",
+    "fix": [
+      "Ejecuta meridian como un usuario que tenga la base de datos de usuarios del sistema, o pon USER al nombre de inicio de sesión."
+    ]
+  },
   "bucket_uri_invalid": {
     "title": "Valor que no es la URI pw:// de un bucket",
     "why": "Una entrada de bucket nombra un bucket por su URI en la plataforma que lo guarda: pw://, el usuario al que pertenece, una barra y el nombre del bucket. Una plataforma lee el nombre de un bucket solo, o pw:// y el nombre, como uno de los buckets del propio usuario, lo que necesita su nombre de usuario en la plataforma. Una ejecución aquí no tiene ninguno, así que la URI debe nombrar al usuario. La entrada propia de una ejecución recibe la URI, como la da el formulario de una plataforma; solo un flujo de trabajo al que llama un paso recibe los detalles de un bucket, un mapeo, tal como los pasa quien lo llama.",

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/parallelworks/foundation/problem"
-
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/plan"
@@ -295,11 +293,14 @@ func TestResolveClusters(t *testing.T) {
 			}
 		}
 	}
-	// Without a login name, there is no URI to name a cluster by: the
-	// Inputs can't answer.
+	// Without a login name, there is no URI to name a cluster by, which no
+	// later try changes: a problem, which says why.
 	c.user = Login{Err: errors.New("no name")}
-	if _, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "pw://alice/hpc", false); err == nil || errors.As(err, new(*problem.Problem)) {
-		t.Errorf("ResolveInput without a login name gave %v", err)
+	for _, v := range []any{"pw://alice/hpc", "workspace", "hpc"} {
+		_, err := c.ResolveInput(t.Context(), "compute-clusters", nil, v, false)
+		if p := kindtest.Want(t, err, problems.ClusterLoginUnknown); p.Params["reason"] != "no name" {
+			t.Errorf("ResolveInput(%v) without a login name: %v", v, p.Params)
+		}
 	}
 }
 
@@ -480,5 +481,12 @@ func TestClusterUnknownAtCreate(t *testing.T) {
 	}
 	if len(diags) != 1 || diags[0].Code != problems.ClusterURIRequired.Code() || diags[0].Params["uri"] != "pw://alice/hpc" || diags[0].Params["input"] == nil {
 		t.Errorf("Create of a cluster's name alone: %v", diags)
+	}
+	// Without a login name, the run isn't made, and the problem says why.
+	c.user = Login{Err: errors.New("no name")}
+	_, diags, err = compile.Create(t.Context(), "workflow.yaml", []byte(strings.Replace(clusterWorkflow, "%s", "", 1)),
+		map[string]any{"cluster": "pw://alice/hpc"}, compile.Options{Inputs: c, Variables: c, Groups: c})
+	if err != nil || len(diags) != 1 || diags[0].Code != problems.ClusterLoginUnknown.Code() || diags[0].Params["input"] == nil || diags[0].Params["reason"] != "no name" {
+		t.Errorf("Create without a login name: %v, %v", diags, err)
 	}
 }

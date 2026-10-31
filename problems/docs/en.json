@@ -1453,6 +1453,12 @@
       "Give a cluster's details only to a workflow a step calls, in the step's with:, as format 1 passes them."
     ]
   },
+  "cluster_login_unknown": {
+    "why": "A compute-clusters or compute-resources input names a cluster of clusters.yaml, or the workspace, by a URI that holds the login name of the user who runs Meridian, as pw://alice/hpc, as workflows read that name from PW_USER. Meridian reads it from the system's user database, or else $USER, and found neither, so no URI names a cluster here.",
+    "fix": [
+      "Run meridian as a user the system's user database has, or set USER to the login name."
+    ]
+  },
   "bucket_uri_invalid": {
     "why": "A bucket input names a bucket by its URI on the platform that holds it: pw://, the user who owns it, a slash and the bucket's name. A platform reads a bucket's name alone, or pw:// and the name, as one of the user's own buckets, which needs their platform username. A run here has none, so the URI must name the user. A run's own input takes the URI, as a platform's form gives it; only a workflow a step calls is given a bucket's details, a mapping, as its caller passes those it has.",
     "fix": [

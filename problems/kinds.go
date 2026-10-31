@@ -127,18 +127,23 @@ var (
 	// there are, as QuoteAll writes them.
 	ExecutionGroupUnknown = define(Error, "execution_group_unknown", "No such execution group", "input", "value", "groups")
 	// ClusterUnknown is what the meridian command's Inputs gives for a
-	// compute-clusters input whose value, a URI, names neither the
-	// workspace nor one of the user's clusters, and ClustersNone when the
-	// user has none: value is the URI, as Show writes it, and clusters the
-	// clusters' URIs, as QuoteAll writes them. ClusterURIRequired is what it
-	// gives for a value that names a cluster otherwise than by its URI
-	// here: a name alone, pw://name, which a platform reads as an
-	// organization's cluster, or, at a run's own input, the cluster's
-	// details, which only a workflow's caller passes; value is the value,
-	// as Show writes it, and uri the URI to name the cluster by.
-	ClusterUnknown     = define(Error, "cluster_unknown", "No such cluster", "input", "value", "clusters")
-	ClustersNone       = define(Error, "clusters_none", "No clusters to choose from", "input", "value")
-	ClusterURIRequired = define(Error, "cluster_uri_required", "Not a cluster's pw:// URI", "input", "value", "uri")
+	// compute-clusters input whose value names neither the workspace nor
+	// one of the user's clusters, as a URI of another user's, or of none,
+	// and ClustersNone when the user has none: value is the value, as Show
+	// writes it, and clusters the clusters' URIs, as QuoteAll writes them.
+	// ClusterURIRequired is what it gives for a value that names a cluster
+	// otherwise than by its URI here: a name alone, pw://name, which a
+	// platform reads as an organization's cluster, or, at a run's own
+	// input, the cluster's details, which only a workflow's caller passes;
+	// value is the value, as Show writes it, and uri the URI to name the
+	// cluster by.
+	// ClusterLoginUnknown is what it gives for a cluster's URI when it
+	// can't tell the login name of the user who runs meridian, which the
+	// URI holds, for reason.
+	ClusterUnknown      = define(Error, "cluster_unknown", "No such cluster", "input", "value", "clusters")
+	ClustersNone        = define(Error, "clusters_none", "No clusters to choose from", "input", "value")
+	ClusterURIRequired  = define(Error, "cluster_uri_required", "Not a cluster's pw:// URI", "input", "value", "uri")
+	ClusterLoginUnknown = define(Error, "cluster_login_unknown", "No login name to name a cluster by", "input", "reason")
 	// BucketURIInvalid is what the meridian command's Inputs gives for a
 	// bucket input whose value isn't a bucket's pw://user/name URI, as a
 	// name alone or pw://name, which a platform reads as one of the user's
