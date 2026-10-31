@@ -14,6 +14,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/expr"
@@ -24,7 +25,8 @@ import (
 	"github.com/parallelworks/meridian/workerapi"
 )
 
-// testHost is a session host of a test's. It names each session by its key
+// testHost is a session host of a test's. It refuses a session whose
+// refuse: is true, names each session of a run no step called by its key
 // and a number of its own, points a session where with: says, at a port
 // it gives, refusing a with: whose remoteHost is refuse as a port in use,
 // and records what it is asked to point, and whether to serve it there,
@@ -36,9 +38,17 @@ type testHost struct {
 	served [][]Session
 }
 
-func (h *testHost) Check(_ context.Context, sessions map[string]any) (map[string]string, error) {
+func (h *testHost) Check(_ context.Context, sessions map[string]any, called bool) (map[string]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	for key, def := range sessions {
+		if d, _ := def.(map[string]any); d["refuse"] == true {
+			return nil, fmt.Errorf("the host refuses the session %s", key)
+		}
+	}
+	if called {
+		return nil, nil
+	}
 	names := map[string]string{}
 	for _, key := range slices.Sorted(maps.Keys(sessions)) {
 		h.n++
@@ -757,5 +767,260 @@ func TestSessionServed(t *testing.T) {
 	}
 	if err := ro.SessionServed(t.Context(), id, 1, nil); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("SessionServed read only = %v", err)
+	}
+}
+
+// callSources give a workflow with sessions that callRoot's steps call,
+// one of which asks for its name, which a called workflow's sessions
+// don't; and which calls another with a session of its own.
+var callSources = childSources(map[string]string{
+	"github/t/sess@main": `sessions:
+  desktop: {}
+  notes:
+    prompt-for-name: {default: fixed}
+jobs:
+  main:
+    steps:
+      - run: echo
+      - uses: github/t/leaf@main
+        with: {$yaml: w.yaml}
+`,
+	"github/t/leaf@main": `sessions:
+  leaf: {}
+jobs:
+  main:
+    steps:
+      - run: echo
+`,
+})
+
+// callRoot calls callSources' workflow from two steps of build, whose
+// first is tried again, and which is attempted again once its worker is
+// lost; and from fan, a matrix job of two instances.
+const callRoot = `jobs:
+  build:
+    retry: {reasons: [worker-lost], max-retries: 1, interval: 0s}
+    steps:
+      - uses: github/t/sess@main
+        with: {$yaml: w.yaml}
+        retry: {max-retries: 3}
+      - uses: github/t/sess@main
+        with: {$yaml: w.yaml}
+  fan:
+    strategy:
+      matrix: {n: [1, 2]}
+    steps:
+      - uses: github/t/sess@main
+        with: {$yaml: w.yaml}
+`
+
+// TestSessionsOfCalls checks the sessions of workflows that steps call, as
+// format 1 makes them, once for each call in the tree, as a run is
+// submitted: every try of a call, every attempt of its job, as one after a
+// lost worker, and every instance of a matrix job, shares them, and each
+// call has its own, a call of a called workflow among them; each is named
+// by where it is called, whatever its prompt-for-name says, once its host
+// has checked it.
+func TestSessionsOfCalls(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{SessionHost: &testHost{}})
+	driverOf(c).set(func(d *testDriver) {
+		d.worker = func(backend.PlaceRequest) testEnd { return testEnd{running: true} }
+	})
+	created, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(callRoot), nil,
+		compile.Options{Source: plan.Source{Location: "flows/workflow.yaml"}, Sources: callSources})
+	if err != nil || diags.HasErrors() {
+		t.Fatal(diags, err)
+	}
+	root, err := c.CreateRun(t.Context(), created, runOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve(t, c)
+	claimedOf := func(run, key string) *store.Attempt {
+		t.Helper()
+		var a *store.Attempt
+		waitFor(t, func() bool {
+			var err error
+			a, err = latestAttemptOf(t, c, run, key)
+			return err == nil && a.State == store.AttemptRunning
+		})
+		return a
+	}
+	claimed := func(key string) *store.Attempt { return claimedOf(root, key) }
+	with := plan.DataOf(map[string]any{"$yaml": "w.yaml"})
+	call := func(a *store.Attempt, step, try int) string {
+		t.Helper()
+		id, diags, err := askChild(t, c, a.ID, workerapi.ChildRequest{Step: step, Try: try, With: with})
+		if err != nil || diags.HasErrors() {
+			t.Fatal(diags, err)
+		}
+		return id
+	}
+	build := claimed("build")
+	children := map[string]string{
+		"first":    call(build, 0, 0),
+		"retried":  call(build, 0, 1),
+		"second":   call(build, 1, 0),
+		"instance": call(claimed("fan#0"), 0, 0),
+		"other":    call(claimed("fan#1"), 0, 0),
+	}
+	children["leaf"] = call(claimedOf(children["first"], "main"), 1, 0)
+	children["other leaf"] = call(claimedOf(children["second"], "main"), 1, 0)
+	started := func() {
+		t.Helper()
+		// Each child makes its sessions as it starts: those its call
+		// made already, it makes no more.
+		waitFor(t, func() bool {
+			for _, id := range children {
+				if storedRun(t, c, id).StartState == nil {
+					return false
+				}
+			}
+			return true
+		})
+	}
+	started()
+	// The attempt is lost, and the job, attempted again, calls again.
+	if err := c.lose(t.Context(), build, backend.Status{}, nil); err != nil && !errors.Is(err, errAgain) {
+		t.Fatal(err)
+	}
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error { return c.wakeWorkerJob(t.Context(), tx, root, "build") }); err != nil {
+		t.Fatal(err)
+	}
+	var again *store.Attempt
+	waitFor(t, func() bool {
+		a, err := latestAttemptOf(t, c, root, "build")
+		again = a
+		return err == nil && a.ID != build.ID && a.State == store.AttemptRunning
+	})
+	children["attempted"] = call(again, 0, 0)
+	started()
+
+	names := map[string]map[string]string{}
+	for which, id := range children {
+		p, err := c.plans.get(storedRun(t, c, id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		names[which] = p.Run.SessionNames
+	}
+	prefix := "workflow_" + root + "_"
+	want := map[string]map[string]string{
+		"first":  {"desktop": prefix + "build_step_0_desktop", "notes": prefix + "build_step_0_notes"},
+		"second": {"desktop": prefix + "build_step_1_desktop", "notes": prefix + "build_step_1_notes"},
+		"fan":    {"desktop": prefix + "fan_step_0_desktop", "notes": prefix + "fan_step_0_notes"},
+		"leaf":   {"leaf": prefix + "build_step_0_main_step_1_leaf"},
+		"leaf 2": {"leaf": prefix + "build_step_1_main_step_1_leaf"},
+	}
+	for which, call := range map[string]string{
+		"first": "first", "retried": "first", "attempted": "first", "second": "second", "instance": "fan", "other": "fan", "leaf": "leaf", "other leaf": "leaf 2",
+	} {
+		if !maps.Equal(names[which], want[call]) {
+			t.Errorf("the %s child's sessions are named %v, want %v", which, names[which], want[call])
+		}
+	}
+	got, err := c.RunSessions(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var made []string
+	for _, s := range got {
+		made = append(made, s.Name)
+	}
+	slices.Sort(made)
+	var all []string
+	for _, n := range want {
+		all = append(all, slices.Collect(maps.Values(n))...)
+	}
+	slices.Sort(all)
+	if !slices.Equal(made, all) {
+		t.Errorf("the tree's sessions are %q, want %q", made, all)
+	}
+}
+
+// TestSessionsPointedTogether checks steps of two processes that point one
+// session at once, as instances of a matrix job that share it do: each
+// step succeeds, the last to point it is where it points, and once one
+// read a secret's mark the session is sealed from then on, each later
+// point at the next generation, whichever process read it first.
+func TestSessionsPointedTogether(t *testing.T) {
+	parallel(t)
+	a := open(t, Options{SessionHost: &testHost{}})
+	b := open(t, Options{Database: a.opts.Database, Keys: a.opts.Keys, SessionHost: &testHost{}})
+	root, _ := create(t, a, plainWorkflow, nil, nil)
+	if err := a.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "shared"}, expr.Read{}); err != nil {
+		t.Fatal(err)
+	}
+	const steps = 8
+	errs := make(chan error, steps)
+	var wg sync.WaitGroup
+	for i := range steps {
+		c := []*Coordinator{a, b}[i%2]
+		wg.Go(func() {
+			errs <- c.opts.Sessions.Update(t.Context(), compile.SessionUpdate{
+				Root: root, Name: "shared", With: map[string]any{"remotePort": float64(i + 1)}, Read: expr.Read{Marked: i == 1},
+			})
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	var stored *store.Session
+	if err := a.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		stored, err = tx.SessionNamed("shared")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Sealed == nil || stored.Data != nil || stored.Generation < 1 || stored.Generation > steps {
+		t.Errorf("pointed together, the session is kept %q, sealed %t, of generation %d", stored.Data, stored.Sealed != nil, stored.Generation)
+	}
+	got, err := b.RunSessions(t.Context(), root)
+	if err != nil || len(got) != 1 || !got[0].Private || !strings.HasPrefix(string(got[0].Point), `{"remotePort":`) {
+		t.Errorf("pointed together, the session opens as %+v, %v", got, err)
+	}
+}
+
+// TestSessionsOfACallChecked checks that the sessions of a workflow a step
+// calls, which the coordinator names, its host checks all the same.
+func TestSessionsOfACallChecked(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{SessionHost: &testHost{}})
+	p := c.opts.Sessions.(sessionProvider)
+	p.call = &sessionCall{workflow: "w", root: "1", path: []callLevel{{Job: "build", Step: 0}}}
+	if _, err := p.Check(t.Context(), map[string]any{"desktop": map[string]any{"refuse": true}}); err == nil {
+		t.Error("a called workflow's session the host refuses was named")
+	}
+	names, err := p.Check(t.Context(), map[string]any{"desktop": map[string]any{}})
+	if err != nil || names["desktop"] != "w_1_build_step_0_desktop" {
+		t.Errorf("Check = %v, %v", names, err)
+	}
+}
+
+// TestSessionNames checks a called workflow's sessions' names, as format 1
+// makes them, of what a session's path holds as it is.
+func TestSessionNames(t *testing.T) {
+	parallel(t)
+	for _, tc := range []struct{ location, want string }{
+		{"workflow.yaml", "workflow"},
+		{"flows/train.yml", "train"},
+		{"github.com/o/r@main:flows/a.yaml", "a"},
+		{`C:\flows\b.yaml`, "b"},
+		{"<stdin>", "stdin"},
+		{"", "workflow"},
+	} {
+		if got := workflowName(tc.location); got != tc.want {
+			t.Errorf("workflowName(%q) = %q, want %q", tc.location, got, tc.want)
+		}
+	}
+	path := []callLevel{{Job: "build", Step: 2}, {Job: "main job", Step: 0, Cleanup: true}}
+	if got := sessionName("my flow", "12", path, "desk/top"); got != "my-flow_12_build_step_2_main-job_step_0_cleanup_desk-top" {
+		t.Errorf("sessionName = %q", got)
 	}
 }

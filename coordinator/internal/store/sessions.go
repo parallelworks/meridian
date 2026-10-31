@@ -19,9 +19,13 @@ import (
 // (meridian_sessions).
 type Session struct {
 	// ID is the session's, Root the run at the top of the tree that made
-	// it, which owns it, and Run the run whose sessions: made it, under
-	// its key Key; Name is its name, which sessions.<key> gives.
-	ID, Root, Run, Key, Name string
+	// it, which owns it, and Run the run whose sessions: made it first,
+	// under its key Key; CallPath is where in the tree the workflow is
+	// called whose sessions: made it, "" for the root's own, as the
+	// coordinator encodes it, which every run of the call shares, every
+	// try, attempt and matrix instance of it; and Name is its name, which
+	// sessions.<key> gives.
+	ID, Root, Run, CallPath, Key, Name string
 	// Type is tunnel or link, and Redirect whether its redirect: is true.
 	Type     string
 	Redirect bool
@@ -54,15 +58,17 @@ type Session struct {
 var ErrSessionNameTaken = errors.New("store: a live session has the name")
 
 // sessionColumns are what Session reads of a session, in order.
-const sessionColumns = "id, root_id, run_id, key, name, type, redirect, label, salt, data, data_sealed, data_gen, port, port_given, serve_problem, updated_at, ended_at"
+const sessionColumns = "id, root_id, run_id, call_path, key, name, type, redirect, label, salt, data, data_sealed, data_gen, port, port_given, serve_problem, updated_at, ended_at"
 
 // MakeSession stores s, a session the run s.Run's sessions: made, under
-// its key s.Key, whose tree's root is s.Root, with its ID, name, type,
-// redirect, label and salt, and its data, in the clear or sealed: or nothing, for
-// a run that has made the session under that key already, as one started
-// again does, and reports whether it made it. A name another session that
-// hasn't ended has is ErrSessionNameTaken; a run the store hasn't, or that
-// has ended, ErrNotFound and ErrState.
+// its key s.Key, whose tree's root is s.Root, called at s.CallPath, with
+// its ID, name, type, redirect, label and salt, and its data, in the clear
+// or sealed: or nothing, where a run of the tree called there has made the
+// session under that key already, as a run started again, or another try,
+// attempt or matrix instance of the call, does; and reports whether it
+// made it. A name another session that hasn't ended has is
+// ErrSessionNameTaken; a run the store hasn't, or that has ended,
+// ErrNotFound and ErrState.
 func (tx *Tx) MakeSession(s Session) (bool, error) {
 	run, err := tx.liveRun(s.Run)
 	if err != nil {
@@ -73,7 +79,7 @@ func (tx *Tx) MakeSession(s Session) (bool, error) {
 		return false, err
 	}
 	var made bool
-	if err := tx.queryRow("SELECT EXISTS (SELECT 1 FROM meridian_sessions WHERE run_id = ? AND key = ?)", run, s.Key).Scan(&made); err != nil || made {
+	if err := tx.queryRow("SELECT EXISTS (SELECT 1 FROM meridian_sessions WHERE root_id = ? AND call_path = ? AND key = ?)", root, s.CallPath, s.Key).Scan(&made); err != nil || made {
 		return false, err
 	}
 	var taken bool
@@ -87,9 +93,9 @@ func (tx *Tx) MakeSession(s Session) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	_, err = tx.exec(`INSERT INTO meridian_sessions (id, root_id, run_id, key, name, type, redirect, label, salt, data, data_sealed, data_gen, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, root, run, s.Key, s.Name, s.Type, s.Redirect, s.Label, s.Salt, nullText(s.Data), s.Sealed, s.Generation, now, now)
+	_, err = tx.exec(`INSERT INTO meridian_sessions (id, root_id, run_id, call_path, key, name, type, redirect, label, salt, data, data_sealed, data_gen, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, root, run, s.CallPath, s.Key, s.Name, s.Type, s.Redirect, s.Label, s.Salt, nullText(s.Data), s.Sealed, s.Generation, now, now)
 	return err == nil, err
 }
 
@@ -113,13 +119,13 @@ func (tx *Tx) Sessions(root string) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tx.sessions("SELECT "+sessionColumns+" FROM meridian_sessions WHERE root_id = ? ORDER BY created_at, run_id, key", n)
+	return tx.sessions("SELECT "+sessionColumns+" FROM meridian_sessions WHERE root_id = ? ORDER BY created_at, call_path, key", n)
 }
 
 // LiveSessions returns the store's sessions that haven't ended, in the
 // order they were made.
 func (tx *Tx) LiveSessions() ([]Session, error) {
-	return tx.sessions("SELECT " + sessionColumns + " FROM meridian_sessions WHERE ended_at IS NULL ORDER BY created_at, run_id, key")
+	return tx.sessions("SELECT " + sessionColumns + " FROM meridian_sessions WHERE ended_at IS NULL ORDER BY created_at, call_path, key")
 }
 
 // PointSession stores what the session id is, and where it points, as its
@@ -343,7 +349,7 @@ func (tx *Tx) sessions(query string, args ...any) ([]Session, error) {
 			redirect, pgv bool
 			prob          []byte
 		)
-		if err := rows.Scan(&s.ID, &root, &run, &s.Key, &s.Name, &s.Type, &redirect, &s.Label, &s.Salt, &data, &s.Sealed, &gen, &port, &pgv, &prob, &updated, &ended); err != nil {
+		if err := rows.Scan(&s.ID, &root, &run, &s.CallPath, &s.Key, &s.Name, &s.Type, &redirect, &s.Label, &s.Salt, &data, &s.Sealed, &gen, &port, &pgv, &prob, &updated, &ended); err != nil {
 			return nil, err
 		}
 		if prob != nil {

@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
@@ -31,8 +33,11 @@ import (
 // what a session may be, and where it points, and serves it.
 type SessionHost interface {
 	// Check checks a workflow's sessions:, as they are written, and names
-	// each (compile.Sessions.Check).
-	Check(ctx context.Context, sessions map[string]any) (map[string]string, error)
+	// each (compile.Sessions.Check); or, where called is set, for a
+	// workflow a step calls, checks them alone, since the coordinator
+	// names those, by where the workflow is called, as format 1 does, and
+	// prompt-for-name asks nothing of them.
+	Check(ctx context.Context, sessions map[string]any, called bool) (map[string]string, error)
 	// Point reads what a step that uses parallelworks/update-session asks
 	// of the session s, as u gives it, which the coordinator has
 	// authorized, and, where serve is set, serves the session where it
@@ -115,24 +120,164 @@ type sessionData struct {
 
 // sessionProvider is the coordinator's compile.Sessions, where it has a
 // session host and no Sessions of its own (Options.SessionHost).
-type sessionProvider struct{ c *Coordinator }
+type sessionProvider struct {
+	c *Coordinator
+	// call is the call of the workflow a step calls that it compiles, as
+	// childSessions gives it, or nil for a run no step called.
+	call *sessionCall
+}
 
 var _ compile.Sessions = sessionProvider{}
 
-// Check checks the workflow's sessions:, and names them, as the host says
-// (SessionHost.Check).
+// A sessionCall is where in its tree a workflow a step calls is called:
+// the workflow of the tree's root, as format 1 names it (workflowName),
+// the root's ID, and the calls from the root down to it.
+type sessionCall struct {
+	workflow, root string
+	path           []callLevel
+}
+
+// A callLevel is a call of a workflow in a tree, as where a session's
+// workflow is called says it (store.Session.CallPath): the calling step's
+// job, without a matrix instance's index, the step's index in its job,
+// and whether it is the step's cleanup, but neither its try nor the
+// attempt, so that every try, attempt and matrix instance of the call
+// shares its sessions, as format 1's do, which it makes once for each
+// call, as a run is submitted.
+type callLevel struct {
+	Job     string `json:"job"`
+	Step    int    `json:"step"`
+	Cleanup bool   `json:"cleanup,omitzero"`
+}
+
+// levelOf returns the call that link links a child run to.
+func levelOf(link *store.Link) callLevel {
+	job, _, _ := strings.Cut(link.Job, "#")
+	return callLevel{Job: job, Step: link.Step, Cleanup: link.Cleanup}
+}
+
+// callPathOf returns the calls from its tree's root down to run, as tx
+// reads them: none for the root.
+func callPathOf(tx *store.Tx, run *store.Run) ([]callLevel, error) {
+	var path []callLevel
+	for r := run; r.Parent != nil; {
+		path = append(path, levelOf(r.Parent))
+		var err error
+		if r, err = tx.Run(r.Parent.Run); err != nil {
+			return nil, err
+		}
+	}
+	slices.Reverse(path)
+	return path, nil
+}
+
+// encodeCallPath returns path as the store keeps it
+// (store.Session.CallPath): "" for the root's own sessions, or JSON.
+func encodeCallPath(path []callLevel) (string, error) {
+	if len(path) == 0 {
+		return "", nil
+	}
+	b, err := jsonv2.Marshal(path, jsonv2.Deterministic(true))
+	return string(b), err
+}
+
+// sessionName returns the name of the session key of the workflow that is
+// called at path in the tree whose root is the run root, of the workflow
+// named workflow, as format 1 names it: the workflow, the root, each call's
+// job and step, as step_<n>, and the key, joined with underscores, what of
+// each a session's path can't hold as it is made a hyphen.
+func sessionName(workflow, root string, path []callLevel, key string) string {
+	parts := []string{workflow, root}
+	for _, l := range path {
+		parts = append(parts, l.Job, "step_"+strconv.Itoa(l.Step))
+		if l.Cleanup {
+			parts = append(parts, "cleanup")
+		}
+	}
+	parts = append(parts, key)
+	for i, part := range parts {
+		parts[i] = strings.Map(func(r rune) rune {
+			if 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '.' || r == '_' || r == '-' {
+				return r
+			}
+			return '-'
+		}, part)
+	}
+	return strings.Join(parts, "_")
+}
+
+// workflowName returns the name of the workflow at location, a run's own
+// (plan.Source.Location), as a session's name begins with it: its file's,
+// without the directory, the repository, the revision or the extension,
+// as a workflow saved on a platform is named; or "workflow" where nothing
+// is left.
+func workflowName(location string) string {
+	name := location[strings.LastIndexAny(location, "/\\:")+1:]
+	name, _, _ = strings.Cut(name, "@")
+	for _, ext := range []string{".yaml", ".yml"} {
+		name = strings.TrimSuffix(name, ext)
+	}
+	name = strings.Trim(name, "<>")
+	if name == "" {
+		return "workflow"
+	}
+	return name
+}
+
+// childSessions returns the Sessions the child run that link links to is
+// compiled with, as a run of the tree whose root's plan is rootPlan: where
+// the coordinator provides Sessions, its own, which names the child's
+// sessions by where in the tree it is called (sessionName); otherwise
+// Options.Sessions.
+func (c *Coordinator) childSessions(ctx context.Context, link *store.Link, rootPlan *plan.Plan) (compile.Sessions, error) {
+	p, ok := c.opts.Sessions.(sessionProvider)
+	if !ok {
+		return c.opts.Sessions, nil
+	}
+	var path []callLevel
+	if err := c.store.View(ctx, func(tx *store.Tx) error {
+		run, err := tx.Run(link.Run)
+		if err != nil {
+			return err
+		}
+		path, err = callPathOf(tx, run)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	p.call = &sessionCall{workflow: workflowName(rootPlan.Run.Source.Location), root: link.Root, path: append(path, levelOf(link))}
+	return p, nil
+}
+
+// Check checks the workflow's sessions:, and names them: as the host says
+// (SessionHost.Check), for a run no step called; or, for a workflow a step
+// calls, once the host has checked them, by where it is called
+// (sessionName), the same for every try, attempt and matrix instance of
+// the call, whose runs share them.
 func (p sessionProvider) Check(ctx context.Context, sessions map[string]any) (map[string]string, error) {
-	return p.c.opts.SessionHost.Check(ctx, sessions)
+	if p.call == nil {
+		return p.c.opts.SessionHost.Check(ctx, sessions, false)
+	}
+	if _, err := p.c.opts.SessionHost.Check(ctx, sessions, true); err != nil {
+		return nil, err
+	}
+	names := make(map[string]string, len(sessions))
+	for key := range sessions {
+		names[key] = sessionName(p.call.workflow, p.call.root, p.call.path, key)
+	}
+	return names, nil
 }
 
 // Make keeps the sessions of the run runID, under the names Check gave
 // them, each with a salt of its own, owned by the root of the run's tree:
 // in the clear, or sealed under the root's data key where evaluating them
 // read a variable, a password or a secret (read). It keeps all of them, or
-// none, in one transaction. A session the run made already is made no
-// more, as for a run started again; one whose name another session that
-// hasn't ended has is session_name_taken, which fails the run. A session
-// made points nowhere, so its host has nothing to serve yet.
+// none, in one transaction. A session made already, where the run is called
+// in its tree, is made no more, as for a run started again, or another
+// try, attempt or matrix instance of a call, which shares its sessions;
+// one whose name another session that hasn't ended has is
+// session_name_taken, which fails the run. A session made points nowhere,
+// so its host has nothing to serve yet.
 func (p sessionProvider) Make(ctx context.Context, runID string, sessions map[string]any, names map[string]string, read expr.Read) error {
 	c := p.c
 	private := read.Private || read.Marked
@@ -147,6 +292,14 @@ func (p sessionProvider) Make(ctx context.Context, runID string, sessions map[st
 		if run.Parent != nil {
 			root = run.Parent.Root
 		}
+		path, err := callPathOf(tx, run)
+		if err != nil {
+			return err
+		}
+		callPath, err := encodeCallPath(path)
+		if err != nil {
+			return err
+		}
 		for _, key := range slices.Sorted(maps.Keys(sessions)) {
 			name, ok := names[key]
 			if !ok {
@@ -154,7 +307,7 @@ func (p sessionProvider) Make(ctx context.Context, runID string, sessions map[st
 			}
 			def, _ := sessions[key].(map[string]any)
 			s := store.Session{
-				ID: newSessionID(), Root: root, Run: runID, Key: key, Name: name,
+				ID: newSessionID(), Root: root, Run: runID, CallPath: callPath, Key: key, Name: name,
 				Type: "tunnel", Redirect: def["redirect"] == true, Label: sessionproxy.NewLabel(), Salt: newSalt(),
 			}
 			if def["type"] == "link" {
@@ -240,13 +393,16 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 		return err
 	}
 	defer clear(data)
-	private := s.Private || u.Read.Private || u.Read.Marked
 	err = c.store.Tx(ctx, func(tx *store.Tx) error {
+		// Another process's step can have pointed it since it was read,
+		// as another instance of a matrix job that shares it does: the
+		// last to point it is where it points, sealed from then on where
+		// either sealed it, at the next generation.
 		now, err := tx.Session(s.ID)
 		if err != nil {
 			return err
 		}
-		if !private {
+		if now.Sealed == nil && !s.Private && !u.Read.Private && !u.Read.Marked {
 			return tx.PointSession(s.ID, data, nil, 0, point.Port, point.PortGiven)
 		}
 		gen := now.Generation + 1

@@ -23,6 +23,8 @@ func testSession(id, root, run, key, name string) Session {
 
 // TestSessions checks what the store keeps of a run's sessions: a run makes
 // each of its sessions once, under its key, whatever it is started again;
+// a call in the tree makes each once too, as every try, attempt and
+// matrix instance of it shares them, and each call its own;
 // a name that another session that hasn't ended has is
 // ErrSessionNameTaken; where a session points is stored in the clear, or
 // sealed, and once sealed never in the clear again, nor sealed as an older
@@ -50,6 +52,31 @@ func TestSessions(t *testing.T) {
 		}
 		return nil
 	})
+	// Runs of the tree a step calls: the first at a call makes its
+	// sessions, and another of it, as its next try, makes none; a run of
+	// another call makes its own.
+	tries := []string{createRun(t, s), createRun(t, s), createRun(t, s)}
+	inTx(t, s, func(tx *Tx) error {
+		for i, c := range []struct {
+			id, run, path, name string
+			made                bool
+		}{
+			{"e", tries[0], `[["build",0]]`, "called-0", true},
+			{"f", tries[1], `[["build",0]]`, "called-0", false},
+			{"g", tries[2], `[["build",1]]`, "called-1", true},
+		} {
+			x := testSession(c.id, root, c.run, "desktop", c.name)
+			x.CallPath = c.path
+			if made, err := tx.MakeSession(x); err != nil || made != c.made {
+				t.Errorf("call %d: MakeSession = %t, %v; want %t", i, made, err, c.made)
+			}
+		}
+		got, err := tx.Session("e")
+		if err == nil && (got.CallPath != `[["build",0]]` || got.Run != tries[0]) {
+			t.Errorf("the call's session is %+v", got)
+		}
+		return err
+	})
 	inTx(t, s, func(tx *Tx) error {
 		got, err := tx.Session("a")
 		if err != nil {
@@ -75,13 +102,13 @@ func TestSessions(t *testing.T) {
 			}
 			return out
 		}
-		if got := ids(tx.Sessions(root)); len(got) != 2 || got[0] != "a" || got[1] != "c" {
+		if got := ids(tx.Sessions(root)); len(got) != 4 || got[0] != "a" || got[1] != "c" {
 			t.Errorf("the root's sessions are %v", got)
 		}
 		if got := ids(tx.Sessions(other)); len(got) != 0 {
 			t.Errorf("the other run's sessions are %v", got)
 		}
-		if got := ids(tx.LiveSessions()); len(got) != 2 {
+		if got := ids(tx.LiveSessions()); len(got) != 4 {
 			t.Errorf("the live sessions are %v", got)
 		}
 		return nil

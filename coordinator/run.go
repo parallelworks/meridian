@@ -368,7 +368,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		outlives: map[string]bool{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
 	}
 	if opts.SessionHost != nil && opts.Sessions == nil && !opts.ReadOnly {
-		c.opts.Sessions = sessionProvider{c}
+		c.opts.Sessions = sessionProvider{c: c}
 	}
 	c.wakersCtx, c.stopWakers = context.WithCancel(context.WithoutCancel(ctx))
 	if opts.ReadOnly {

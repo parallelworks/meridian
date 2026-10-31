@@ -1,9 +1,13 @@
 -- A session a run's sessions: made (compile.Sessions.Make), by its ID,
 -- random. root_id is the run at the top of the tree that made it, which
--- owns it, and whose end ends it; run_id is the run whose sessions: made
--- it, the root, or a run a step called, and key its key there; name is its
--- name, which sessions.<key> gives, unique among the store's sessions that
--- haven't ended. type is tunnel or link, and redirect whether its
+-- owns it, and whose end ends it; call_path is where in the tree the
+-- workflow whose sessions: made it is called, "" for the root's own, as
+-- the coordinator encodes it: each call's job, without a matrix
+-- instance's index, and its step, but not its try nor its attempt, so
+-- that every try, attempt and instance of a call has the same sessions,
+-- as format 1 makes them; key is its key there, and run_id the run that
+-- made it first. name is its name, which sessions.<key> gives, unique
+-- among the store's sessions that haven't ended. type is tunnel or link, and redirect whether its
 -- redirect: is true. label is the session's, random, made once, at whose
 -- host name, <label>.localhost, it is served, the same each time; salt is
 -- the session's, which its secret is made of, and which a reset replaces.
@@ -23,6 +27,7 @@ CREATE TABLE meridian_sessions (
   id TEXT PRIMARY KEY,
   root_id INTEGER NOT NULL REFERENCES meridian_runs (id),
   run_id INTEGER NOT NULL REFERENCES meridian_runs (id),
+  call_path TEXT NOT NULL,
   key TEXT NOT NULL,
   name TEXT NOT NULL,
   type TEXT NOT NULL,
@@ -40,7 +45,7 @@ CREATE TABLE meridian_sessions (
   ended_at INTEGER
 ) STRICT;
 
-CREATE UNIQUE INDEX meridian_sessions_made ON meridian_sessions (run_id, key);
+CREATE UNIQUE INDEX meridian_sessions_made ON meridian_sessions (root_id, call_path, key);
 CREATE UNIQUE INDEX meridian_sessions_live_name ON meridian_sessions (name) WHERE ended_at IS NULL;
 CREATE INDEX meridian_sessions_root ON meridian_sessions (root_id);
 
