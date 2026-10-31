@@ -13,29 +13,31 @@ const pwPrefix = "pw://"
 // resolveBucket gives the value of a bucket input, whose definition is
 // def, as format 1 resolves one, as far as a run here can: a bucket's
 // pw://user/name URI becomes its details (bucketValue), and with multi
-// true, each URI of a list does. "" is no bucket, and is kept, as is a
-// mapping, the details a run passes to a workflow it calls, whose
-// credentials, if any, no run here could have made. What isn't a URI of
-// that form, as a name alone or pw://name, which a platform reads as one
-// of the user's own buckets, and a run here has no platform user to read
-// it as, is problems.BucketURIInvalid. A URI of an input whose
+// true, each URI of a list does. "" is no bucket, and is kept. A called
+// workflow's input, called, also takes a bucket's details, a mapping, as
+// its caller passes those it has, which are kept as they are, whose
+// credentials, if any, no run here could have made; a run's own takes only
+// the URI, as a platform's form gives it. What isn't a URI of that form,
+// as a name alone or pw://name, which a platform reads as one of the
+// user's own buckets, and a run here has no platform user to read it as,
+// a mapping at a run's own input, and an item of a list that is neither,
+// is problems.BucketURIInvalid. A URI of an input whose
 // generateCredentials asks for the bucket's access keys, which only the
 // platform that holds the bucket can make, is
 // problems.BucketCredentialsNeedPlatform. A value of the wrong shape for
 // the input is problems.InputNotText, or, with multi, problems.InputNotList,
-// as the bug fix to format 1 refuses it (resolveEach), and an item of a
-// list that is neither a URI nor a mapping is problems.BucketURIInvalid,
-// as format 1 refuses one that isn't a URI.
-func resolveBucket(def map[string]any, value any) (any, error) {
-	one := func(uri string) (any, error) { return bucketValue(def, uri) }
-	return resolveEach(value, def["multi"] == true, one, func(item any) (any, error) {
-		switch it := item.(type) {
-		case map[string]any:
-			return it, nil
+// as the bug fix to format 1 refuses it (resolveEach).
+func resolveBucket(def map[string]any, value any, called bool) (any, error) {
+	return resolveEach(value, def["multi"] == true, func(v any) (any, error) {
+		switch v := v.(type) {
 		case string:
-			return one(it)
+			return bucketValue(def, v)
+		case map[string]any:
+			if called {
+				return v, nil
+			}
 		}
-		return nil, problems.BucketURIInvalid.InputProblem(problems.Params{"value": problems.Show(item)})
+		return nil, problems.BucketURIInvalid.InputProblem(problems.Params{"value": problems.Show(v)})
 	})
 }
 

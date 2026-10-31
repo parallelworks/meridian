@@ -118,7 +118,7 @@ jobs:
 
 type passThrough struct{}
 
-func (passThrough) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+func (passThrough) ResolveInput(_ context.Context, _ string, _ map[string]any, v any, _ bool) (any, error) {
 	return v, nil
 }
 

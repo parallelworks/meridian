@@ -64,6 +64,9 @@ type Config struct {
 	workflows Workflows
 	clusters  map[string]cluster
 	lookupEnv func(string) (string, bool)
+	// user is the login name of the user who runs meridian, which names
+	// their clusters' URIs (resolveCluster).
+	user Login
 }
 
 var (
@@ -87,7 +90,10 @@ var (
 // plain variables too. None is read through a symbolic link: the
 // directory can be one, and is checked through it (safepath.ReadFile).
 func LoadConfig(dir string, lookupEnv func(string) (string, bool)) (*Config, error) {
-	c := &Config{lookupEnv: lookupEnv, groups: map[string]*backend.Group{}, variables: map[string]variable{}, clusters: map[string]cluster{}}
+	c := &Config{
+		lookupEnv: lookupEnv, groups: map[string]*backend.Group{}, variables: map[string]variable{}, clusters: map[string]cluster{},
+		user: UserLogin(),
+	}
 	// A directory that isn't there holds no config, and nothing on the
 	// way to it is read.
 	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
@@ -594,9 +600,9 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 //   - execution-groups, whose value is the name of one of the config's
 //     groups. A value that names none of them is
 //     problems.ExecutionGroupUnknown.
-//   - compute-clusters, whose value names one of the clusters of the
-//     clusters file, or the workspace, and gives its details
-//     (resolveClusters).
+//   - compute-clusters, whose value is the pw:// URI of one of the
+//     clusters of the clusters file, or the workspace, and gives its
+//     details (resolveClusters).
 //   - compute-resources, which format 1 gives as it gives
 //     compute-clusters: its form lists Kubernetes clusters beside the
 //     clusters, and a cluster it names has the same details. Here it
@@ -610,17 +616,20 @@ func (c *Config) ComputeTarget(ctx context.Context, _ plan.ComputeTarget) (*back
 //   - bucket, whose value is a bucket's pw://user/name URI, and gives its
 //     details, as far as a run here knows them (resolveBucket).
 //
-// The compiler reports a problem with the input's name.
-func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]any, value any) (any, error) {
+// A called workflow's cluster or bucket input, called, also takes the
+// resource's details, a mapping, as its caller passes those it has; a
+// run's own takes only the URI. The compiler reports a problem with the
+// input's name.
+func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]any, value any, called bool) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	switch typ {
 	case "execution-groups":
 	case "compute-clusters", "compute-resources":
-		return c.resolveClusters(def, value)
+		return c.resolveClusters(def, value, called)
 	case "bucket":
-		return resolveBucket(def, value)
+		return resolveBucket(def, value, called)
 	default:
 		if slices.Contains(passedThrough, typ) {
 			return passThrough(value)
@@ -635,9 +644,8 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]an
 }
 
 // resolveEach gives the value of an input whose value names a platform's
-// resource, of the shape its type takes: with multi, a list, whose items
-// item gives; and otherwise text, which one gives, or a mapping, the
-// details a run passes to a workflow it calls, which is kept as it is. ""
+// resource, of the shape its type takes: with multi, a list, each of whose
+// items one gives; and otherwise text or a mapping, which one gives. ""
 // is no value, list or not, and is kept. Any other value is
 // problems.InputNotList, with multi, or problems.InputNotText. Format 1's
 // run creation checked no shape against multi, so a value of another one
@@ -646,13 +654,11 @@ func (c *Config) ResolveInput(ctx context.Context, typ string, def map[string]an
 // it is a bug fix to format 1, which ACTIVATE takes too (docs/design.md,
 // Bug fixes to format 1).
 //
-// The types differ in two ways, which the callers keep. Only
-// compute-clusters, compute-resources and bucket read multi; every other
-// type takes text or a mapping whatever multi says. And a list's items
-// differ: a cluster list keeps what isn't a name, as details a caller
-// resolved already, where a bucket list takes only URIs, but for the
-// mappings kept here (docs/design.md, Interfaces).
-func resolveEach(value any, multi bool, one func(string) (any, error), item func(any) (any, error)) (any, error) {
+// Only compute-clusters, compute-resources and bucket read multi; every
+// other type takes text or a mapping whatever multi says. What one takes
+// of text and a mapping is its type's: a cluster's or a bucket's URI, and
+// at a called workflow's input their details too.
+func resolveEach(value any, multi bool, one func(any) (any, error)) (any, error) {
 	if value == "" {
 		return value, nil
 	}
@@ -663,7 +669,7 @@ func resolveEach(value any, multi bool, one func(string) (any, error), item func
 		}
 		out := make([]any, len(list))
 		for i, it := range list {
-			v, err := item(it)
+			v, err := one(it)
 			if err != nil {
 				return nil, err
 			}
@@ -671,11 +677,9 @@ func resolveEach(value any, multi bool, one func(string) (any, error), item func
 		}
 		return out, nil
 	}
-	switch v := value.(type) {
-	case string:
-		return one(v)
-	case map[string]any:
-		return v, nil
+	switch value.(type) {
+	case string, map[string]any:
+		return one(value)
 	}
 	return nil, problems.InputNotText.InputProblem(problems.Params{"value": problems.Show(value)})
 }

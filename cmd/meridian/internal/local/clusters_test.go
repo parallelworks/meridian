@@ -2,12 +2,15 @@ package local
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/internal/kindtest"
@@ -31,33 +34,34 @@ func TestClustersFile(t *testing.T) {
 	if got, want := c.ClusterNames(), []string{"gpu.box", "hpc", "lab"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("ClusterNames = %q, want %q", got, want)
 	}
-	// Its name as its id, which a session's target reads; no user or
-	// namespace, which name the owner's platform account; and, without a
-	// scheduler, "", as format 1 writes a cluster's that has none.
+	// Its name as its id, which a session's target reads; its URI, and the
+	// login name as its user and its namespace, as format 1 gives the
+	// owner's platform account; and, without a scheduler, "", as format 1
+	// writes a cluster's that has none.
 	for name, want := range map[string]map[string]any{
 		"hpc": {
 			"$type": "computeResource", "type": "existing", "provider": "existing", "id": "hpc", "name": "hpc",
-			"ip": "hpc-login", "schedulerType": "slurm",
+			"ip": "hpc-login", "schedulerType": "slurm", "uri": "pw://alice/hpc", "user": "alice", "namespace": "alice",
 		},
 		"lab": {
 			"$type": "computeResource", "type": "existing", "provider": "existing", "id": "lab", "name": "lab",
-			"ip": "10.1.2.3", "schedulerType": "",
+			"ip": "10.1.2.3", "schedulerType": "", "uri": "pw://alice/lab", "user": "alice", "namespace": "alice",
 		},
 		"gpu.box": {
 			"$type": "computeResource", "type": "existing", "provider": "existing", "id": "gpu.box", "name": "gpu.box",
-			"ip": "gpu_1.example.com", "schedulerType": "pbs",
+			"ip": "gpu_1.example.com", "schedulerType": "pbs", "uri": "pw://alice/gpu.box", "user": "alice", "namespace": "alice",
 		},
 	} {
-		got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, name)
+		got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "pw://alice/"+name, false)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("ResolveInput(%s) = %v, %v, want %v", name, got, err, want)
 		}
 	}
 	// What ResolveInput gives is the caller's: changing it changes nothing
 	// in the config.
-	got, _ := c.ResolveInput(t.Context(), "compute-clusters", nil, "hpc")
+	got, _ := c.ResolveInput(t.Context(), "compute-clusters", nil, "pw://alice/hpc", false)
 	got.(map[string]any)["ip"] = "elsewhere"
-	again, _ := c.ResolveInput(t.Context(), "compute-clusters", nil, "hpc")
+	again, _ := c.ResolveInput(t.Context(), "compute-clusters", nil, "pw://alice/hpc", false)
 	if ip := again.(map[string]any)["ip"]; ip != "hpc-login" {
 		t.Errorf("a change to what ResolveInput gave reached the config: ip %v", ip)
 	}
@@ -76,10 +80,10 @@ func TestClustersExample(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := load(t, map[string]string{ClustersFile: string(text)}, nil)
-	got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "hpc")
+	got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "pw://alice/hpc", false)
 	want := map[string]any{
 		"$type": "computeResource", "type": "existing", "provider": "existing", "id": "hpc", "name": "hpc",
-		"ip": "hpc-login", "schedulerType": "slurm",
+		"ip": "hpc-login", "schedulerType": "slurm", "uri": "pw://alice/hpc", "user": "alice", "namespace": "alice",
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("the example's hpc = %v, %v, want %v", got, err, want)
@@ -155,142 +159,196 @@ func TestClusterInvalidParams(t *testing.T) {
 	}
 }
 
+// workspaceDetails are the workspace's details, as testLogin's.
+var workspaceDetails = map[string]any{
+	"type": "computeResource", "id": "user-workspace", "name": "user-workspace", "ip": "",
+	"uri": "pw://alice/user-workspace", "user": "alice", "namespace": "alice",
+}
+
+// TestResolveClusters checks the values a compute-clusters input takes,
+// at a run's own input and at a called workflow's: a cluster's URI, of
+// the login name's, and the workspace's, with its reserved names, give
+// their details, whatever the input's include-workspace, provider and csp
+// say, as format 1 resolves them; "" is kept; and a called workflow's
+// input keeps a cluster's details, a mapping, as its caller passes them,
+// where a run's own refuses them.
 func TestResolveClusters(t *testing.T) {
 	c := load(t, map[string]string{ClustersFile: clustersText}, nil)
-	workspace := map[string]any{"type": "computeResource", "id": "user-workspace", "name": "user-workspace", "ip": ""}
-	// As format 1 resolves a name, whatever the input's include-workspace,
-	// provider and csp say: they choose only what a form lists, and a name
-	// given otherwise, or a default the form can't list, is resolved all the
-	// same.
-	for _, definition := range []map[string]any{
-		nil,
-		{"include-workspace": false},
-		{"include-workspace": true},
-		{"include-workspace": "${{ inputs.local }}"},
-		{"provider": []any{"aws-slurm"}},
-		{"provider": []any{}},
-		{"csp": "aws"},
-	} {
-		for _, name := range []string{"workspace", "user-workspace"} {
-			got, err := c.ResolveInput(t.Context(), "compute-clusters", definition, name)
-			if err != nil || !reflect.DeepEqual(got, workspace) {
-				t.Errorf("ResolveInput(%s) with %v = %v, %v", name, definition, got, err)
+	for _, called := range []bool{false, true} {
+		for _, definition := range []map[string]any{
+			nil,
+			{"include-workspace": false},
+			{"include-workspace": true},
+			{"include-workspace": "${{ inputs.local }}"},
+			{"provider": []any{"aws-slurm"}},
+			{"provider": []any{}},
+			{"csp": "aws"},
+		} {
+			for _, name := range []string{"workspace", "user-workspace", "pw://user-workspace", "pw://alice/user-workspace"} {
+				got, err := c.ResolveInput(t.Context(), "compute-clusters", definition, name, called)
+				if err != nil || !reflect.DeepEqual(got, workspaceDetails) {
+					t.Errorf("ResolveInput(%s) with %v, called %v = %v, %v", name, definition, called, got, err)
+				}
+			}
+			got, err := c.ResolveInput(t.Context(), "compute-clusters", definition, "pw://alice/hpc", called)
+			if err != nil || got.(map[string]any)["ip"] != "hpc-login" || got.(map[string]any)["uri"] != "pw://alice/hpc" {
+				t.Errorf("ResolveInput(pw://alice/hpc) with %v, called %v = %v, %v", definition, called, got, err)
 			}
 		}
-		got, err := c.ResolveInput(t.Context(), "compute-clusters", definition, "hpc")
-		if err != nil || got.(map[string]any)["ip"] != "hpc-login" {
-			t.Errorf("ResolveInput(hpc) with %v = %v, %v", definition, got, err)
-		}
 	}
-	// "" stays "", and a mapping stays as it is: as the details a run
-	// passes on to a workflow it calls, which it resolved already.
 	details := map[string]any{"name": "hpc", "ip": "elsewhere"}
 	multi := map[string]any{"multi": true}
-	for _, tc := range []struct {
-		def map[string]any
-		v   any
-	}{{nil, ""}, {nil, details}, {multi, ""}} {
-		if got, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v); err != nil || !reflect.DeepEqual(got, tc.v) {
-			t.Errorf("ResolveInput(%v) with %v = %v, %v, want it as it is", tc.v, tc.def, got, err)
+	for _, called := range []bool{false, true} {
+		for _, tc := range []struct {
+			def map[string]any
+			v   any
+		}{{nil, ""}, {multi, ""}} {
+			if got, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v, called); err != nil || !reflect.DeepEqual(got, tc.v) {
+				t.Errorf("ResolveInput(%v) with %v, called %v = %v, %v, want it as it is", tc.v, tc.def, called, got, err)
+			}
 		}
 	}
-	// With multi, a list resolves each of its names, and keeps the rest of
-	// it as it is, where format 1 makes each of them null (docs/design.md,
-	// Bug fixes to format 1).
-	got, err := c.ResolveInput(t.Context(), "compute-clusters", multi, []any{"lab", "", details, "workspace", nil})
+	// A called workflow's input keeps the details its caller passes, as
+	// they are, in a list too, beside the URIs it resolves.
+	if got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, details, true); err != nil || !reflect.DeepEqual(got, details) {
+		t.Errorf("a called workflow's details = %v, %v", got, err)
+	}
+	got, err := c.ResolveInput(t.Context(), "compute-clusters", multi, []any{"pw://alice/lab", "", details, "workspace", nil}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	list := got.([]any)
 	if len(list) != 5 || list[0].(map[string]any)["ip"] != "10.1.2.3" || list[1] != "" ||
-		!reflect.DeepEqual(list[2], details) || !reflect.DeepEqual(list[3], workspace) || list[4] != nil {
-		t.Errorf("ResolveInput of a list = %v", got)
+		!reflect.DeepEqual(list[2], details) || !reflect.DeepEqual(list[3], workspaceDetails) || list[4] != nil {
+		t.Errorf("ResolveInput of a called workflow's list = %v", got)
 	}
 	// A value of another shape is refused, as the bug fix to format 1
 	// refuses it (docs/design.md, Bug fixes to format 1): without multi,
 	// what is neither text nor a mapping, a list among it; with multi, what
 	// isn't a list.
-	for _, tc := range []struct {
-		def  map[string]any
-		v    any
-		kind *problems.Kind
-	}{
-		{nil, 3.0, problems.InputNotText},
-		{nil, true, problems.InputNotText},
-		{nil, []any{"hpc"}, problems.InputNotText},
-		{multi, "hpc", problems.InputNotList},
-		{multi, details, problems.InputNotList},
-		{multi, 3.0, problems.InputNotList},
-	} {
-		_, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v)
-		if p := kindtest.Want(t, err, tc.kind); p.Params["value"] != problems.Show(tc.v) {
-			t.Errorf("ResolveInput(%v) with %v names the value %v", tc.v, tc.def, p.Params["value"])
+	for _, called := range []bool{false, true} {
+		for _, tc := range []struct {
+			def  map[string]any
+			v    any
+			kind *problems.Kind
+		}{
+			{nil, 3.0, problems.InputNotText},
+			{nil, true, problems.InputNotText},
+			{nil, []any{"pw://alice/hpc"}, problems.InputNotText},
+			{multi, "pw://alice/hpc", problems.InputNotList},
+			{multi, details, problems.InputNotList},
+			{multi, 3.0, problems.InputNotList},
+		} {
+			_, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v, called)
+			if p := kindtest.Want(t, err, tc.kind); p.Params["value"] != problems.Show(tc.v) {
+				t.Errorf("ResolveInput(%v) with %v, called %v, names the value %v", tc.v, tc.def, called, p.Params["value"])
+			}
 		}
 	}
+	// A cluster named otherwise than by its URI, at either input, and its
+	// details at a run's own, are refused, with the URI to name it by.
 	for _, tc := range []struct {
-		name  string
-		def   map[string]any
-		value any
+		def    map[string]any
+		v      any
+		called bool
+		uri    string
 	}{
-		{"unknown", nil, "cpu"},
-		{"an unknown name in a list", multi, []any{"hpc", "cpu"}},
-		{"a pw URI", nil, "pw://alice/hpc"},
+		{nil, "hpc", false, "pw://alice/hpc"},
+		{nil, "hpc", true, "pw://alice/hpc"},
+		{nil, "cpu", false, "pw://alice/cpu"},
+		{nil, "pw://hpc", false, "pw://alice/hpc"},
+		{nil, "pw://hpc", true, "pw://alice/hpc"},
+		{nil, "pw://workspace", false, "pw://alice/user-workspace"},
+		{nil, details, false, "pw://alice/hpc"},
+		{nil, map[string]any{"ip": "elsewhere"}, false, "pw://alice/<name>"},
+		{multi, []any{"pw://alice/hpc", details}, false, "pw://alice/hpc"},
+		{multi, []any{"pw://alice/hpc", 3.0}, true, "pw://alice/<name>"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.value)
+		_, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v, tc.called)
+		p := kindtest.Want(t, err, problems.ClusterURIRequired)
+		if p.Params["uri"] != tc.uri || p.Params["value"] == "" {
+			t.Errorf("ResolveInput(%v), called %v: %v, want the URI %s", tc.v, tc.called, p.Params, tc.uri)
+		}
+	}
+	// A URI of no cluster of the login name's, another user's among them,
+	// is unknown, with the clusters' URIs.
+	for _, tc := range []struct {
+		def map[string]any
+		v   any
+	}{
+		{nil, "pw://alice/cpu"},
+		{nil, "pw://bob/hpc"},
+		{nil, "pw://bob/user-workspace"},
+		{nil, "pw://alice/hpc/x"},
+		{nil, "pw://alice/"},
+		{nil, "pw://"},
+		{nil, "pw:///hpc"},
+		{multi, []any{"pw://alice/hpc", "pw://alice/cpu"}},
+	} {
+		for _, called := range []bool{false, true} {
+			_, err := c.ResolveInput(t.Context(), "compute-clusters", tc.def, tc.v, called)
 			p := kindtest.Want(t, err, problems.ClusterUnknown)
-			if p.Params["clusters"] != `"gpu.box", "hpc", "lab"` {
-				t.Errorf("the clusters listed are %v", p.Params["clusters"])
+			if p.Params["clusters"] != `"pw://alice/gpu.box", "pw://alice/hpc", "pw://alice/lab"` {
+				t.Errorf("ResolveInput(%v): the clusters listed are %v", tc.v, p.Params["clusters"])
 			}
-		})
+		}
+	}
+	// Without a login name, there is no URI to name a cluster by: the
+	// Inputs can't answer.
+	c.user = Login{Err: errors.New("no name")}
+	if _, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "pw://alice/hpc", false); err == nil || errors.As(err, new(*problem.Problem)) {
+		t.Errorf("ResolveInput without a login name gave %v", err)
 	}
 }
 
 // TestResolveClustersWithoutFile checks that without a clusters file a
-// name is ClustersNone, which names the value, and the workspace is
-// resolved all the same, as the local group needs no config either.
+// cluster's URI is ClustersNone, which names the value, and the workspace
+// is resolved all the same, as the local group needs no config either.
 func TestResolveClustersWithoutFile(t *testing.T) {
 	c := load(t, nil, nil)
-	_, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "hpc")
-	if p := kindtest.Want(t, err, problems.ClustersNone); p.Params["value"] != `"hpc"` {
+	_, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "pw://alice/hpc", false)
+	if p := kindtest.Want(t, err, problems.ClustersNone); p.Params["value"] != `"pw://alice/hpc"` {
 		t.Errorf("the problem's params are %v", p.Params)
 	}
-	if got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "workspace"); err != nil || got.(map[string]any)["id"] != "user-workspace" {
+	if got, err := c.ResolveInput(t.Context(), "compute-clusters", nil, "workspace", false); err != nil || got.(map[string]any)["id"] != "user-workspace" {
 		t.Errorf("ResolveInput of the workspace = %v, %v", got, err)
 	}
 }
 
 // TestResolveComputeResources checks that a compute-resources input gives
-// what a compute-clusters one does, as format 1 gives a cluster that
-// either names the same details: the workspace, a cluster, a list of
-// them, and what isn't a name, as it is; and that a name that is no
-// cluster here, as a Kubernetes cluster's, which format 1's form lists
-// for a compute-resources input too, is the problem compute-clusters
-// gives, with the file and without it.
+// what a compute-clusters one does, at a run's own input and at a called
+// workflow's, as format 1 gives a cluster that either names the same
+// details: the workspace, a cluster, a list of them, and a caller's
+// details; and that a URI that is no cluster here, as a Kubernetes
+// cluster's, which format 1's form lists for a compute-resources input
+// too, is the problem compute-clusters gives, with the file and without
+// it.
 func TestResolveComputeResources(t *testing.T) {
 	details := map[string]any{"name": "hpc", "ip": "elsewhere"}
 	values := []any{
-		"hpc", "lab", "gpu.box", "workspace", "user-workspace", "", "k8s", details,
-		[]any{"lab", "", details, "workspace", nil},
-		[]any{"hpc", "k8s"},
+		"pw://alice/hpc", "pw://alice/lab", "pw://alice/gpu.box", "workspace", "user-workspace", "", "pw://k8s", "k8s", details,
+		[]any{"pw://alice/lab", "", details, "workspace", nil},
+		[]any{"pw://alice/hpc", "pw://alice/k8s"},
 	}
 	for name, files := range map[string]map[string]string{"with the file": {ClustersFile: clustersText}, "without it": nil} {
 		c := load(t, files, nil)
-		for _, v := range values {
-			want, wantErr := c.ResolveInput(t.Context(), "compute-clusters", nil, v)
-			got, err := c.ResolveInput(t.Context(), "compute-resources", map[string]any{"include-workspace": false}, v)
-			if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(err, wantErr) {
-				t.Errorf("%s: ResolveInput(%v) as compute-resources = %v, %v, want %v, %v as compute-clusters", name, v, got, err, want, wantErr)
+		for _, called := range []bool{false, true} {
+			for _, v := range values {
+				want, wantErr := c.ResolveInput(t.Context(), "compute-clusters", nil, v, called)
+				got, err := c.ResolveInput(t.Context(), "compute-resources", map[string]any{"include-workspace": false}, v, called)
+				if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(err, wantErr) {
+					t.Errorf("%s: ResolveInput(%v) as compute-resources, called %v = %v, %v, want %v, %v as compute-clusters", name, v, called, got, err, want, wantErr)
+				}
 			}
 		}
 	}
 	c := load(t, map[string]string{ClustersFile: clustersText}, nil)
-	if got, err := c.ResolveInput(t.Context(), "compute-resources", nil, "hpc"); err != nil || got.(map[string]any)["ip"] != "hpc-login" {
-		t.Errorf("ResolveInput(hpc) as compute-resources = %v, %v", got, err)
+	if got, err := c.ResolveInput(t.Context(), "compute-resources", nil, "pw://alice/hpc", false); err != nil || got.(map[string]any)["ip"] != "hpc-login" {
+		t.Errorf("ResolveInput(pw://alice/hpc) as compute-resources = %v, %v", got, err)
 	}
-	_, err := c.ResolveInput(t.Context(), "compute-resources", nil, "k8s")
+	_, err := c.ResolveInput(t.Context(), "compute-resources", nil, "pw://alice/k8s", false)
 	kindtest.Want(t, err, problems.ClusterUnknown)
-	_, err = load(t, nil, nil).ResolveInput(t.Context(), "compute-resources", nil, "k8s")
+	_, err = load(t, nil, nil).ResolveInput(t.Context(), "compute-resources", nil, "pw://alice/k8s", false)
 	kindtest.Want(t, err, problems.ClustersNone)
 }
 
@@ -341,7 +399,7 @@ func createAndReady(t *testing.T, c *Config, workflow string, submitted map[stri
 func TestClusterRunsOnItsHost(t *testing.T) {
 	c := load(t, map[string]string{ClustersFile: clustersText}, nil)
 	for name, host := range map[string]string{"hpc": "hpc-login", "lab": "10.1.2.3"} {
-		_, res, rj := createAndReady(t, c, strings.Replace(clusterWorkflow, "%s", "", 1), map[string]any{"cluster": name})
+		_, res, rj := createAndReady(t, c, strings.Replace(clusterWorkflow, "%s", "", 1), map[string]any{"cluster": "pw://alice/" + name})
 		inline := rj.Target.Inline
 		if inline == nil || inline.Backend != "ssh" {
 			t.Fatalf("%s: the job's target is %+v, want an inline ssh group", name, rj.Target)
@@ -366,7 +424,7 @@ func TestClusterRunsOnItsHost(t *testing.T) {
 // the job's target private, which makes its placement private
 // (coordinator.placementPrivate), whose problems are masked.
 func TestClusterFromVariableIsPrivate(t *testing.T) {
-	c := load(t, map[string]string{ClustersFile: clustersText, VariablesFile: "vars:\n  cluster: hpc\n"}, nil)
+	c := load(t, map[string]string{ClustersFile: clustersText, VariablesFile: "vars:\n  cluster: pw://alice/hpc\n"}, nil)
 	workflow := strings.Replace(clusterWorkflow, "%s", "default: ${{ vars.cluster }}", 1)
 	created, res, rj := createAndReady(t, c, workflow, map[string]any{})
 	encoded, err := json.Marshal(created.Plan)
@@ -391,12 +449,13 @@ func TestClusterFromVariableIsPrivate(t *testing.T) {
 	}
 }
 
-// TestClusterUnknownAtCreate checks that the compiler reports a name the
-// clusters file doesn't have at the input, with the input's name.
+// TestClusterUnknownAtCreate checks that the compiler reports a URI of a
+// cluster the clusters file doesn't have at the input, with the input's
+// name, and a name alone, with the URI to name the cluster by.
 func TestClusterUnknownAtCreate(t *testing.T) {
 	c := load(t, map[string]string{ClustersFile: clustersText}, nil)
 	_, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(strings.Replace(clusterWorkflow, "%s", "", 1)),
-		map[string]any{"cluster": "cpu"}, compile.Options{Inputs: c, Variables: c, Groups: c})
+		map[string]any{"cluster": "pw://alice/cpu"}, compile.Options{Inputs: c, Variables: c, Groups: c})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,12 +463,20 @@ func TestClusterUnknownAtCreate(t *testing.T) {
 	for _, d := range diags {
 		if d.Code == problems.ClusterUnknown.Code() {
 			found = true
-			if d.Params["input"] == nil || d.Params["clusters"] != `"gpu.box", "hpc", "lab"` {
+			if d.Params["input"] == nil || d.Params["clusters"] != `"pw://alice/gpu.box", "pw://alice/hpc", "pw://alice/lab"` {
 				t.Errorf("the problem's params are %v", d.Params)
 			}
 		}
 	}
 	if !found {
 		t.Errorf("Create of an unknown cluster: %v, want %s", diags, problems.ClusterUnknown.Code())
+	}
+	_, diags, err = compile.Create(t.Context(), "workflow.yaml", []byte(strings.Replace(clusterWorkflow, "%s", "", 1)),
+		map[string]any{"cluster": "hpc"}, compile.Options{Inputs: c, Variables: c, Groups: c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) != 1 || diags[0].Code != problems.ClusterURIRequired.Code() || diags[0].Params["uri"] != "pw://alice/hpc" || diags[0].Params["input"] == nil {
+		t.Errorf("Create of a cluster's name alone: %v", diags)
 	}
 }

@@ -244,6 +244,7 @@
   "execution_group_unknown": "The input \"{input}\" names the execution group {value}, which isn't one of the groups: {groups}.",
   "cluster_unknown": "The input \"{input}\" names the cluster {value}, which is neither the workspace nor one of the clusters: {clusters}.",
   "clusters_none": "The input \"{input}\" names the cluster {value}, which isn't the workspace, and there are no other clusters here.",
+  "cluster_uri_required": "The input \"{input}\" takes a cluster's pw:// URI, as {uri}, not {value}.",
   "bucket_uri_invalid": "The input \"{input}\" takes a bucket's pw:// URI, as pw://user/bucket, not {value}.",
   "bucket_credentials_need_platform": "The input \"{input}\" asks for credentials for its bucket, which only a platform can make.",
   "source_ref_invalid": "The uses: \"{ref}\" isn't a reference to a workflow in a Git repository, such as github/owner/repository@revision.",

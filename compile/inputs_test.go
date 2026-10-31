@@ -56,7 +56,7 @@ jobs:
 // platform resolves clusters by name, and provides no other type.
 type platform struct{}
 
-func (platform) ResolveInput(_ context.Context, typ string, _ map[string]any, v any) (any, error) {
+func (platform) ResolveInput(_ context.Context, typ string, _ map[string]any, v any, _ bool) (any, error) {
 	if typ != "compute-clusters" {
 		return nil, compile.ErrInputType
 	}
@@ -85,6 +85,27 @@ func TestPlatformInputs(t *testing.T) {
 	_, diags = resolveInputs(t, doc, map[string]any{"cluster": "debug"}, compile.Options{Inputs: platform{}})
 	if len(diags) != 1 || diags[0].Code != problems.PlatformInput.Code() {
 		t.Errorf("a type the platform doesn't provide: %v", diags)
+	}
+}
+
+// calledInputs resolves every value to whether it was asked for a called
+// workflow's input.
+type calledInputs struct{}
+
+func (calledInputs) ResolveInput(_ context.Context, _ string, _ map[string]any, _ any, called bool) (any, error) {
+	return called, nil
+}
+
+// TestPlatformInputCalled checks that the Inputs resolver is told whether
+// it resolves a called workflow's input, one of a run whose Create has a
+// step that calls it (Options.Parent), or a run's own.
+func TestPlatformInputCalled(t *testing.T) {
+	doc := load(t, clusterWorkflow)
+	for _, parent := range []*compile.Parent{nil, {Run: "1", Job: "main", Root: "1", Depth: 1}} {
+		inputs, diags := resolveInputs(t, doc, map[string]any{"cluster": "pw://alice/hpc"}, compile.Options{Inputs: calledInputs{}, Parent: parent})
+		if len(diags) != 0 || inputs.Values["cluster"] != (parent != nil) {
+			t.Errorf("with the parent %v, the resolver was told called %v, %v", parent, inputs.Values["cluster"], diags)
+		}
 	}
 }
 
@@ -212,7 +233,7 @@ func TestRowConditionsNotApplied(t *testing.T) {
 // rejects is a platform that rejects every value with err.
 type rejects struct{ err error }
 
-func (r rejects) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
+func (r rejects) ResolveInput(context.Context, string, map[string]any, any, bool) (any, error) {
 	return nil, r.err
 }
 
@@ -272,7 +293,7 @@ func TestPlatformInputProblem(t *testing.T) {
 // returns is a platform whose value for every input is v.
 type returns struct{ v any }
 
-func (r returns) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
+func (r returns) ResolveInput(context.Context, string, map[string]any, any, bool) (any, error) {
 	return r.v, nil
 }
 

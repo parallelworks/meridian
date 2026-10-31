@@ -1432,7 +1432,7 @@
     ]
   },
   "cluster_unknown": {
-    "why": "A compute-clusters or compute-resources input's value names a cluster, and the run sees the cluster's details, such as its ip and its schedulerType. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, whatever the input's include-workspace, provider and csp say, which only choose what a form lists.",
+    "why": "A compute-clusters or compute-resources input's value names a cluster by its pw:// URI, and the run sees the cluster's details, such as its ip and its schedulerType. On the machine running the workflow, a URI names the workspace, this machine, as pw://user-workspace or pw://<login>/user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, as pw://<login>/<name>, where <login> is the login name of the user who runs meridian, whatever the input's include-workspace, provider and csp say, which only choose what a form lists. Another user's URI names no cluster here.",
     "fix": [
       "Choose one of the clusters the message lists, or the workspace.",
       "Or define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it.",
@@ -1440,14 +1440,21 @@
     ]
   },
   "clusters_none": {
-    "why": "A compute-clusters or compute-resources input's value names a cluster. On the machine running the workflow, a name is the workspace, this machine, as workspace or user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, and there is no clusters.yaml, or it defines no cluster.",
+    "why": "A compute-clusters or compute-resources input's value names a cluster by its pw:// URI. On the machine running the workflow, a URI names the workspace, this machine, as pw://user-workspace or pw://<login>/user-workspace, or one of the clusters of clusters.yaml in Meridian's config directory, as pw://<login>/<name>, and there is no clusters.yaml, or it defines no cluster.",
     "fix": [
       "Define the cluster in clusters.yaml in Meridian's config directory, with the SSH host that reaches it.",
       "Or run the workflow on a platform that provides the input's clusters: run on its own, Meridian knows only the clusters of clusters.yaml and the workspace, so a Kubernetes cluster, which a compute-resources input can name on a platform, isn't available here."
     ]
   },
+  "cluster_uri_required": {
+    "why": "A compute-clusters or compute-resources input names a cluster by its pw:// URI. On the machine running the workflow, a cluster of clusters.yaml in Meridian's config directory is pw://, the login name of the user who runs meridian, a slash and the cluster's name, as pw://alice/hpc; and the workspace, this machine, is also workspace, user-workspace, pw://user-workspace or pw://alice/user-workspace. A name alone isn't a URI, and pw:// and a name names an organization's cluster on a platform, which a run here has none of. A run's own input takes the URI, as a platform's form gives it; only a workflow a step calls is given a cluster's details, a mapping, as its caller passes those it has.",
+    "fix": [
+      "Write the cluster as the URI the message gives, with the cluster's name in clusters.yaml.",
+      "Give a cluster's details only to a workflow a step calls, in the step's with:, as format 1 passes them."
+    ]
+  },
   "bucket_uri_invalid": {
-    "why": "A bucket input names a bucket by its URI on the platform that holds it: pw://, the user who owns it, a slash and the bucket's name. A platform reads a bucket's name alone, or pw:// and the name, as one of the user's own buckets, which needs their platform username. A run here has none, so the URI must name the user.",
+    "why": "A bucket input names a bucket by its URI on the platform that holds it: pw://, the user who owns it, a slash and the bucket's name. A platform reads a bucket's name alone, or pw:// and the name, as one of the user's own buckets, which needs their platform username. A run here has none, so the URI must name the user. A run's own input takes the URI, as a platform's form gives it; only a workflow a step calls is given a bucket's details, a mapping, as its caller passes those it has.",
     "fix": [
       "Write the bucket as pw://user/bucket, with the platform username of the bucket's owner."
     ]

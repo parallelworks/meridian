@@ -13,10 +13,14 @@
 #   scheduler  optional: slurm or pbs, which a workflow reads as the
 #              cluster's schedulerType; without it, "".
 #
-# An input that names hpc sees name and id hpc, ip hpc-login, schedulerType
-# slurm, and type and provider existing. The name workspace needs no entry:
-# it is this machine, and no cluster can be named workspace, user-workspace
-# or localhost.
+# An input names a cluster by its URI, pw://, your login name, a slash and
+# the cluster's name: for the user alice, pw://alice/hpc, as in
+#   meridian run --input cluster=pw://alice/hpc workflow.yaml
+# It sees name and id hpc, ip hpc-login, schedulerType slurm, type and
+# provider existing, uri pw://alice/hpc, and user and namespace alice. The
+# workspace needs no entry: it is this machine, as workspace, user-workspace,
+# pw://user-workspace or pw://alice/user-workspace, and no cluster can be
+# named workspace, user-workspace or localhost.
 
 hpc:
   host: hpc-login

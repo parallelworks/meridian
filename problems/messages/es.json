@@ -238,6 +238,7 @@
   "execution_group_unknown": "La entrada “{input}” nombra el grupo de ejecución {value}, que no es uno de los grupos: {groups}.",
   "cluster_unknown": "La entrada “{input}” nombra el clúster {value}, que no es el workspace ni uno de los clústeres: {clusters}.",
   "clusters_none": "La entrada “{input}” nombra el clúster {value}, que no es el workspace, y aquí no hay otros clústeres.",
+  "cluster_uri_required": "La entrada “{input}” recibe la URI pw:// de un clúster, como {uri}, no {value}.",
   "bucket_uri_invalid": "La entrada “{input}” recibe la URI pw:// de un bucket, como pw://usuario/bucket, no {value}.",
   "bucket_credentials_need_platform": "La entrada “{input}” pide credenciales para su bucket, que solo una plataforma puede crear.",
   "source_ref_invalid": "El uses: “{ref}” no es una referencia a un flujo de trabajo en un repositorio Git, como github/propietario/repositorio@revisión.",

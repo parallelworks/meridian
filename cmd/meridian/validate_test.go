@@ -683,12 +683,13 @@ jobs:
 }
 
 // TestValidateClusters checks that a compute-clusters input names one of
-// the clusters of the config's clusters.yaml, and so does a
+// the clusters of the config's clusters.yaml by its URI, and so does a
 // compute-resources one, as format 1 gives a cluster either names the same
-// details; and that without the file a name is refused, saying there are
-// none.
+// details; that without the file a URI is refused, saying there are none;
+// and that a cluster's name alone is refused, with the URI to name it by.
 func TestValidateClusters(t *testing.T) {
 	parallel(t)
+	hpc, cpu := clusterURI(t, "hpc"), clusterURI(t, "cpu")
 	for _, typ := range []string{"compute-clusters", "compute-resources"} {
 		env := emptyEnv(t)
 		workflow := writeFile(t, typ+".yaml", `on:
@@ -703,7 +704,7 @@ jobs:
     steps:
       - run: echo
 `)
-		if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitInvalid || !strings.Contains(r.stdout, "(clusters_none)") {
+		if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster="+hpc, workflow); r.code != exitInvalid || !strings.Contains(r.stdout, "(clusters_none)") {
 			t.Errorf("%s: meridian validate without clusters.yaml = %+v", typ, r)
 		}
 		config := env[local.EnvConfigDir]
@@ -713,12 +714,16 @@ jobs:
 		if err := os.WriteFile(filepath.Join(config, local.ClustersFile), []byte("hpc:\n  host: hpc-login\n  scheduler: slurm\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitOK || r.stdout != "" {
-			t.Errorf("%s: meridian validate with cluster hpc = %+v", typ, r)
+		if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster="+hpc, workflow); r.code != exitOK || r.stdout != "" {
+			t.Errorf("%s: meridian validate with cluster %s = %+v", typ, hpc, r)
 		}
-		r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=cpu", workflow)
-		if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_unknown)") || !strings.Contains(r.stdout, `"hpc"`) {
-			t.Errorf("%s: meridian validate with cluster cpu = %+v", typ, r)
+		r := runCLI(t, env, "", "validate", "--start", "--input", "cluster="+cpu, workflow)
+		if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_unknown)") || !strings.Contains(r.stdout, `"`+hpc+`"`) {
+			t.Errorf("%s: meridian validate with cluster %s = %+v", typ, cpu, r)
+		}
+		r = runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow)
+		if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_uri_required)") || !strings.Contains(r.stdout, hpc) {
+			t.Errorf("%s: meridian validate with the name hpc alone = %+v", typ, r)
 		}
 	}
 }
@@ -785,7 +790,7 @@ jobs:
     steps:
       - run: echo "#SBATCH --account=${{ inputs.slurm.account }} --qos=${{ inputs.slurm.qos }} --partition=${{ inputs.slurm.partition }}" ${{ inputs.k8s.namespace }} ${{ inputs.allocation }}
 `)
-	named := []string{"--input", "cluster=hpc", "--input", "k8s.cluster=lab", "--input", "k8s.namespace=team", "--input", "allocation=research"}
+	named := []string{"--input", "cluster=" + clusterURI(t, "hpc"), "--input", "k8s.cluster=lab", "--input", "k8s.namespace=team", "--input", "allocation=research"}
 	args := append([]string{"validate", "--start"}, named...)
 	r := runCLI(t, env, "", append(args, workflow)...)
 	if r.code != exitInvalid || strings.Count(r.stdout, "(input_required)") != 2 || !strings.Contains(r.stdout, "slurm.account") || !strings.Contains(r.stdout, "slurm.qos") {
@@ -795,7 +800,7 @@ jobs:
 	if r := runCLI(t, env, "", append(args, workflow)...); r.code != exitOK || r.stdout != "" {
 		t.Errorf("meridian validate with every name given = %+v", r)
 	}
-	inputs := writeFile(t, "inputs.json", `{"cluster": "hpc", "slurm": {"account": 7, "qos": "normal"}, "k8s": {"cluster": "lab", "namespace": "team"}, "allocation": "research"}`)
+	inputs := writeFile(t, "inputs.json", `{"cluster": "`+clusterURI(t, "hpc")+`", "slurm": {"account": 7, "qos": "normal"}, "k8s": {"cluster": "lab", "namespace": "team"}, "allocation": "research"}`)
 	r = runCLI(t, env, "", "validate", "--start", "--inputs", inputs, workflow)
 	if r.code != exitInvalid || !strings.Contains(r.stdout, "(input_not_text)") || !strings.Contains(r.stdout, "slurm.account") {
 		t.Errorf("meridian validate with an account that isn't text = %+v", r)

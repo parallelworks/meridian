@@ -448,47 +448,58 @@ the SHA-256 hash of its content: 218 files.
   keys the inner group dropped. None of the 218 known workflows has a group
   with `flatten`, which format 1 adds
   ([The workflow format](#the-workflow-format)).
-- **A platform input's value is of its type's shape**: with `multi`, a
-  list, and otherwise text or a mapping, the details a run passes to a
-  workflow it calls; `""` is no value. A value of another shape is
-  `input_not_text`, or `input_not_list` with `multi`. Only
-  `compute-clusters`, `compute-resources` and `bucket` read `multi`; a
-  scheduler's partitions, accounts, QoS and queues, Kubernetes clusters,
-  namespaces and volume claims, and an organization's groups take text or
-  a mapping whatever it says. A list's items are its type's: a cluster
-  list resolves each name and keeps the rest as it is, as the details of
-  clusters a caller resolved already, where ACTIVATE made each item that
-  isn't text, or is `""`, null, so that they reached the called workflow
-  as `[null]`; and a bucket list takes only URIs, as ACTIVATE does but
-  for a bare name, and mappings here ([Interfaces](#interfaces)). Format
-  1's run creation checked no shape against `multi`, so a value of another
-  one reached the run as it was given, or resolved: a read of a cluster's
-  or a bucket's details, as its `ip` or `uri`, from a list, or of a
-  cluster's from a number or a boolean, gave `""`, and an input that takes
-  a name, such as a Slurm partition, given a list, gave its JSON text.
-  ACTIVATE takes the same fix as it creates a run. Both check the shape
-  of the value the run reads, a default included; but a default written
-  as an expression ACTIVATE checks only as it evaluates it, later, where
-  Meridian checks what it gives as it compiles. None of the known
-  workflows' inputs of these types has one. And ACTIVATE's fix
-  gives a `compute-clusters`, `compute-resources` or `bucket` input its
-  default, when that is non-empty text, only for `""` and null, where its
-  fallback gave it for any value but text, a mapping among them. Meridian
-  does the same for these three types' null, and gives every type's `""`
-  its default, whatever that is. Of the 218 known workflows'
-  inputs of these types, 206 `compute-clusters`, 7 `compute-resources`,
-  11 `bucket` and 315 of the others, none is `multi`, and no default is a
-  list, a number or a boolean; and none of the 261 of their 270 calls
-  whose called workflow is known gives one a list, a number or a boolean.
+- **A resource input's value is its URI**: a `compute-clusters` or
+  `compute-resources` input takes `pw://user/name`, a user's cluster, or
+  `pw://name`, an organization's, and a `bucket` input `pw://user/name`;
+  with `multi`, a list of them; and `""` is no value. The workspace keeps
+  the names it is resolved by: `workspace`, `user-workspace`,
+  `pw://user-workspace` and `pw://<user>/user-workspace`. At a run's own
+  input, submitted or a default, a name alone, or a mapping of details,
+  is refused (`cluster_uri_required`, `bucket_uri_invalid`); a called
+  workflow's input also takes the details its caller passes, a mapping,
+  which are kept, and resolves a URI. A value of another shape is
+  `input_not_text`, or `input_not_list` with `multi`. Only these three
+  types read `multi`; a scheduler's partitions, accounts, QoS and
+  queues, Kubernetes clusters, namespaces and volume claims, and an
+  organization's groups take text or a mapping whatever it says. Format
+  1 took a name alone as the user's own resource, and failing that
+  guessed at an organization's or a shared one, so a resource named
+  otherwise than by its URI could be another than meant; it kept a
+  cluster's mapping as it was, as its form sent a `compute-resources`
+  input's, so a run's own input could hold details nothing resolved; and
+  its run creation checked no shape against `multi`, so a read of a
+  cluster's or a bucket's details, as its `ip` or `uri`, from a list, or
+  of a cluster's from a number or a boolean, gave `""`, and an input that
+  takes a name, such as a Slurm partition, given a list, gave its JSON
+  text. A cluster list resolves each URI and, at a called workflow's
+  input, keeps details, where ACTIVATE made each item that isn't text,
+  or is `""`, null, so that they reached the called workflow as
+  `[null]`. ACTIVATE takes the same fix as it creates a run. Both check
+  the value the run reads, a default included; but a default written as
+  an expression ACTIVATE checks only as it evaluates it, later, where
+  Meridian checks what it gives as it compiles. And ACTIVATE's fix gives
+  these three types' input its default, when that is non-empty text,
+  only for `""` and null, where its fallback gave it for any value but
+  text, a mapping among them; Meridian does the same for their null, and
+  gives every type's `""` its default, whatever that is. Of the 218 known
+  workflows' inputs of these types, 206 `compute-clusters`, 7
+  `compute-resources`, 11 `bucket` and 315 of the others, none is
+  `multi`, and no default is a list, a number, a boolean, a mapping or an
+  expression: the only defaults of the three are 4 `compute-clusters`
+  ones of `workspace`, which its reserved names keep, so none of the 218
+  breaks. Of their 270 calls, the 261 whose called workflow is known give
+  151 values to these inputs, all `compute-clusters` and all the
+  caller's details, which a called workflow's input keeps; none gives
+  one a list, a number or a boolean.
 - **A `compute-resources` input names a cluster as a `compute-clusters`
-  one does**: a name, or a `pw://` reference, becomes the cluster's
-  details, where ACTIVATE's run handler resolved a name only for
-  `compute-clusters`, so that a `compute-resources` input given one
-  through its API or its CLI reached the run as the name, and every read
-  of its details, as its `ip`, gave `""`. Its form, which lists the
-  Kubernetes clusters the user can reach for `compute-resources` too,
-  gives a cluster that either names the same details, so only a name
-  given otherwise was wrong. ACTIVATE takes the same fix, and resolves a
+  one does**: its `pw://` URI becomes the cluster's details, where
+  ACTIVATE's run handler resolved one only for `compute-clusters`, so
+  that a `compute-resources` input given one through its API or its CLI
+  reached the run as the URI, and every read of its details, as its
+  `ip`, gave `""`. Its form, which lists the Kubernetes clusters the user
+  can reach for `compute-resources` too, sent the cluster's details,
+  which a run's own input now refuses (above). ACTIVATE takes the same
+  fix, and resolves a
   `pw://` reference to a Kubernetes cluster the user can reach to what
   its form gives for one; Meridian has no Kubernetes clusters of its own,
   so `clusters.yaml` names only clusters
@@ -1026,7 +1037,7 @@ ACTIVATE's launch form and its backend do together:
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
   input of such a type that has a value is an error. Format 1 gives a run
-  the details of a cluster and of a bucket for its name; every other
+  the details of a cluster and of a bucket for its URI; every other
   type's value is the name as it was given, text or a mapping, of the
   shape a bug fix checks ([Bug fixes to format 1](#bug-fixes-to-format-1)),
   whose name nothing checks as the run is created: a platform's form lists
@@ -1941,7 +1952,7 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; `compute-resources` the same, as format 1 gives a cluster that either names the same details ([Bug fixes to format 1](#bug-fixes-to-format-1)), though its form lists Kubernetes clusters too, which it never names here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by their URI, `pw://<login>/<name>`, and the workspace, this machine, by its reserved names too; `compute-resources` the same, as format 1 gives a cluster that either names the same details ([Bug fixes to format 1](#bug-fixes-to-format-1)), though its form lists Kubernetes clusters too, which it never names here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
@@ -1960,23 +1971,17 @@ signed in to the platform as it runs, standalone as on the platform:
 Meridian gives the step the name, and doesn't stand in for that CLI.
 
 The local Inputs gives format 1's platform inputs otherwise than ACTIVATE
-in four ways:
+in two ways:
 
-- **A bare name, and `pw://name`, aren't a bucket** (`bucket_uri_invalid`).
-  ACTIVATE reads each as one of the caller's own buckets, by the run's
-  user's platform username, which a run here doesn't have.
-- **A bucket input's mapping is kept as given**, as its details, and so
-  is one in a bucket list. ACTIVATE refuses one among a root run's
-  submitted inputs, unless the input's non-empty default takes its place,
-  so that no credential is made from details the caller wrote. Inputs
-  can't tell a root's input from a called workflow's, which is given its
-  caller's details so; and here no credential is made from a mapping.
 - **A called workflow's input of a platform's type is resolved**, and its
-  shape checked, as a root's is ([Bug fixes to format 1](#bug-fixes-to-format-1)).
-  ACTIVATE resolves and checks only a root run's submitted inputs, as it
-  creates the run, so a caller whose `with:` gives a bucket's `pw://` URI,
-  or a cluster's name, gives the called workflow that text there, and its
-  details here.
+  shape checked, as a run's own is
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)), and a cluster's or a
+  bucket's also takes the details its caller passes, a mapping, which are
+  kept. ACTIVATE resolves and checks only a root run's submitted inputs,
+  as it creates the run, so a caller whose `with:` gives a bucket's or a
+  cluster's `pw://` URI gives the called workflow that text there, and its
+  details here. All 151 values the known workflows' calls give these
+  inputs are details.
 - **A bucket's details are its `type`, `name`, `user` and `uri`.**
   ACTIVATE's hold its `csp` and `id` too, and its `bucketName` and
   `region` once it is provisioned, which only the platform's record of it
@@ -5208,7 +5213,7 @@ the config replaces. Groups and clusters are never read from the repository
 a workflow comes from, so cloning a workflow can't add a host to yours. It
 can still send its jobs to one you defined, by naming it: a `runs-on:` that
 names one of your groups, or a `compute-clusters` input whose default is
-`hpc`, names your own group or cluster. And a format 1 `ssh:` names its
+`pw://<your login>/hpc`, names your own group or cluster. And a format 1 `ssh:` names its
 host itself.
 
 - **`groups.yaml`** holds each group by name, with its members in order:
@@ -5281,7 +5286,10 @@ host itself.
     `source_on_platform`.
 - **`clusters.yaml`** holds the clusters a `compute-clusters` input, or
   a `compute-resources` one, can name, each by its name, with its
-  `host`, and, if it gives one, its `scheduler`, `slurm` or `pbs`
+  `host`, and, if it gives one, its `scheduler`, `slurm` or `pbs`. An
+  input names one by its URI, `pw://<login>/<name>`, where `<login>` is
+  the login name of the user who runs meridian, as `PW_USER` is, as
+  `meridian run --input cluster=pw://alice/hpc` for the user `alice`
   ([`docs/examples/clusters.yaml`](examples/clusters.yaml)). The host is
   an alias that ssh resolves, as `ssh -G` does, or a host name or an
   address, without a port: format 1 gives an existing cluster's `ip` so,
@@ -5306,23 +5314,27 @@ host itself.
   cluster's that has none; `existing` as its `type` and its `provider`, as
   format 1 names a cluster that a platform reaches but didn't make, which
   73 of those workflows read to decide what else to ask for; and `$type`
-  `computeResource`. What names a platform's own record of the cluster,
-  its `pw://` `uri`, and its owner's platform account, its `user` and its
-  `namespace`, it leaves out: an existing cluster without
-  the account fields, a shape format 1 doesn't give, where the 5 reads of
-  them in the known workflows feed the platform's own CLI. The workspace,
-  `workspace` or `user-workspace`, is the machine a run starts on, this
-  one, and needs no config: `id` and `name` `user-workspace`, and `ip`
-  `""`, as format 1 gives it, without the person's platform account.
+  `computeResource`; and its URI as `uri`, and the login name as its
+  `user` and its `namespace`, as format 1 gives its owner's platform
+  account, which 7, 2 and 3 of the known workflows read. The workspace is
+  the machine a run starts on, this one, and needs no config: it keeps
+  the names format 1 resolves it by, `workspace`, `user-workspace`,
+  `pw://user-workspace` and `pw://<login>/user-workspace`, and gives `id`
+  and `name` `user-workspace`, `ip` `""`, as format 1 gives it, and its
+  URI, `user` and `namespace`.
 
-  A name resolves whatever the input's definition says, as format 1
+  A URI resolves whatever the input's definition says, as format 1
   resolves it: `include-workspace`, `provider` and `csp` choose only what
-  a form lists, and a name given otherwise, or a default the form can't
-  list, is resolved all the same. Another name is `cluster_unknown`, which
-  lists the clusters, or `clusters_none` when there are none, as without
-  a clusters file. A list of names gives each one's details, and what in
-  it isn't a name, as the details a run passes to a workflow it calls, is
-  kept as it is ([Bug fixes to format 1](#bug-fixes-to-format-1)).
+  a form lists, and a URI given otherwise, or a default the form can't
+  list, is resolved all the same. A name alone, and `pw://name`, which a
+  platform reads as an organization's cluster, of which there are none
+  here, are `cluster_uri_required`, which gives the URI to name the
+  cluster by. Another user's URI, or one of no cluster, is
+  `cluster_unknown`, which lists the clusters' URIs, or `clusters_none`
+  when there are none, as without a clusters file. A list of URIs gives
+  each one's details, and a called workflow's input keeps the details its
+  caller passes, in a list too
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)).
 
   A cluster's host is in the run's values in the clear, as the rest of an
   input's value is, which whoever can see the run sees, as on a platform.

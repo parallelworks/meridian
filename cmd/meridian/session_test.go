@@ -295,5 +295,5 @@ func TestSSHSession(t *testing.T) {
 	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env)
-	checkSessionServed(t, env, h.setUp, "--input", "cluster=hpc", writeFile(t, "w.yaml", sessionWorkflow(true)))
+	checkSessionServed(t, env, h.setUp, "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", sessionWorkflow(true)))
 }

@@ -127,17 +127,24 @@ var (
 	// there are, as QuoteAll writes them.
 	ExecutionGroupUnknown = define(Error, "execution_group_unknown", "No such execution group", "input", "value", "groups")
 	// ClusterUnknown is what the meridian command's Inputs gives for a
-	// compute-clusters input whose value names neither the workspace nor
-	// one of the user's clusters, and ClustersNone when the user has none:
-	// value is the name, as Show writes it, and clusters the clusters there
-	// are, as QuoteAll writes them.
-	ClusterUnknown = define(Error, "cluster_unknown", "No such cluster", "input", "value", "clusters")
-	ClustersNone   = define(Error, "clusters_none", "No clusters to choose from", "input", "value")
+	// compute-clusters input whose value, a URI, names neither the
+	// workspace nor one of the user's clusters, and ClustersNone when the
+	// user has none: value is the URI, as Show writes it, and clusters the
+	// clusters' URIs, as QuoteAll writes them. ClusterURIRequired is what it
+	// gives for a value that names a cluster otherwise than by its URI
+	// here: a name alone, pw://name, which a platform reads as an
+	// organization's cluster, or, at a run's own input, the cluster's
+	// details, which only a workflow's caller passes; value is the value,
+	// as Show writes it, and uri the URI to name the cluster by.
+	ClusterUnknown     = define(Error, "cluster_unknown", "No such cluster", "input", "value", "clusters")
+	ClustersNone       = define(Error, "clusters_none", "No clusters to choose from", "input", "value")
+	ClusterURIRequired = define(Error, "cluster_uri_required", "Not a cluster's pw:// URI", "input", "value", "uri")
 	// BucketURIInvalid is what the meridian command's Inputs gives for a
 	// bucket input whose value isn't a bucket's pw://user/name URI, as a
 	// name alone or pw://name, which a platform reads as one of the user's
-	// own buckets, and a run here has no platform user to read it as: value
-	// is the value, as Show writes it. BucketCredentialsNeedPlatform is what
+	// own buckets, and a run here has no platform user to read it as, or,
+	// at a run's own input, the bucket's details, which only a workflow's
+	// caller passes: value is the value, as Show writes it. BucketCredentialsNeedPlatform is what
 	// it gives for a bucket input with generateCredentials, whose access
 	// keys only the platform that holds the bucket can make.
 	BucketURIInvalid              = define(Error, "bucket_uri_invalid", "Not a bucket's pw:// URI", "input", "value")

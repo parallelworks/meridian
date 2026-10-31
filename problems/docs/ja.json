@@ -1666,7 +1666,7 @@
   },
   "cluster_unknown": {
     "title": "不明なクラスター",
-    "why": "compute-clusters または compute-resources 入力の値はクラスターを指定し、実行はそのクラスターの詳細（ip や schedulerType など）を参照します。ワークフローを実行するマシンでは、名前は workspace（このマシン、workspace または user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれかです。入力の include-workspace、provider、csp はフォームが一覧に出すものを選ぶだけで、ここでは関係しません。",
+    "why": "compute-clusters または compute-resources 入力の値はクラスターをその pw:// URI で指定し、実行はそのクラスターの詳細（ip や schedulerType など）を参照します。ワークフローを実行するマシンでは、URI は workspace（このマシン、pw://user-workspace または pw://<login>/user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれか（pw://<login>/<name>）を指します。<login> は meridian を実行するユーザーのログイン名です。入力の include-workspace、provider、csp はフォームが一覧に出すものを選ぶだけで、ここでは関係しません。他のユーザーの URI は、ここではどのクラスターも指しません。",
     "fix": [
       "メッセージに挙げられたクラスターのいずれか、または workspace を選んでください。",
       "または、Meridian の設定ディレクトリにある clusters.yaml で、そのクラスターに届く SSH ホストとともにクラスターを定義してください。",
@@ -1675,15 +1675,23 @@
   },
   "clusters_none": {
     "title": "選べるクラスターがない",
-    "why": "compute-clusters または compute-resources 入力の値はクラスターを指定します。ワークフローを実行するマシンでは、名前は workspace（このマシン、workspace または user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれかですが、clusters.yaml がないか、クラスターを定義していません。",
+    "why": "compute-clusters または compute-resources 入力の値はクラスターをその pw:// URI で指定します。ワークフローを実行するマシンでは、URI は workspace（このマシン、pw://user-workspace または pw://<login>/user-workspace）か、Meridian の設定ディレクトリにある clusters.yaml のクラスターのいずれか（pw://<login>/<name>）を指しますが、clusters.yaml がないか、クラスターを定義していません。",
     "fix": [
       "Meridian の設定ディレクトリにある clusters.yaml で、そのクラスターに届く SSH ホストとともにクラスターを定義してください。",
       "または、入力のクラスターを提供するプラットフォームでワークフローを実行してください。単独で実行される Meridian が知っているのは clusters.yaml のクラスターと workspace だけなので、プラットフォームで compute-resources 入力が指定できる Kubernetes クラスターは、ここでは使えません。"
     ]
   },
+  "cluster_uri_required": {
+    "title": "クラスターの pw:// URI ではない値",
+    "why": "compute-clusters または compute-resources 入力は、クラスターをその pw:// URI で指定します。ワークフローを実行するマシンでは、Meridian の設定ディレクトリにある clusters.yaml のクラスターは、pw://、meridian を実行するユーザーのログイン名、スラッシュ、クラスター名の順で、pw://alice/hpc のようになります。workspace（このマシン）は、workspace、user-workspace、pw://user-workspace、pw://alice/user-workspace とも書けます。名前だけでは URI ではなく、pw:// と名前だけでは、プラットフォーム上の組織のクラスターを指しますが、ここでの実行にはそれがありません。実行自身の入力は、プラットフォームのフォームが渡すように URI を受け取ります。クラスターの詳細（マッピング）を受け取るのは、ステップが呼び出すワークフローだけで、呼び出し元が持っている詳細をそのまま渡します。",
+    "fix": [
+      "メッセージに示された URI の形で、clusters.yaml にあるクラスター名を使ってクラスターを書いてください。",
+      "クラスターの詳細は、形式 1 が渡すように、ステップの with: で、そのステップが呼び出すワークフローにだけ渡してください。"
+    ]
+  },
   "bucket_uri_invalid": {
     "title": "バケットの pw:// URI ではない値",
-    "why": "バケット入力は、バケットを保持するプラットフォーム上の URI でバケットを指定します。pw://、所有者のユーザー、スラッシュ、バケット名の順です。プラットフォームは、バケット名だけ、または pw:// と名前だけを、そのユーザー自身のバケットとして読みます。これにはプラットフォームのユーザー名が必要ですが、ここでの実行にはそれがないため、URI でユーザーを指定する必要があります。",
+    "why": "バケット入力は、バケットを保持するプラットフォーム上の URI でバケットを指定します。pw://、所有者のユーザー、スラッシュ、バケット名の順です。プラットフォームは、バケット名だけ、または pw:// と名前だけを、そのユーザー自身のバケットとして読みます。これにはプラットフォームのユーザー名が必要ですが、ここでの実行にはそれがないため、URI でユーザーを指定する必要があります。実行自身の入力は、プラットフォームのフォームが渡すように URI を受け取ります。バケットの詳細（マッピング）を受け取るのは、ステップが呼び出すワークフローだけで、呼び出し元が持っている詳細をそのまま渡します。",
     "fix": [
       "バケットを pw://user/bucket の形で、バケット所有者のプラットフォームのユーザー名とともに書いてください。"
     ]

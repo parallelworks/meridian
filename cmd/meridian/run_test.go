@@ -22,6 +22,7 @@ import (
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/kindtest"
+	"github.com/parallelworks/meridian/internal/login"
 	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/internal/testtiming"
 	"github.com/parallelworks/meridian/plan"
@@ -187,6 +188,18 @@ func waitingWorkflow(t *testing.T) (workflow string, release func()) {
 	}
 	t.Cleanup(release)
 	return workflow, release
+}
+
+// clusterURI returns the URI of the cluster named name of clusters.yaml,
+// as a compute-clusters input takes it: of the login name of the user who
+// runs the test, as meridian names the clusters (login.Name).
+func clusterURI(t testing.TB, name string) string {
+	t.Helper()
+	user, err := login.Name()
+	if err != nil {
+		t.Skipf("no login name to name a cluster by: %v", err)
+	}
+	return "pw://" + user + "/" + name
 }
 
 // waitUntil waits until ok, which it asks every so often, for as long as a

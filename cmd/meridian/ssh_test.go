@@ -273,7 +273,7 @@ func TestSSHRun(t *testing.T) {
 	env := runEnv(t)
 	h := newSSHHost(t, env)
 	h.release(t)
-	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow)))
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", sshWorkflow)))
 	if r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
 		t.Fatalf("meridian run of a job on a host = %+v", r)
 	}
@@ -351,7 +351,7 @@ func TestSSHChild(t *testing.T) {
 	flowsRepo(t, map[string]string{"flows/child.yaml": sshChild})
 	env := runEnv(t)
 	h := newSSHHost(t, env)
-	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshCaller)))
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", sshCaller)))
 	if r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
 		t.Fatalf("meridian run of a call on a host = %+v", r)
 	}
@@ -405,7 +405,7 @@ func TestSSHChildOfLocalCaller(t *testing.T) {
 	flowsRepo(t, map[string]string{"flows/child.yaml": sshChild})
 	env := runEnv(t)
 	h := newSSHHost(t, env)
-	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshLocalCaller)))
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", sshLocalCaller)))
 	if r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
 		t.Fatalf("meridian run of a call of a job on a host = %+v", r)
 	}
@@ -426,7 +426,7 @@ func TestSSHOutage(t *testing.T) {
 	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env)
-	running := startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow))
+	running := startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", sshWorkflow))
 	waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
 	h.server.Drop()
 	h.release(t)
@@ -452,7 +452,7 @@ func TestSSHTakeover(t *testing.T) {
 	running := startCommand(t, env, func(c *cli) {
 		h.setUp(c)
 		c.interactive, c.signals = &no, interrupt
-	}, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow))
+	}, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", sshWorkflow))
 	waitUntil(t, "the step to start", func() bool { return strings.Contains(running.stdout.String(), "main step 0 started") })
 	interrupt <- os.Interrupt
 	if r := endedWithin(t, running); r.code != exitError || !strings.Contains(r.stdout, "run 1 left running") {
@@ -476,7 +476,7 @@ func TestSSHForwardingRefused(t *testing.T) {
 	env := runEnv(t)
 	h := newSSHHost(t, env, func(o *sshtest.Options) { o.NoForwarding = true })
 	h.release(t)
-	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow)))
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", sshWorkflow)))
 	if r.code != exitInvalid || !strings.Contains(r.stdout+r.stderr, "(ssh_forwarding_refused)") {
 		t.Fatalf("meridian run of a job on a host that forwards no sockets = %+v", r)
 	}
@@ -502,7 +502,7 @@ func TestSSHAlgorithmsUnapproved(t *testing.T) {
 		o.Ciphers = []string{"chacha20-poly1305@openssh.com"}
 	})
 	h.release(t)
-	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", sshWorkflow)))
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", sshWorkflow)))
 	if r.code == exitOK || !strings.Contains(r.stdout+r.stderr, "(ssh_algorithms_unapproved)") {
 		t.Fatalf("meridian run of a job on a host that offers only unapproved algorithms = %+v", r)
 	}

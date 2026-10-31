@@ -23,5 +23,5 @@ var passedThrough = []string{
 // the input's multi says, is problems.InputNotText, as the bug fix to
 // format 1 refuses it (resolveEach).
 func passThrough(value any) (any, error) {
-	return resolveEach(value, false, func(name string) (any, error) { return name, nil }, nil)
+	return resolveEach(value, false, func(v any) (any, error) { return v, nil })
 }
