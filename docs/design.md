@@ -259,6 +259,12 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     the run started on ([Workflows a step calls](#workflows-a-step-calls));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
+  - what the meridian command's Inputs gives of a bucket and of a called
+    workflow's platform inputs: a bucket's details without what only the
+    platform's record holds, a bare name and `pw://name` refused, a
+    mapping among a root's inputs kept, and a called workflow's input of
+    a platform's type resolved as a root's is
+    ([Interfaces](#interfaces));
   - how a job's `ssh:` reaches its host, where its run's directory is
     there, and what an outage or a cancel does to its steps
     ([The `ssh` backend](#the-ssh-backend)).
@@ -1885,6 +1891,28 @@ workflow with a Kubernetes input, and `pw buckets cp` in every one that
 requires a bucket, needs that CLI installed and
 signed in to the platform as it runs, standalone as on the platform:
 Meridian gives the step the name, and doesn't stand in for that CLI.
+
+The local Inputs gives format 1's platform inputs otherwise than ACTIVATE
+in four ways:
+
+- **A bare name, and `pw://name`, aren't a bucket** (`bucket_uri_invalid`).
+  ACTIVATE reads each as one of the caller's own buckets, by the run's
+  user's platform username, which a run here doesn't have.
+- **A bucket input's mapping is kept as given**, as its details.
+  ACTIVATE refuses one among a root run's submitted inputs, unless the
+  input's non-empty default takes its place, so that no credential is made
+  from details the caller wrote. Inputs can't tell a root's input from a
+  called workflow's, which is given its caller's details so; and here no
+  credential is made from a mapping.
+- **A called workflow's input of a platform's type is resolved**, as a
+  root's is. ACTIVATE resolves only the root's submitted inputs, so a
+  caller whose `with:` gives a bucket's `pw://` URI, or a cluster's name,
+  gives the called workflow that text there, and its details here.
+- **A bucket's details are its `type`, `name`, `user` and `uri`.**
+  ACTIVATE's hold its `csp` and `id` too, and its `bucketName` and
+  `region` once it is provisioned, which only the platform's record of it
+  knows. The known workflows read a bucket's `uri`, 15 times, and its
+  whole value, 10 times, and nothing else.
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
 are interfaces in `compile`, the coordinator's, Keys, Trees and Logs, in
