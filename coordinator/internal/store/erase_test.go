@@ -821,13 +821,12 @@ func TestCloseWarnsOfItsOwn(t *testing.T) {
 	}
 }
 
-// TestCloseWarnsOfLeftRecord checks the store's mark of a secret record
+// TestCloseWarnsOfLeftRecord checks the store's count of the secret records
 // the write-ahead log may hold, which outlives a process that ended before
 // it truncated the log: a later process whose Open can't truncate it
 // either, as a short command beside a run going on, warns of it as it
-// closes; once a truncation has finished, which deletes the mark, one that
-// can't truncate says nothing. The mark is a count, which holds nothing of
-// what was deleted.
+// closes; once a truncation has finished, which covers it, one that can't
+// truncate says nothing. The counts hold nothing of what was deleted.
 func TestCloseWarnsOfLeftRecord(t *testing.T) {
 	t.Parallel()
 	r := newErasureRig(t)
@@ -851,17 +850,16 @@ func TestCloseWarnsOfLeftRecord(t *testing.T) {
 			return buf.String()
 		}
 	}
-	mark := func() string {
+	counts := func() (marked, done int64) {
 		t.Helper()
-		var value string
-		inTx(t, r.s, func(tx *Tx) error {
-			err := tx.queryRow("SELECT value FROM meridian_store WHERE key = '" + walErasePending + "'").Scan(&value)
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
-			}
+		if err := r.s.View(t.Context(), func(tx *Tx) error {
+			var err error
+			marked, done, err = tx.eraseCounts()
 			return err
-		})
-		return value
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return marked, done
 	}
 
 	release := r.hold()
@@ -883,8 +881,8 @@ func TestCloseWarnsOfLeftRecord(t *testing.T) {
 	if err := left.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got := mark(); got != "1" {
-		t.Fatalf("the mark of a record left in the log is %q, want a count of 1", got)
+	if marked, done := counts(); marked != 1 || done != 0 {
+		t.Fatalf("a record left in the log is counted %d, and %d covered; want 1, and 0", marked, done)
 	}
 	short, warnings := open()
 	if err := short.Close(); err != nil {
@@ -903,8 +901,8 @@ func TestCloseWarnsOfLeftRecord(t *testing.T) {
 	if err := cleared.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got := mark(); got != "" {
-		t.Errorf("once the log was truncated, the mark is %q", got)
+	if marked, done := counts(); marked != 1 || done != 1 {
+		t.Errorf("once the log was truncated, %d deletions are counted, and %d covered; want 1 of 1", marked, done)
 	}
 	release = r.hold()
 	defer func() { _ = release() }()
@@ -946,15 +944,50 @@ func TestOpenMarksDigests(t *testing.T) {
 	}()
 	<-reading
 	again := openAt(t, path)
-	var value string
+	var marked, covered int64
 	if err := again.View(t.Context(), func(tx *Tx) error {
-		return tx.queryRow("SELECT value FROM meridian_store WHERE key = '" + walErasePending + "'").Scan(&value)
-	}); err != nil || value != "1" {
-		t.Errorf("the mark of digests an Open erased, which it couldn't truncate, is %q, %v", value, err)
+		var err error
+		marked, covered, err = tx.eraseCounts()
+		return err
+	}); err != nil || marked != 1 || covered != 0 {
+		t.Errorf("digests an Open erased, which it couldn't truncate, are counted %d, and %d covered, %v; want 1, and 0", marked, covered, err)
 	}
 	close(done)
 	if err := <-result; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestEraseCountsOnlyRise checks that a deletion counted as another
+// truncation finishes is never taken for one that truncation covered: A
+// reads the count, and truncates; C's truncation finishes, and covers it;
+// B deletes a record, and counts it; then A's, finishing, covers no more
+// than it read, and B's stays pending, as it would were B to end before it
+// truncated the log. Before, A deleted a mark whose value was B's too.
+func TestEraseCountsOnlyRise(t *testing.T) {
+	t.Parallel()
+	s := open(t)
+	pending := func() bool {
+		t.Helper()
+		var p bool
+		inTx(t, s, func(tx *Tx) error {
+			var err error
+			p, err = tx.erasePending()
+			return err
+		})
+		return p
+	}
+	inTx(t, s, func(tx *Tx) error { return tx.markErasePending() })
+	readByA := s.erasedMark(t.Context())
+	if readByA != 1 || !pending() {
+		t.Fatalf("A read %d, pending %t; want 1, pending", readByA, pending())
+	}
+	if !s.truncateMarked(t.Context(), s.truncateWAL) || pending() {
+		t.Fatal("C's truncation didn't cover the deletion")
+	}
+	inTx(t, s, func(tx *Tx) error { return tx.markErasePending() })
+	if s.eraseCovered(t.Context(), readByA) || !pending() {
+		t.Error("A's truncation, covering what it read before it began, took B's deletion for one it covered")
 	}
 }
 

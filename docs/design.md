@@ -1608,15 +1608,17 @@ The coordinator encrypts and stores it.
   copy either. If a reader or a writer in another process holds the log,
   that checkpoint can't truncate it: the store tries again until one
   does, and, where the store closes first, the next Open does. The
-  transaction that deletes the record marks the store too, with a count
-  of such deletions, which a truncation that finishes after them clears.
-  A process warns that the log may still hold such a record, once it has
-  tried for a while, or closes first, only where it is marked: its own
-  deletion, or one a process that ended before it could truncate left.
-  Each Open truncates the log, which a run going on in another process
-  holds up as often as not, so a short command, as `meridian session
-  url`, says nothing where nothing is marked. A backup of the database
-  taken before the run ended holds the record, sealed, as it was.
+  transaction that deletes the record counts it in the store, and a
+  truncation that finishes counts the deletions it read before it began
+  as covered; both counts only rise. A process warns that the log may
+  still hold a secret record a process deleted, once it has tried for a
+  while, or closes first, only while a deletion is counted that no
+  truncation covered: its own, a running run's, or one a process that
+  ended before it could truncate left. Each Open truncates the log, which
+  a run going on in another process holds up as often as not, so a short
+  command, as `meridian session url`, says nothing while none is. A
+  backup of the database taken before the run ended holds the record,
+  sealed, as it was.
 - **Stored, not held in memory.** Coordinator replicas keep no state between
   calls, and `meridian resume` picks a run up in another process, so a run's
   secrets live where its state does, and the store holds them only

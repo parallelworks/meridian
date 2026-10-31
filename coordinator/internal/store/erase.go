@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -17,26 +16,27 @@ import (
 //
 // pending is set while the write-ahead log may hold a secret record a
 // transaction deleted, which a reader or a writer kept a truncation from
-// erasing (eraseWAL), and erasedHere while one of them is a record this
-// process's own transactions deleted, rather than one a process that
-// ended before Open left, which the store warns of, and only then:
-// another process, as the meridian run that a meridian session url runs
-// beside, keeps truncations from finishing all the time, of a log that
-// Open truncates for a process before it whatever it holds, so that a
-// short command that deleted nothing would warn each time; erasing while
-// one goroutine, which erasers counts,
-// tries it again, until it succeeds, or the store closes: Close cancels
-// closing, which ends the goroutine and its try, waits for it, and tries
-// once more, if one is pending, which lastTried then says (eraseLast).
-// heldUp counts the tries held up, so that a try that succeeds clears
-// pending only if none was held up as it ran, which may have been of a
-// record deleted after the log it truncated. warnAfter is how long the
-// goroutine tries before it warns, once, of a record erasedHere says is
-// its own (eraseWarnAfter, which a test shortens, under walMu once the
-// goroutine runs). erased, if a test sets it, is called as the goroutine ends;
-// truncated, as a try has truncated the log, before heldUp is read; and
-// checkpointing with the connection of a try that waits for no one, as
-// its checkpoint is about to run (truncateWALNow).
+// erasing (eraseWAL), and erasedHere while one of them is a record a
+// deletion counted in the store (walEraseMarked) that no finished
+// truncation covered, this process's own, or one a process that ended
+// before it could truncate the log left, which the store warns of, and only
+// then: another process, as the meridian run that a meridian session url
+// runs beside, keeps truncations from finishing all the time, of a log that
+// Open truncates for a process before it whatever it holds, so that a short
+// command that deleted nothing would warn each time; erasing while one
+// goroutine, which erasers counts, tries it again, until it succeeds, or
+// the store closes: Close cancels closing, which ends the goroutine and its
+// try, waits for it, and tries once more, if one is pending, which
+// lastTried then says (eraseLast). heldUp counts the tries held up, so that
+// a try that succeeds clears pending only if none was held up as it ran,
+// which may have been of a record deleted after the log it truncated.
+// warnAfter is how long the goroutine tries before it warns, once, where
+// erasedHere says the log may hold such a record (eraseWarnAfter, which a
+// test shortens, under walMu once the goroutine runs). erased, if a test
+// sets it, is called as the goroutine ends; truncated, as a try has
+// truncated the log, before heldUp is read; and checkpointing with the
+// connection of a try that waits for no one, as its checkpoint is about to
+// run (truncateWALNow).
 type walEraser struct {
 	warnAfter     time.Duration
 	walMu         sync.Mutex
@@ -85,14 +85,20 @@ func (s *Store) eraseLast() {
 	}
 }
 
-// walErasePending is the key of meridian_store whose value counts the
-// transactions that deleted a secret record, or digests (eraseDigests),
-// since a truncation of the write-ahead log last finished after them,
-// which then deletes it (clearErasePending): a count, which holds nothing
-// of what was deleted. It outlives a process that ended before it could
-// truncate the log, so that one whose Open's truncation is held up warns
-// of that record as of its own.
-const walErasePending = "wal_erase_pending"
+// The keys of meridian_store that say whether the write-ahead log may
+// hold a secret record a process deleted: walEraseMarked counts the
+// transactions that deleted one, or digests (eraseDigests), and
+// walEraseDone is the count a truncation read before it began, once it
+// finished, which covered every deletion counted by then. Each only ever
+// rises, so that a deletion counted as another truncation finishes is
+// never taken for one it covered; the log may hold one while marked is
+// past done. Neither holds anything of what was deleted. They outlive a
+// process that ended before it could truncate the log, so that one whose
+// Open's truncation is held up warns of that record too.
+const (
+	walEraseMarked = "wal_erase_marked"
+	walEraseDone   = "wal_erase_done"
+)
 
 // markErased marks the transaction as one that deleted a secret record,
 // which the write-ahead log is truncated of once it commits (erased), and
@@ -102,66 +108,82 @@ func (tx *Tx) markErased() error {
 	return tx.markErasePending()
 }
 
-// markErasePending counts a deletion of a secret record in the store's
-// marker (walErasePending), in the transaction that deletes it.
+// markErasePending counts a deletion of a secret record (walEraseMarked),
+// in the transaction that deletes it.
 func (tx *Tx) markErasePending() error {
-	_, err := tx.exec(`INSERT INTO meridian_store (key, value) VALUES ('` + walErasePending + `', '1')
+	_, err := tx.exec(`INSERT INTO meridian_store (key, value) VALUES ('` + walEraseMarked + `', '1')
 ON CONFLICT (key) DO UPDATE SET value = CAST(CAST(meridian_store.value AS INTEGER) + 1 AS TEXT)`)
 	return err
 }
 
-// erasePending reports whether the store's marker says the write-ahead
-// log may hold a secret record deleted since a truncation last finished.
-func (tx *Tx) erasePending() (bool, error) {
-	var n int
-	err := tx.queryRow("SELECT count(*) FROM meridian_store WHERE key = '" + walErasePending + "'").Scan(&n)
-	return n > 0, err
+// eraseCounts returns the deletions counted (walEraseMarked) and those a
+// finished truncation covered (walEraseDone), 0 for none.
+func (tx *Tx) eraseCounts() (marked, done int64, err error) {
+	err = tx.queryRow(`SELECT
+  coalesce((SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = '`+walEraseMarked+`'), 0),
+  coalesce((SELECT CAST(value AS INTEGER) FROM meridian_store WHERE key = '`+walEraseDone+`'), 0)`).Scan(&marked, &done)
+	return marked, done, err
 }
 
-// erasePendingMark returns the store's marker's value, or "" where it has
-// none, as a truncation reads it before it begins (truncateMarked).
-func (s *Store) erasePendingMark(ctx context.Context) string {
-	var mark string
+// erasePending reports whether the write-ahead log may hold a secret
+// record a process deleted: one counted that no finished truncation
+// covered.
+func (tx *Tx) erasePending() (bool, error) {
+	marked, done, err := tx.eraseCounts()
+	return marked > done, err
+}
+
+// erasedMark returns the deletions counted (walEraseMarked) as a
+// truncation reads them before it begins, which it covers once it
+// finishes (eraseCovered); or 0 where none is past those covered.
+func (s *Store) erasedMark(ctx context.Context) int64 {
+	var marked, done int64
 	err := s.View(ctx, func(tx *Tx) error {
-		err := tx.queryRow("SELECT value FROM meridian_store WHERE key = '" + walErasePending + "'").Scan(&mark)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
+		var err error
+		marked, done, err = tx.eraseCounts()
 		return err
 	})
 	if err != nil {
 		s.log.DebugContext(ctx, "store: read whether the write-ahead log may hold a secret record", "error", err)
-		return ""
+		return 0
 	}
-	return mark
+	if marked <= done {
+		return 0
+	}
+	return marked
 }
 
-// truncateMarked truncates the write-ahead log with truncate, and reports
-// whether it did; once it did, it deletes the store's marker, unless
-// another deletion marked it since it read it, before it began, which the
-// log may hold past this truncation; and truncates the log of that
-// deletion too, which holds nothing secret, if it can.
-func (s *Store) truncateMarked(ctx context.Context, truncate func(context.Context) bool) bool {
-	mark := s.erasePendingMark(ctx)
-	if !truncate(ctx) {
-		return false
-	}
-	if mark == "" {
-		return true
-	}
-	var cleared bool
+// eraseCovered raises the deletions a finished truncation covered
+// (walEraseDone) to marked, as it read them before it began, and never
+// lowers them; and reports whether it raised them.
+func (s *Store) eraseCovered(ctx context.Context, marked int64) bool {
+	var raised bool
 	if err := s.Tx(ctx, func(tx *Tx) error {
-		res, err := tx.exec("DELETE FROM meridian_store WHERE key = '"+walErasePending+"' AND value = ?", mark)
+		res, err := tx.exec(`INSERT INTO meridian_store (key, value) VALUES ('`+walEraseDone+`', ?)
+ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE CAST(meridian_store.value AS INTEGER) < CAST(excluded.value AS INTEGER)`,
+			strconv.FormatInt(marked, 10))
 		if err != nil {
 			return err
 		}
 		n, err := res.RowsAffected()
-		cleared = n > 0
+		raised = n > 0
 		return err
 	}); err != nil {
-		s.log.DebugContext(ctx, "store: clear the mark of a secret record the write-ahead log may hold", "error", err)
+		s.log.DebugContext(ctx, "store: count the secret records a truncation of the write-ahead log covered", "error", err)
 	}
-	if cleared {
+	return raised
+}
+
+// truncateMarked truncates the write-ahead log with truncate, and reports
+// whether it did; once it did, it counts the deletions it read before it
+// began as covered (eraseCovered), and truncates the log of that write
+// too, which holds nothing secret, if it can.
+func (s *Store) truncateMarked(ctx context.Context, truncate func(context.Context) bool) bool {
+	marked := s.erasedMark(ctx)
+	if !truncate(ctx) {
+		return false
+	}
+	if marked > 0 && s.eraseCovered(ctx, marked) {
 		truncate(ctx)
 	}
 	return true
@@ -276,7 +298,7 @@ func (s *Store) eraseLater() {
 		s.walMu.Unlock()
 		if !warned && here && time.Since(began) >= warnAfter {
 			warned = true
-			s.log.Warn("store: a reader or a writer has kept the write-ahead log from being truncated for a while, so it may still hold a secret record deleted since; it is tried again", "for", time.Since(began).Round(time.Second))
+			s.log.Warn("store: a reader or a writer has kept the write-ahead log from being truncated for a while, so it may still hold a secret record a process deleted; it is tried again", "for", time.Since(began).Round(time.Second))
 		}
 	}
 }
@@ -284,7 +306,7 @@ func (s *Store) eraseLater() {
 // warnPending warns that the log may hold a secret record past the
 // store's close.
 func (s *Store) warnPending() {
-	s.log.Warn("store: a reader or a writer kept the write-ahead log from being truncated as the store closed, so it may still hold a secret record deleted since; the next Open truncates it")
+	s.log.Warn("store: a reader or a writer kept the write-ahead log from being truncated as the store closed, so it may still hold a secret record a process deleted; the next Open truncates it")
 }
 
 // A queryer is a database or one of its connections, which a checkpoint
