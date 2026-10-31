@@ -481,10 +481,12 @@ the SHA-256 hash of its content: 218 files.
   as an expression: ACTIVATE refuses a run that leaves one of these inputs
   to an expression default, where Meridian evaluates it and checks what it
   gives. None of the known workflows has one. And ACTIVATE's fix gives
-  these three types' input its default, when that is non-empty text,
-  only for `""` and null, where its fallback gave it for any value but
-  text, a mapping among them; Meridian does the same for their null, and
-  gives every type's `""` its default, whatever that is. Of the 218 known
+  these three types' input its default, when that is non-empty text and
+  not an expression, only for `""` and null, where its fallback gave it
+  for any value but text, a mapping among them; Meridian does the same
+  for their null, so a null whose default is an expression stays null on
+  both sides, and gives every type's `""` its default, whatever that is.
+  Of the 218 known
   workflows' inputs of these types, 206 `compute-clusters`, 7
   `compute-resources`, 11 `bucket` and 315 of the others, none is
   `multi`, and no default is a list, a number, a boolean, a mapping or an

@@ -401,10 +401,12 @@ var nullDefaultedTypes = map[string]bool{"compute-clusters": true, "compute-reso
 
 // nullDefaulted reports whether a null submitted for f takes its default:
 // for a compute-clusters, compute-resources or bucket input of a run no
-// step calls, whose default is text but "", as ACTIVATE's run creation
-// gives such an input its default for null as for "", before it resolves
-// it. A called workflow's is given as its caller's with: gives it.
+// step calls, whose default is text but "", and not an expression, as
+// ACTIVATE's run creation gives such an input its default for null as for
+// "", before it resolves it. A null whose default is an expression stays
+// null, as ACTIVATE leaves it no value; and a called workflow's is given as
+// its caller's with: gives it.
 func (r *inputResolver) nullDefaulted(f *field) bool {
 	d, _ := f.def["default"].(string)
-	return r.opts.Parent == nil && nullDefaultedTypes[f.typ] && d != ""
+	return r.opts.Parent == nil && nullDefaultedTypes[f.typ] && d != "" && !strings.Contains(d, "${{")
 }

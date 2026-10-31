@@ -112,8 +112,9 @@ func TestPlatformInputCalled(t *testing.T) {
 // TestNullTakesPlatformDefault checks that a null submitted for a
 // cluster's or a bucket's input of a run no step calls takes the input's
 // default, when that is text but "", as ACTIVATE's run creation gives it,
-// and as "" does; and that another type's null, one whose default is "",
-// and a called workflow's stay null.
+// and as "" does; and that another type's null, one whose default is "" or
+// an expression, which ACTIVATE leaves no value, and a called workflow's
+// stay null.
 func TestNullTakesPlatformDefault(t *testing.T) {
 	doc := load(t, `on:
   execute:
@@ -130,6 +131,9 @@ func TestNullTakesPlatformDefault(t *testing.T) {
       blank:
         type: compute-clusters
         default: ""
+      computed:
+        type: compute-clusters
+        default: ${{ 'pw://alice/lab' }}
       part:
         type: slurm-partitions
         resource: ${{ inputs.cluster }}
@@ -142,7 +146,7 @@ jobs:
 	details := resolverFunc(func(_ context.Context, typ string, _ map[string]any, v any) (any, error) {
 		return map[string]any{"type": typ, "name": v}, nil
 	})
-	nulls := map[string]any{"cluster": nil, "resources": nil, "bucket": nil, "blank": nil, "part": nil}
+	nulls := map[string]any{"cluster": nil, "resources": nil, "bucket": nil, "blank": nil, "computed": nil, "part": nil}
 	inputs, diags := resolveInputs(t, doc, nulls, compile.Options{Inputs: details})
 	if len(diags) != 0 {
 		t.Fatal(diags)
@@ -152,6 +156,7 @@ jobs:
 		"resources": map[string]any{"type": "compute-resources", "name": "lab"},
 		"bucket":    map[string]any{"type": "bucket", "name": "pw://alice/data"},
 		"blank":     nil,
+		"computed":  nil,
 		"part":      nil,
 	}
 	if !reflect.DeepEqual(inputs.Values, want) {
