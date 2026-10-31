@@ -23,6 +23,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/leaktest"
 	"github.com/parallelworks/meridian/internal/sessionproxy"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -118,7 +119,7 @@ func newTestSessionHost(t *testing.T) (*SessionHost, *testSessionStore, *[]strin
 		mu.Unlock()
 		return (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	}
-	h, err := NewSessionHost(cfg, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, nil)
+	h, err := NewSessionHost(t.Context(), cfg, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +313,7 @@ func TestSessionPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	none, err := NewSessionHost(bare, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), nil, nil)
+	none, err := NewSessionHost(t.Context(), bare, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +338,7 @@ func sessionClient(t *testing.T) *http.Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &http.Client{
+	client := &http.Client{
 		Jar: jar,
 		Transport: &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			_, port, _ := net.SplitHostPort(addr)
@@ -346,6 +347,8 @@ func sessionClient(t *testing.T) *http.Client {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Timeout:       10 * time.Second,
 	}
+	t.Cleanup(client.CloseIdleConnections)
+	return client
 }
 
 // get returns what client gets of u: its status and its body.
@@ -371,7 +374,7 @@ func get(t *testing.T, client *http.Client, u string) (int, string) {
 // the session's salt changes; a step that points it elsewhere has it go
 // there; and once the session ends, nothing listens at its port.
 func TestSessionHostServes(t *testing.T) {
-	t.Parallel()
+	leaktest.Check(t)
 	h, _, _ := newTestSessionHost(t)
 	said := &testAnnouncer{}
 	h.AnnounceTo(said, false)
@@ -452,7 +455,7 @@ func TestSessionHostServes(t *testing.T) {
 // a cluster's service it reaches through the cluster's host; and a link
 // session it says once, and again only where it points elsewhere.
 func TestSessionHostServesAgain(t *testing.T) {
-	t.Parallel()
+	leaktest.Check(t)
 	h, store, dials := newTestSessionHost(t)
 	said := &testAnnouncer{}
 	h.AnnounceTo(said, false)
@@ -671,7 +674,7 @@ func TestSessionDialer(t *testing.T) {
 // refuses with, and serves it once it can, which the store keeps; and a
 // host without a login name serves none, nor makes a link to one.
 func TestSessionHostCantServe(t *testing.T) {
-	t.Parallel()
+	leaktest.Check(t)
 	h, store, _ := newTestSessionHost(t)
 	refused := problems.SessionLocalPortRefused.Problem(problems.Params{"port": "0", "picked": "true"})
 	h.mu.Lock()
@@ -705,7 +708,7 @@ func TestSessionHostCantServe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nameless, err := NewSessionHost(cfg, Login{Err: errors.New("no such user")}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), nil, nil)
+	nameless, err := NewSessionHost(t.Context(), cfg, Login{Err: errors.New("no such user")}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +802,7 @@ func TestSessionPrivateLog(t *testing.T) {
 			dial := func(_ context.Context, clusterHost, host string, port int) (net.Conn, error) {
 				return nil, problems.SSHTCPConnectFailed.Problem(problems.Params{"host": clusterHost, "address": net.JoinHostPort(host, strconv.Itoa(port)), "reason": "connection refused"})
 			}
-			h, err := NewSessionHost(cfg, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, logger)
+			h, err := NewSessionHost(t.Context(), cfg, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, logger)
 			if err != nil {
 				t.Fatal(err)
 			}

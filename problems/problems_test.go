@@ -710,3 +710,15 @@ func TestMaskProblem(t *testing.T) {
 		t.Error("MaskDiagnostics(nil) isn't nil")
 	}
 }
+
+// TestListed checks the names a kind lists, with whether there are any,
+// on which its message selects.
+func TestListed(t *testing.T) {
+	got := Listed(Params{"target": "x"}, "clusters", []string{"a", "b"})
+	if got["clusters"] != `"a", "b"` || got["listed"] != "true" || got["target"] != "x" {
+		t.Errorf("Listed of two = %v", got)
+	}
+	if got := Listed(Params{}, "keys", nil); got["keys"] != "" || got["listed"] != "false" {
+		t.Errorf("Listed of none = %v", got)
+	}
+}

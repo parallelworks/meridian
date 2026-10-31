@@ -264,7 +264,8 @@ var (
 	// key is a session's key in a workflow's sessions:, and field one of
 	// its keys, or of update-session's with:; target is update-session's
 	// target, clusters the clusters of the clusters file, as QuoteAll
-	// writes them, and listed whether there are any, "true" or "false";
+	// writes them, and listed whether there are any, "true" or "false"
+	// (Listed), as every new kind that lists names takes them;
 	// value is a value of update-session's with:, as Show writes it, and
 	// name a session's name.
 	SessionFieldUnsupported  = define(Error, "session_field_unsupported", "Session meridian run can't serve", "key", "field")

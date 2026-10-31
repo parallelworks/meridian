@@ -2,8 +2,6 @@ package local
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base32"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -61,13 +59,13 @@ type SessionHost struct {
 	log         *slog.Logger
 
 	mu sync.Mutex
-	// store is the store's ID, and codes what it keeps of its sessions,
+	// storeID is the store's ID, and store what it keeps of its sessions,
 	// once Attach gives them; announce is what says a session is served,
 	// once AnnounceTo gives it, and terminal whether it says so on a
 	// person's terminal, where a link with a code is shown, rather than the
 	// command that makes one.
-	store    string
-	codes    SessionStore
+	storeID  string
+	store    SessionStore
 	announce Announcer
 	terminal bool
 	// life is the host's, which its sessions' proxies live as long as, at
@@ -123,7 +121,7 @@ type sessionPoint struct {
 // state directory's key file under sessionproxy.KeyLabel, reaching a
 // cluster's services with dialCluster, and logging what no answer says to
 // log. It serves nothing until Attach gives it its store.
-func NewSessionHost(cfg *Config, user Login, key []byte, dialCluster func(ctx context.Context, clusterHost, host string, port int) (net.Conn, error), log *slog.Logger) (*SessionHost, error) {
+func NewSessionHost(ctx context.Context, cfg *Config, user Login, key []byte, dialCluster func(ctx context.Context, clusterHost, host string, port int) (net.Conn, error), log *slog.Logger) (*SessionHost, error) {
 	keys, err := sessionproxy.NewKeyring(key)
 	if err != nil {
 		return nil, err
@@ -135,17 +133,18 @@ func NewSessionHost(cfg *Config, user Login, key []byte, dialCluster func(ctx co
 		cfg: cfg, user: user, keys: keys, dialCluster: dialCluster, log: log,
 		served: map[string]*served{}, links: map[string]string{}, listen: sessionproxy.Listen,
 	}
-	h.life, h.end = context.WithCancel(context.Background()) //nolint:forbidigo // the host's own life, which Close ends
+	// It lives until Close, whatever becomes of ctx.
+	h.life, h.end = context.WithCancel(context.WithoutCancel(ctx))
 	return h, nil
 }
 
-// Attach gives h its store's ID and what it keeps of its sessions there,
-// codes, which its sessions' proxies redeem codes with, and which records
-// how it serves each.
-func (h *SessionHost) Attach(store string, codes SessionStore) {
+// Attach gives h its store's ID, storeID, and what it keeps of its
+// sessions there, store, which its sessions' proxies redeem codes with,
+// and which records how it serves each.
+func (h *SessionHost) Attach(storeID string, store SessionStore) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.store, h.codes = store, codes
+	h.storeID, h.store = storeID, store
 }
 
 // An Announcer says that the session key of the run run is served: at
@@ -288,9 +287,10 @@ func newSessionName(key string) string {
 	if base == "" {
 		base = "session"
 	}
-	random := make([]byte, 5)
-	_, _ = rand.Read(random) // crypto/rand doesn't fail
-	return base + "-" + strings.ToLower(base32.StdEncoding.EncodeToString(random))
+	// Of what a path holds as it is, as login.PathSafe and the
+	// coordinator's names of called workflows' sessions keep, this keeps
+	// lowercase letters, digits and hyphens alone.
+	return base + "-" + sessionproxy.Random32(40)
 }
 
 // Point reads where a step that uses parallelworks/update-session points
@@ -344,7 +344,10 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 			return coordinator.SessionPoint{}, err
 		}
 		if serve {
-			h.announceLink(s, link.String())
+			h.mu.Lock()
+			h.links[s.ID] = link.String()
+			h.announceLinkLocked(s, link.String())
+			h.mu.Unlock()
 		}
 		return coordinator.SessionPoint{Point: data}, nil
 	}
@@ -365,9 +368,7 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 	default:
 		if _, ok := h.cfg.ClusterHost(target); !ok {
 			clusters := h.cfg.ClusterNames()
-			return coordinator.SessionPoint{}, problems.SessionTargetUnknown.Problem(problems.Params{
-				"target": target, "clusters": problems.QuoteAll(clusters), "listed": strconv.FormatBool(len(clusters) > 0),
-			})
+			return coordinator.SessionPoint{}, problems.SessionTargetUnknown.Problem(problems.Listed(problems.Params{"target": target}, "clusters", clusters))
 		}
 		p.Cluster = target
 		if p.RemoteHost == "" {
@@ -464,19 +465,19 @@ func (h *SessionHost) serve(ctx context.Context, s coordinator.Session, p sessio
 // start starts serving the session s, which points where p, encoded as
 // point, says, at port, or one the system picks for 0.
 func (h *SessionHost) start(ctx context.Context, s coordinator.Session, p sessionPoint, point string, port int) (*served, error) {
-	if h.codes == nil {
+	if h.store == nil {
 		return nil, errors.New("local: the session host serves no session before Attach")
 	}
 	if h.user.Err != nil {
 		return nil, problems.LoginNameUnknown.Problem(problems.Params{"reason": h.user.Err.Error()})
 	}
-	secret, err := h.keys.Secret(h.store, s.ID, s.Salt)
+	secret, err := h.keys.Secret(h.storeID, s.ID, s.Salt)
 	if err != nil {
 		return nil, err
 	}
 	proxy, err := sessionproxy.New(h.life, sessionproxy.Config{
 		User: h.user.Name, Name: s.Name, Label: s.Label, Run: s.Run, Key: s.Key,
-		Session: s.ID, Secret: secret, Keyring: h.keys, Codes: redeemer{h.codes}, Dial: h.dialer(p), Log: h.log,
+		Session: s.ID, Secret: secret, Keyring: h.keys, Codes: redeemer{h.store}, Dial: h.dialer(p), Log: h.log,
 		Private: s.Private,
 	})
 	if err != nil {
@@ -566,7 +567,7 @@ func (h *SessionHost) dialer(p sessionPoint) sessionproxy.DialFunc {
 func (h *SessionHost) Serve(ctx context.Context, live []coordinator.Session) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.codes == nil {
+	if h.store == nil {
 		return
 	}
 	seen := make(map[string]bool, len(live))
@@ -593,7 +594,7 @@ func (h *SessionHost) Serve(ctx context.Context, live []coordinator.Session) {
 			continue
 		}
 		if string(s.Salt) != sv.salt {
-			secret, err := h.keys.Secret(h.store, s.ID, s.Salt)
+			secret, err := h.keys.Secret(h.storeID, s.ID, s.Salt)
 			if err == nil {
 				sv.proxy.SetSecret(secret)
 				sv.salt = string(s.Salt)
@@ -639,7 +640,7 @@ func (h *SessionHost) serveAgain(ctx context.Context, s coordinator.Session, p s
 		case isProblem && s.Problem != nil && s.Problem.Code == prob.Code:
 			// The store says so already.
 		case isProblem:
-			if err := h.codes.SessionServed(ctx, s.ID, 0, prob); err != nil {
+			if err := h.store.SessionServed(ctx, s.ID, 0, prob); err != nil {
 				h.log.Warn("local: couldn't say why a session isn't served", "session", s.Name, "err", err)
 			}
 		default:
@@ -647,7 +648,7 @@ func (h *SessionHost) serveAgain(ctx context.Context, s coordinator.Session, p s
 		}
 		return
 	}
-	if err := h.codes.SessionServed(ctx, s.ID, next.listener.Port(), nil); err != nil {
+	if err := h.store.SessionServed(ctx, s.ID, next.listener.Port(), nil); err != nil {
 		h.log.Warn("local: couldn't store a session's port", "session", s.Name, "err", err)
 	}
 	h.served[s.ID] = next
@@ -664,7 +665,7 @@ func (h *SessionHost) announceTunnel(ctx context.Context, s coordinator.Session,
 	link := ""
 	if h.terminal {
 		var err error
-		if link, err = NewSessionLink(ctx, h.codes, h.keys, h.user.Name, s, port, p.Slug); err != nil {
+		if link, err = NewSessionLink(ctx, h.store, h.keys, h.user.Name, s, port, p.Slug); err != nil {
 			h.log.Warn("local: couldn't make a session's link", "session", s.Name, "err", err)
 			link = ""
 		}
@@ -674,14 +675,8 @@ func (h *SessionHost) announceTunnel(ctx context.Context, s coordinator.Session,
 	}
 }
 
-// announceLink says the session s is the link link.
-func (h *SessionHost) announceLink(s coordinator.Session, link string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.links[s.ID] = link
-	h.announceLinkLocked(s, link)
-}
-
+// announceLinkLocked says the session s is the link link. The host's lock
+// is held.
 func (h *SessionHost) announceLinkLocked(s coordinator.Session, link string) {
 	if h.announce == nil {
 		return
@@ -761,16 +756,16 @@ func (h *SessionHost) Link(ctx context.Context, s coordinator.Session) (string, 
 		return "", problems.LoginNameUnknown.Problem(problems.Params{"reason": h.user.Err.Error()})
 	}
 	h.mu.Lock()
-	codes := h.codes
+	store := h.store
 	h.mu.Unlock()
-	if codes == nil {
+	if store == nil {
 		return "", errors.New("local: the session host has no store before Attach")
 	}
-	switch serving, err := codes.SessionServing(ctx, s.ID); {
+	switch serving, err := store.SessionServing(ctx, s.ID); {
 	case err != nil:
 		return "", err
 	case !serving:
 		return "", problems.SessionNotServed.Problem(problems.Params{"run": s.Run, "key": s.Key, "root": s.Root})
 	}
-	return NewSessionLink(ctx, codes, h.keys, h.user.Name, s, s.Port, p.Slug)
+	return NewSessionLink(ctx, store, h.keys, h.user.Name, s, s.Port, p.Slug)
 }

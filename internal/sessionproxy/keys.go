@@ -67,7 +67,7 @@ func (k *Keyring) CodeMAC(session, code string) []byte {
 // random bits in lowercase base32, which a link to it holds, with its
 // keyed hash (CodeMAC).
 func (k *Keyring) NewCode(session string) (code string, mac []byte) {
-	code = random32(CodeBits)
+	code = Random32(CodeBits)
 	return code, k.CodeMAC(session, code)
 }
 
@@ -77,7 +77,7 @@ const LabelBits = 128
 // NewLabel returns a new label for a session: LabelBits random bits in
 // lowercase base32, 26 characters, which is a DNS label, under which the
 // session is served, at <label>.localhost, a host name of its own.
-func NewLabel() string { return random32(LabelBits) }
+func NewLabel() string { return Random32(LabelBits) }
 
 // ValidLabel reports whether label is one NewLabel gives: 26 lowercase
 // base32 characters.
@@ -93,9 +93,10 @@ func ValidLabel(label string) bool {
 	return true
 }
 
-// random32 returns bits random bits, a multiple of 8, in lowercase base32,
-// without padding.
-func random32(bits int) string {
+// Random32 returns bits random bits, a multiple of 8, in lowercase base32,
+// without padding: what a session's label, its one-time codes, and the
+// names meridian run gives sessions are made of.
+func Random32(bits int) string {
 	b := make([]byte, bits/8)
 	_, _ = rand.Read(b) // crypto/rand doesn't fail
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b))
