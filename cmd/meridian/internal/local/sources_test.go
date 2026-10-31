@@ -369,6 +369,16 @@ func TestSourcesMapped(t *testing.T) {
 	if w, err := s.Read(t.Context(), pinned.Source); err != nil || string(w.Text) != "tools\n" {
 		t.Errorf("Read of a mapped pin = %v, %v", w, err)
 	}
+	// A mapping since changed to the same file, written otherwise, reads it
+	// with the remote context it was pinned with, which the plan records
+	// beside its pin, not the mapping's now.
+	recorded := pinned.Source
+	recorded.Remote = pinned.Remote
+	respelled := sourcesFrom(t, origins)
+	respelled.workflows = Workflows{"marketplace/tools/v1.2": {Uses: "github/acme/flows", Path: "tools.yaml"}}
+	if w, err := respelled.Read(t.Context(), recorded); err != nil || string(w.Text) != "tools\n" || !reflect.DeepEqual(w.Remote, pinned.Remote) {
+		t.Errorf("Read of a pin whose mapping was written otherwise = %v, %v, want the remote %v", w, err, pinned.Remote)
+	}
 	// A mapping since changed to another file is that file, which isn't
 	// the pinned text; and one since removed maps nothing.
 	moved := sourcesFrom(t, origins)
@@ -416,6 +426,9 @@ func TestSourcesMappedRefuses(t *testing.T) {
 		{"marketplace/tools/v1..2", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v1..2", "version": "v1..2"}},
 		{"marketplace/tools/v1.", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v1.", "version": "v1."}},
 		{"marketplace/tools/v1.lock", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v1.lock", "version": "v1.lock"}},
+		// Past 255 bytes, which git's command line could be too long for.
+		{"marketplace/tools/" + strings.Repeat("v", 256), problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/" + strings.Repeat("v", 256), "version": strings.Repeat("v", 256)}},
+		{"marketplace/tools/" + strings.Repeat("v", 200000), problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/" + strings.Repeat("v", 200000), "version": strings.Repeat("v", 200000)}},
 	} {
 		_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: tc.uses})
 		if !errors.Is(err, compile.ErrNotFound) {

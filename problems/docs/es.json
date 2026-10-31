@@ -1592,7 +1592,7 @@
   },
   "source_version_invalid": {
     "title": "Versión de un flujo de trabajo del marketplace que una asignación no admite",
-    "why": "En los workflows de sources.yaml, una clave marketplace/<slug>/{version} asigna cada versión del slug de un flujo de trabajo del marketplace: {version}, en su yaml y tras la @ de su uses, representa la versión que nombra un uses:. La versión es texto del propio flujo de trabajo, así que antes de que Git lea nada debe tener solo letras, dígitos, ., _, + y -, no empezar por . ni por -, y la revisión y el archivo que da deben ser unos que un uses: pueda nombrar, para que no nombre un archivo fuera del repositorio ni se lea como una opción.",
+    "why": "En los workflows de sources.yaml, una clave marketplace/<slug>/{version} asigna cada versión del slug de un flujo de trabajo del marketplace: {version}, en su yaml y tras la @ de su uses, representa la versión que nombra un uses:. La versión es texto del propio flujo de trabajo, así que antes de que Git lea nada debe tener solo letras, dígitos, ., _, + y -, no empezar por . ni por -, tener como mucho 255 bytes, y la revisión y el archivo que da deben ser unos que un uses: pueda nombrar, para que no nombre un archivo fuera del repositorio ni se lea como una opción.",
     "fix": [
       "Nombra una versión que la asignación admita, como v1.2.",
       "O asigna esa versión con una clave propia, marketplace/<slug>/<versión>, en los workflows de sources.yaml."

@@ -5111,18 +5111,27 @@ host itself.
     `marketplace/<slug>/{version}`, which maps each version of the slug
     that no key of its own maps. Two keys that read the same, as
     `marketplace/tools@v1` and `marketplace/tools/v1`, are refused
-    (`workflow_mapping_repeated`), as is a key that names no such workflow
-    (`workflow_mapping_key_invalid`).
+    (`workflow_mapping_repeated`), as is a key that names no such workflow,
+    or holds what a terminal would act on, or show other than as it is, a
+    control or format character, as a key begins the location of each run
+    of its workflow (`workflow_mapping_key_invalid`).
   - **Each value** names a workflow in Git as a step does: `uses`, a
     `github/` or `gitlab/` reference, `yaml`, its file, and `host`, a GitLab
     project's server, which `gitlab-servers` must register, all checked as
-    a step's are; never another workflow a platform stores, or a URL
-    (`workflow_mapping_invalid`).
+    a step's are, as the file loads; never another workflow a platform
+    stores, or a URL (`workflow_mapping_invalid`).
   - **A slug's mapping** writes the version as `{version}`, in its `yaml`
     and after its `uses`'s `@`, and nowhere else. The version is the
     workflow's text, so before Git runs it must be letters, digits, `.`,
-    `_`, `+` and `-`, not first `.` or `-`, and give a revision and a file
-    that a `uses:` could name (`source_version_invalid`).
+    `_`, `+` and `-`, not first `.` or `-`, at most 255 bytes, and give a
+    revision and a file that a `uses:` could name
+    (`source_version_invalid`). So a revision that is `{version}` alone
+    lets a workflow name any revision of the repository, a full commit
+    among them, which on GitHub can be one only a fork has (see
+    [Security](#security)): no more than a `github/` `uses:` of its own can
+    name, but more than the mapping means. A prefix, as
+    `@release-{version}`, keeps it to the branches and tags that the
+    repository names so.
   - **`latest`**, which a `uses:` without a version names, is the item's
     latest as its platform decides it, which a slug's mapping can't know:
     only a key of its own, `marketplace/<slug>/latest`, maps it, as the
@@ -5130,11 +5139,15 @@ host itself.
     (`source_latest_not_mapped`, which names the key).
   - **A mapped workflow** is pinned, read again by its pin, and kept in the
     cache as a `github/` or `gitlab/` one is, through its mapping, and its
-    remote context is its repository's. Its location names both, the one
-    the `uses:` names first, as
+    remote context is its repository's, as it was when it was pinned. Its
+    location names both, the one the `uses:` names first, as
     `marketplace/tools/v1.2 → github.com/acme/flows@main:tools.yaml`,
-    wherever a run's workflow is shown: `meridian status`, a chain of
-    calls, and the file a called workflow's problems are in.
+    wherever a run's workflow is shown: `meridian status`, which shows a
+    location's control and format characters escaped, wherever it came
+    from, a chain of calls, and the file a called workflow's problems are
+    in. A pin read again through a mapping changed since, to other text, is
+    `source_changed`, `source_file_not_found` or
+    `source_revision_not_found`, never the other text.
   - **A mapping is the user's word** that the name is that workflow: the
     platform's own item may be another. A `uses:` it doesn't map is
     `source_on_platform`.

@@ -222,6 +222,12 @@ workflows:
 	if got := load(t, map[string]string{SourcesFile: "workflows:\n"}, nil).Workflows(); len(got) != 0 {
 		t.Errorf("an empty workflows: Workflows = %+v", got)
 	}
+	// The servers registered after the workflows, in the file, are theirs
+	// too; and gitlab.com needs none.
+	later := load(t, map[string]string{SourcesFile: "workflows:\n  workflow/a: {uses: gitlab/team/flows, host: Git.Example.com}\n  workflow/b: {uses: gitlab/team/flows}\ngitlab-servers: [git.example.com]\n"}, nil)
+	if got := later.Workflows(); len(got) != 2 {
+		t.Errorf("Workflows with the servers after them = %+v", got)
+	}
 
 	for name, tc := range map[string]struct {
 		text string
@@ -235,6 +241,13 @@ workflows:
 		"a saved template":     {"workflows:\n  workflow/{version}: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
 		"no slug":              {"workflows:\n  marketplace//v1: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
 		"no name":              {"workflows:\n  workflow/: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		// What a terminal would act on, or show otherwise, as a key begins
+		// the location of each run of its workflow that status shows.
+		"an escape":       {"workflows:\n  \"marketplace/a/v1\\e[31m\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"an 8-bit escape": {"workflows:\n  \"marketplace/a/v1\\x9b31m\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"an override":     {"workflows:\n  \"marketplace/a\\u202e/v1\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"a newline":       {"workflows:\n  \"workflow/x\\n\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"a separator":     {"workflows:\n  \"workflow/x\\u2028y\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
 		// Two keys that name one workflow, as Normal reads them.
 		"one version twice": {"workflows:\n  marketplace/tools@v1: {uses: github/acme/a}\n  marketplace/tools/v1: {uses: github/acme/b}\n", problems.WorkflowMappingRepeated, 3, ""},
 		"the latest twice":  {"workflows:\n  marketplace/tools: {uses: github/acme/a}\n  marketplace/tools/latest: {uses: github/acme/b}\n", problems.WorkflowMappingRepeated, 3, ""},
@@ -248,6 +261,9 @@ workflows:
 		"a chain":           {"workflows:\n  workflow/w: {uses: marketplace/tools/v1}\n", problems.WorkflowMappingInvalid, 2, "platform"},
 		"a file outside":    {"workflows:\n  workflow/w: {uses: github/acme/flows, yaml: ../w.yaml}\n", problems.WorkflowMappingInvalid, 2, "yaml"},
 		"a server's port":   {"workflows:\n  workflow/w: {uses: gitlab/team/flows, host: \"git.example.com:8443\"}\n", problems.WorkflowMappingInvalid, 2, "host"},
+		// A GitLab server must be registered, wherever in the file.
+		"a server not registered": {"gitlab-servers: [git.example.com]\nworkflows:\n  workflow/w: {uses: gitlab/team/flows, host: other.example.com}\n", problems.WorkflowMappingInvalid, 3, "server"},
+		"no servers registered":   {"workflows:\n  workflow/w: {uses: gitlab/team/flows, host: git.example.com}\n", problems.WorkflowMappingInvalid, 2, "server"},
 		// A version template is a slug's mapping's, and only in its yaml
 		// and its revision; and what it gives is checked as a step's.
 		"a template of one version": {"workflows:\n  workflow/w: {uses: github/acme/flows, yaml: \"{version}.yaml\"}\n", problems.WorkflowMappingInvalid, 2, "template"},

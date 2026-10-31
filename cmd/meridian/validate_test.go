@@ -562,6 +562,38 @@ func TestRunMappedWorkflow(t *testing.T) {
 	}
 }
 
+// TestStatusEscapesLocation checks that meridian status shows a run's
+// workflow with what a terminal would act on, or show otherwise, escaped,
+// in the list of runs, a run's own, and the runs its steps called: here a
+// workflow file whose name holds an escape, and a mapped workflow's file
+// whose name holds a bidirectional override, which a $yaml can.
+func TestStatusEscapesLocation(t *testing.T) {
+	flowsRepo(t, map[string]string{"flows/t\u202etools.yaml": "jobs:\n  greet:\n    steps:\n      - run: echo hello\n"})
+	env := runEnv(t)
+	config := env[local.EnvConfigDir]
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mapping := "workflows:\n  workflow/tools: {uses: github/acme/flows@main, yaml: \"flows/t\\u202etools.yaml\"}\n"
+	if err := os.WriteFile(filepath.Join(config, local.SourcesFile), []byte(mapping), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := writeFile(t, "w\x1b[31m.yaml", "jobs:\n  main:\n    steps:\n      - uses: workflow/tools\n")
+	if r := runTest(t, env, nil, workflow); r.code != exitOK {
+		t.Fatalf("meridian run = %+v", r)
+	}
+	for _, args := range [][]string{{"status", "-all"}, {"status", "1"}, {"status", "2"}} {
+		r := commandTest(t, env, args...)
+		if r.code != exitOK || strings.ContainsAny(r.stdout, "\x1b\u202e") {
+			t.Errorf("meridian %s = %+v, which holds what a terminal acts on", strings.Join(args, " "), r)
+		}
+	}
+	if r := commandTest(t, env, "status", "1"); !strings.Contains(r.stdout, "workflow: w\\x1b[31m.yaml\n") ||
+		!strings.Contains(r.stdout, "workflow/tools → github.com/acme/flows@main:flows/t\\u202etools.yaml\n") {
+		t.Errorf("meridian status 1 shows the workflows otherwise than escaped: %+v", r)
+	}
+}
+
 // flowsRepo makes a Git repository of files, by their paths in it, a
 // script among them executable, on its branch main, which Git reaches for github.com's acme/flows, and for each
 // of hosts' as acme/flows there: a workflow that uses: names, which

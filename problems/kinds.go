@@ -702,8 +702,9 @@ var (
 	// written; first the key of an earlier one that names the same
 	// workflow, and first_line its line; and what is what of the workflow
 	// in Git it maps to isn't one a step's uses: can name: uses, yaml or
-	// host, platform for another workflow a platform stores, or template
-	// for a version template where none can be.
+	// host, server for a GitLab server gitlab-servers doesn't register,
+	// platform for another workflow a platform stores, or template for a
+	// version template where none can be.
 	WorkflowMappingKeyInvalid = defineCommand("workflow_mapping_key_invalid", "Mapping of something other than a workflow a platform stores", "key")
 	WorkflowMappingRepeated   = defineCommand("workflow_mapping_repeated", "Two mappings of one workflow", "key", "first", "first_line")
 	WorkflowMappingInvalid    = defineCommand("workflow_mapping_invalid", "Mapping to something other than a workflow in Git", "key", "what")

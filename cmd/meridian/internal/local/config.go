@@ -454,15 +454,16 @@ func (c *Config) loadSources(path string) error {
 	if err != nil {
 		return err
 	}
+	// The workflows are read once the servers are, which their mappings
+	// to GitLab can name.
+	var mappings *yaml.Node
 	for _, kv := range keys {
 		key, list := kv.key.Value, kv.value
 		if list.Kind == yaml.ScalarNode && list.Tag == "!!null" {
 			continue
 		}
 		if key == "workflows" {
-			if c.workflows, err = f.workflows(list); err != nil {
-				return err
-			}
+			mappings = list
 			continue
 		}
 		if list.Kind != yaml.SequenceNode {
@@ -480,15 +481,18 @@ func (c *Config) loadSources(path string) error {
 			c.servers = append(c.servers, strings.ToLower(server))
 		}
 	}
-	return nil
+	if mappings != nil {
+		c.workflows, err = f.workflows(mappings, c.servers)
+	}
+	return err
 }
 
 // workflows reads the sources file's workflows, which n holds: each key,
 // which names a workflow a platform stores (MappingKey), maps it to a
-// workflow in Git, its uses, yaml and host, as a step names one
-// (MappingInvalid). Two keys that name the same workflow, as Normal reads
-// them, are refused, as two of one key are.
-func (f configFile) workflows(n *yaml.Node) (Workflows, error) {
+// workflow in Git, its uses, yaml and host, as a step names one, on
+// gitlab.com or one of servers (MappingInvalid). Two keys that name the
+// same workflow, as Normal reads them, are refused, as two of one key are.
+func (f configFile) workflows(n *yaml.Node, servers []string) (Workflows, error) {
 	if err := f.mapping("workflows", n); err != nil {
 		return nil, err
 	}
@@ -530,7 +534,7 @@ func (f configFile) workflows(n *yaml.Node) (Workflows, error) {
 				to.Host = text
 			}
 		}
-		if what := MappingInvalid(to, slug); what != "" {
+		if what := MappingInvalid(to, slug, servers); what != "" {
 			return nil, f.problem(problems.WorkflowMappingInvalid, p.value, problems.Params{"key": key, "what": what})
 		}
 		out[normal] = to

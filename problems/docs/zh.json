@@ -1592,7 +1592,7 @@
   },
   "source_version_invalid": {
     "title": "映射无法使用的市场工作流版本",
-    "why": "在 sources.yaml 的 workflows 中，键 marketplace/<slug>/{version} 映射市场工作流某个 slug 的每个版本：其 yaml 中以及其 uses 的 @ 之后的 {version} 代表 uses: 所指定的版本。版本是工作流自身的文本，因此在 Git 读取任何内容之前，它只能由字母、数字、.、_、+ 和 - 组成，不能以 . 或 - 开头，而且由它得出的修订和文件必须是 uses: 能指定的，这样它既不能指向仓库外的文件，也不会被当作选项读取。",
+    "why": "在 sources.yaml 的 workflows 中，键 marketplace/<slug>/{version} 映射市场工作流某个 slug 的每个版本：其 yaml 中以及其 uses 的 @ 之后的 {version} 代表 uses: 所指定的版本。版本是工作流自身的文本，因此在 Git 读取任何内容之前，它只能由字母、数字、.、_、+ 和 - 组成，不能以 . 或 - 开头，最多 255 字节，而且由它得出的修订和文件必须是 uses: 能指定的，这样它既不能指向仓库外的文件，也不会被当作选项读取。",
     "fix": [
       "指定映射能使用的版本，例如 v1.2。",
       "或者在 sources.yaml 的 workflows 中用该版本自己的键 marketplace/<slug>/<版本> 映射它。"

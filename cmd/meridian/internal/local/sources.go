@@ -195,17 +195,26 @@ const VersionTemplate = "{version}"
 
 // versionPattern is a version a slug's mapping takes: letters, digits, .,
 // _, + and -, not first a dot, which could name a parent directory or a
-// hidden file, nor a hyphen, which git could take for an option.
+// hidden file, nor a hyphen, which git could take for an option; and
+// maxVersion how many bytes it can be, as a branch's or a tag's name, past
+// which git's command line could be too long to run.
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9_+][A-Za-z0-9._+-]*$`)
+
+const maxVersion = 255
 
 // MappingKey reads key, a key of sources.yaml's workflows: the reference
 // to the workflow a platform stores that it maps, as Normal reads it, and
 // whether it is a slug's, which maps each of its versions. It reports
 // whether key is one: a reference to a marketplace workflow by its slug
 // and version, or to a saved workflow by its name, in which nothing holds
-// a brace but a slug's whole version, {version}.
+// a brace but a slug's whole version, {version}, and nothing is what a
+// terminal would act on, or show other than as it is (EscapeControl), as
+// the key begins the location of every run of the workflow it maps.
 func MappingKey(key string) (normal string, slug, ok bool) {
 	normal = plan.SourceRef{Uses: key}.Normal().Uses
+	if problems.EscapeControl(key) != key {
+		return normal, false, false
+	}
 	if item, isItem := strings.CutPrefix(normal, "marketplace/"); isItem {
 		name, version, _ := strings.Cut(item, "/")
 		slug = version == VersionTemplate
@@ -220,9 +229,11 @@ func MappingKey(key string) (normal string, slug, ok bool) {
 // if slug, isn't what a step's reference to one is: platform, for another
 // workflow a platform stores; template, for a version template where it
 // can't be; uses, yaml or host, for what format 1, and these Sources,
-// refuse of a reference's uses:, $yaml or $host; or "" for none. A slug's
-// mapping is checked with a version in its template's place.
-func MappingInvalid(to plan.SourceRef, slug bool) string {
+// refuse of a reference's uses:, $yaml or $host; server, for a GitLab
+// server, besides gitlab.com, that servers doesn't name, as
+// Config.GitLabServers gives them; or "" for none. A slug's mapping is
+// checked with a version in its template's place.
+func MappingInvalid(to plan.SourceRef, slug bool, servers []string) string {
 	if onPlatform(to.Uses) {
 		return "platform"
 	}
@@ -237,9 +248,11 @@ func MappingInvalid(to plan.SourceRef, slug bool) string {
 	if slug {
 		to = withVersion(to, "0")
 	}
-	_, err := parseRef(to)
+	r, err := parseRef(to)
 	p, ok := errors.AsType[*problem.Problem](err)
 	switch {
+	case err == nil && r.host != hosts[r.kind] && !slices.Contains(servers, r.host):
+		return "server"
 	case err == nil:
 		return ""
 	case ok && p.Code == problems.SourceWithInvalid.Code() && p.Params["key"] == "$yaml":
@@ -279,7 +292,7 @@ func (w Workflows) target(ref plan.SourceRef) (plan.SourceRef, string, error) {
 				return plan.SourceRef{}, "", notFound(problems.SourceLatestNotMapped, problems.Params{"ref": ref.Uses, "key": from})
 			}
 			invalid := notFound(problems.SourceVersionInvalid, problems.Params{"ref": ref.Uses, "version": version})
-			if !versionPattern.MatchString(version) {
+			if len(version) > maxVersion || !versionPattern.MatchString(version) {
 				return plan.SourceRef{}, "", invalid
 			}
 			to = withVersion(to, version)
@@ -492,7 +505,10 @@ func (s *Sources) Resolve(ctx context.Context, ref plan.SourceRef) (*compile.Wor
 }
 
 // Read reads the workflow that Resolve pinned as source, by its Ref at its
-// commit, and checks its text against its digest.
+// commit, and checks its text against its digest. It gives the remote
+// context source recorded, which Resolve gave, though the user may have
+// mapped a workflow a platform stores to another place since; or, for a
+// source that recorded none, the one its reference gives now.
 func (s *Sources) Read(ctx context.Context, source plan.Source) (*compile.Workflow, error) {
 	if source.Ref.Uses == "" || !commitPattern.MatchString(source.Revision) || source.Digest == "" {
 		return nil, problems.SourceNotPinned.Problem(problems.Params{"location": source.Location, "revision": source.Revision})
@@ -520,7 +536,11 @@ func (s *Sources) Read(ctx context.Context, source plan.Source) (*compile.Workfl
 			"location": source.Location, "commit": source.Revision, "digest": d, "pinned": source.Digest,
 		})
 	}
-	return &compile.Workflow{Source: source, Text: text, Remote: r.remoteContext()}, nil
+	remote := maps.Clone(source.Remote)
+	if remote == nil {
+		remote = r.remoteContext()
+	}
+	return &compile.Workflow{Source: source, Text: text, Remote: remote}, nil
 }
 
 // digest is the SHA-256 digest of text, as a plan's Source writes it.

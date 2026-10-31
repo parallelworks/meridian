@@ -1369,7 +1369,7 @@
     ]
   },
   "source_version_invalid": {
-    "why": "In sources.yaml's workflows, a key marketplace/<slug>/{version} maps every version of a marketplace workflow's slug: {version}, in its yaml and after its uses's @, stands for the version a uses: names. The version is the workflow's own text, so before Git reads anything it must be letters, digits, ., _, + and - only, not starting with . or -, and the revision and the file it gives must be ones a uses: can name, so that it can't name a file outside the repository or be read as an option.",
+    "why": "In sources.yaml's workflows, a key marketplace/<slug>/{version} maps every version of a marketplace workflow's slug: {version}, in its yaml and after its uses's @, stands for the version a uses: names. The version is the workflow's own text, so before Git reads anything it must be letters, digits, ., _, + and - only, not starting with . or -, at most 255 bytes, and the revision and the file it gives must be ones a uses: can name, so that it can't name a file outside the repository or be read as an option.",
     "fix": [
       "Name a version the mapping takes, such as v1.2.",
       "Or map that version with a key of its own, marketplace/<slug>/<version>, in sources.yaml's workflows."
