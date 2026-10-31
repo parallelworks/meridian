@@ -818,6 +818,13 @@
       "删除 disconnect-timeout，或按格式 1 能读取的方式书写，例如对从不放弃其主机的步骤写 -1。"
     ]
   },
+  "session_redirect_twice": {
+    "title": "有多个要把用户带去的会话",
+    "why": "设置了 redirect: true 的会话，是运行工作流的人在它就绪后被带去的会话，而一次运行只能把他们带到一个会话。因此格式 1 在创建运行时拒绝有多个会话设置了它的工作流。由表达式给出的 redirect: 会在运行开始、其值已知时检查。",
+    "fix": [
+      "只在一个会话上保留 redirect: true，在其他会话上删除它或设为 false。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on 不是运行位置",
     "why": "作业的 runs-on: 用于选择作业的运行位置，但其中的表达式得到的值没有指定任何位置。runs-on 接受执行组的名称（如 execution-groups 输入给出的值）、带有 execution-group: 的映射、带有 environment: 及其集群和名称的映射，或计算目标（如 compute-target 输入给出的值）。",

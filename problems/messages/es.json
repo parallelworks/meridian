@@ -114,6 +114,7 @@
   "value_too_deep": "El valor se anida demasiado para guardarse con la ejecución, que puede anidarse como máximo {max} niveles.",
   "ssh_disconnect_timeout_ignored": "Meridian no respeta disconnect-timeout, aquí {value}: un paso en un host sigue ejecutándose mientras se pierde la conexión con el host, como con un disconnect-timeout negativo.",
   "ssh_disconnect_timeout_invalid": "El ssh: da disconnect-timeout {value}, que el formato 1 no puede leer, y por eso hace fallar el paso. Meridian ignora la clave y ejecuta el paso.",
+  "session_redirect_twice": "Solo una sesión puede tener redirect: true, y {keys} lo tienen cada una.",
 
   "runs_on_invalid": "El valor de runs-on debe ser el nombre de un grupo de ejecución, o un mapa que nombre un grupo de ejecución, un entorno o un destino de cómputo, no {value}.",
   "resources_invalid": "{key, select, cpu {Las CPU de resources deben ser un número de núcleos, como 4, 0.5 o 500m} memory {La memoria de resources debe ser un número de bytes, como 8Gi o 512Mi} gpu {Las GPU de resources deben ser un número entero} other {El valor de “{key}” en resources no es válido}}, no {value}.",

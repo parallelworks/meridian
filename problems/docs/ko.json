@@ -818,6 +818,13 @@
       "disconnect-timeout을 삭제하거나, 호스트와의 연결을 포기하지 않는 단계라면 -1처럼 형식 1이 읽는 형태로 쓰세요."
     ]
   },
+  "session_redirect_twice": {
+    "title": "사용자를 데려갈 세션이 둘 이상",
+    "why": "redirect: true인 세션은 준비되면 워크플로를 실행한 사람이 이동하는 세션이며, 한 번의 실행은 한 세션으로만 데려갈 수 있습니다. 그래서 형식 1은 실행을 만들 때, 둘 이상의 세션이 그것을 가진 워크플로를 거부합니다. 식이 주는 redirect:는 값을 알게 되는 실행 시작 시에 확인합니다.",
+    "fix": [
+      "redirect: true는 한 세션에만 두고, 다른 세션에서는 지우거나 false로 하세요."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on이 실행 위치가 아님",
     "why": "작업의 runs-on:은 작업을 실행할 위치를 고르는데, 그 안의 표현식이 어떤 위치도 가리키지 않는 값을 만들었습니다. runs-on에는 execution-groups 입력이 주는 것 같은 실행 그룹의 이름, execution-group:이 있는 매핑, environment:와 그 클러스터 및 이름이 있는 매핑, 또는 compute-target 입력이 주는 것 같은 컴퓨팅 대상을 지정할 수 있습니다.",

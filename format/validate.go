@@ -106,6 +106,8 @@ func (p *parser) validate(s *formatSchema, value any) any {
 		}
 		var x explanation
 		s.explain(verr, &x)
+		x.unknown = slices.DeleteFunc(x.unknown, func(u unknownKey) bool { return folded(value, u.object, u.key, u.defined) })
+		x.errors = slices.DeleteFunc(x.errors, func(e *jsonschema.ValidationError) bool { return foldedRequired(value, e) })
 		if len(x.unknown) == 0 || pass == maxPasses {
 			for _, e := range x.errors {
 				p.schemaError(s, e)
@@ -126,6 +128,66 @@ func (p *parser) validate(s *formatSchema, value any) any {
 			}
 		}
 	}
+}
+
+// foldedWith are the uses: of the built-in actions whose with: format 1
+// decodes as encoding/json decodes an object into a struct, matching a key
+// case-insensitively where none matches it exactly, with the keys of the
+// with: whose objects it decodes so too.
+var foldedWith = map[string][]string{
+	"parallelworks/update-session": {"targetInfo"},
+}
+
+// folded reports whether key, a key that the schema of the object at
+// object doesn't define, is one of defined, which it does, but for case,
+// in an object whose keys format 1 matches case-insensitively (foldedWith):
+// format 1 reads it as the key it defines, so it is kept, and isn't
+// unknown. Of keys that differ only in case, as localPort and LocalPort,
+// format 1 takes the last in byte order, as Go's json.Marshal orders a
+// map's keys, which is for what reads the with: as it runs to choose
+// (compile.UpdateSession).
+func folded(value any, object []string, key string, defined []string) bool {
+	return slices.ContainsFunc(defined, func(d string) bool { return strings.EqualFold(d, key) }) && foldedObject(value, object)
+}
+
+// foldedObject reports whether the object at object is one whose keys
+// format 1 matches case-insensitively: the with: of a step whose uses:
+// foldedWith names, or one of its objects foldedWith names.
+func foldedObject(value any, object []string) bool {
+	var step []string
+	nested := ""
+	switch n := len(object); {
+	case n >= 2 && object[n-2] == "with":
+		step, nested = object[:n-2], object[n-1]
+	case n >= 1 && object[n-1] == "with":
+		step = object[:n-1]
+	default:
+		return false
+	}
+	v, _ := jsonptr.Lookup(value, step)
+	m, _ := v.(map[string]any)
+	uses, _ := m["uses"].(string)
+	keys, ok := foldedWith[uses]
+	return ok && (nested == "" || slices.Contains(keys, nested))
+}
+
+// foldedRequired reports whether e is a required key missing from an
+// object whose keys format 1 matches case-insensitively (foldedObject),
+// which has each of them but for case: format 1 reads the object as having
+// them.
+func foldedRequired(value any, e *jsonschema.ValidationError) bool {
+	k, ok := e.ErrorKind.(*kind.Required)
+	if !ok || !foldedObject(value, e.InstanceLocation) {
+		return false
+	}
+	v, _ := jsonptr.Lookup(value, e.InstanceLocation)
+	obj, _ := v.(map[string]any)
+	for _, missing := range k.Missing {
+		if !slices.ContainsFunc(slices.Collect(maps.Keys(obj)), func(key string) bool { return strings.EqualFold(key, missing) }) {
+			return false
+		}
+	}
+	return true
 }
 
 // An explanation sorts the causes of a validation error into keys the schema

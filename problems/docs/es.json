@@ -818,6 +818,13 @@
       "Quita disconnect-timeout, o escríbelo como lo lee el formato 1, como -1 para un paso que nunca se rinde con su host."
     ]
   },
+  "session_redirect_twice": {
+    "title": "Más de una sesión a la que llevar al usuario",
+    "why": "Una sesión con redirect: true es aquella a la que se lleva a quien ejecuta el flujo de trabajo una vez que está lista, y una ejecución solo puede llevarle a una sesión. Así que el formato 1 rechaza, al crear la ejecución, un flujo de trabajo en el que más de una sesión la tiene. Un redirect: que da una expresión se comprueba al empezar la ejecución, una vez que se conoce.",
+    "fix": [
+      "Deja redirect: true en una sola sesión, y quítalo, o ponlo a false, en las demás."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",

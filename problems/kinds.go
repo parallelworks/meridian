@@ -241,6 +241,14 @@ var (
 	SSHDisconnectTimeoutInvalid = define(Warning, "ssh_disconnect_timeout_invalid", "disconnect-timeout format 1 can't read", "value")
 )
 
+// A workflow's sessions:.
+var (
+	// SessionRedirectTwice is more than one session whose redirect: is
+	// true, of which format 1 allows one: keys are their keys, as QuoteAll
+	// writes them.
+	SessionRedirectTwice = define(Error, "session_redirect_twice", "More than one session to take the user to", "keys")
+)
+
 // Creating and starting a run: what the caller gives the compiler, and
 // what Start decides again.
 var (
