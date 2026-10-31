@@ -67,12 +67,10 @@ func (d *Driver) Forward(ctx context.Context, m *backend.Member) (net.Listener, 
 	if err != nil {
 		return nil, err
 	}
-	for try := 1; ; try++ {
-		l, conn, err := d.forward(ctx, m, t)
-		if err == nil || try > 1 || conn == nil || ctx.Err() != nil || asProblem(err) != nil || !closed(conn, err) {
-			return l, err
-		}
-	}
+	l, _, err := retryClosed(ctx, func() (net.Listener, *sshconn.Conn, error) {
+		return d.forward(ctx, m, t)
+	}, notProblem)
+	return l, err
 }
 
 // forward is Forward, once, of m, whose target is t, over the pool's
@@ -118,16 +116,15 @@ func (d *Driver) socket(m *backend.Member, h *host) (string, error) {
 // learned of the host, as run does: a connection that turns out to have
 // closed is made again, once.
 func (d *Driver) learned(ctx context.Context, t sshconn.Target) (*sshconn.Conn, *host, error) {
-	for try := 1; ; try++ {
+	h, conn, err := retryClosed(ctx, func() (*host, *sshconn.Conn, error) {
 		conn, err := d.connect(ctx, t)
 		if err != nil {
 			return nil, nil, err
 		}
 		h, err := d.host(ctx, conn, t)
-		if err == nil || try > 1 || ctx.Err() != nil || !closed(conn, sentOrNot(err)) {
-			return conn, h, sentOrNot(err)
-		}
-	}
+		return h, conn, sentOrNot(err)
+	}, nil)
+	return conn, h, err
 }
 
 // unlinkSocket removes the socket at p on the host conn reaches, if a
