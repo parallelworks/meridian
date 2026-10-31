@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -1231,5 +1232,103 @@ func TestReferrerPolicy(t *testing.T) {
 	}
 	if resp, _ := r.do("GET", prefix+"/x?rp=no-referrer", header); resp.Header.Get("Referrer-Policy") != "no-referrer" {
 		t.Errorf("the service's policy reached the browser as %q", resp.Header.Get("Referrer-Policy"))
+	}
+}
+
+// lockedLog is a log a test reads, which a proxy's goroutines write.
+type lockedLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// TestFailureLog checks what the proxy logs of a connection to the
+// service that failed: once a minute at most, however often a browser
+// retries; and, of a private session, or one made private, only its
+// problem's code, never what the error says, as the service's address,
+// which can be what the session read.
+func TestFailureLog(t *testing.T) {
+	refused := problems.SSHTCPConnectFailed.Problem(problems.Params{"host": "farm", "address": "secret-node:8888", "reason": "connection refused"})
+	for _, tc := range []struct {
+		name          string
+		private, mark bool
+	}{{"public", false, false}, {"private", true, false}, {"made private", false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out lockedLog
+			r := newRig(t, nil, func(c *Config) {
+				c.Private = tc.private
+				c.Log = slog.New(slog.NewTextHandler(&out, nil))
+				c.Dial = func(context.Context) (net.Conn, error) { return nil, refused }
+			})
+			if tc.mark {
+				r.p.MarkPrivate()
+			}
+			cookie := r.login()
+			for range 3 {
+				if resp, _ := r.do("GET", prefix+"/x", http.Header{"Cookie": {cookie}}); resp.StatusCode != http.StatusBadGateway {
+					t.Fatalf("a service that refused answered %d", resp.StatusCode)
+				}
+			}
+			logged := out.String()
+			if n := strings.Count(logged, "didn't answer"); n != 1 {
+				t.Errorf("three failed requests logged %d times:\n%s", n, logged)
+			}
+			private := tc.private || tc.mark
+			if private && (strings.Contains(logged, "secret-node") || !strings.Contains(logged, "problem=ssh_tcp_connect_failed")) ||
+				!private && !strings.Contains(logged, "secret-node") {
+				t.Errorf("private %t, the log says:\n%s", private, logged)
+			}
+		})
+	}
+}
+
+// TestPrivateProxyLog checks that what the reverse proxy logs itself, as a
+// body it couldn't copy from the service, a private session's proxy logs
+// nothing of, since what an error says can be what the session read.
+func TestPrivateProxyLog(t *testing.T) {
+	for _, private := range []bool{false, true} {
+		var out lockedLog
+		r := newRig(t, nil, func(c *Config) {
+			c.Private = private
+			c.Log = slog.New(slog.NewTextHandler(&out, nil))
+			c.Dial = func(context.Context) (net.Conn, error) {
+				client, server := net.Pipe()
+				go func() {
+					defer server.Close()
+					_, _ = http.ReadRequest(bufio.NewReader(server))
+					_, _ = io.WriteString(server, "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+				}()
+				return client, nil
+			}
+		})
+		cookie := r.login()
+		// The proxy aborts the answer it can't finish, which the client
+		// sees as an error.
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+r.addr+prefix+"/x", http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = r.host
+		req.Header.Set("Cookie", cookie)
+		if resp, err := r.client.Do(req); err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+		_ = r.p.Close()
+		logged := out.String()
+		if private == strings.Contains(logged, "body copy") {
+			t.Errorf("private %t, the reverse proxy logged:\n%s", private, logged)
+		}
 	}
 }

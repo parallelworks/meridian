@@ -25,7 +25,7 @@ import (
 //
 // host and port come from a workflow, as a session's remoteHost and
 // remotePort: host must be a name, of letters, digits, -, _ and dots, or
-// an IP address, without brackets (tcpHost), and port from 1 to 65535, or
+// an IP address, without brackets (TCPHost), and port from 1 to 65535, or
 // it is problems.SSHTCPAddressInvalid, before anything connects. A host
 // whose sshd won't connect to the address, as where AllowTcpForwarding,
 // DisableForwarding or PermitOpen forbids it, or the key's
@@ -41,7 +41,7 @@ func (d *Driver) DialTCP(ctx context.Context, m *backend.Member, host string, po
 	if err != nil {
 		return nil, err
 	}
-	if !tcpHost(host) || port < 1 || port > 65535 {
+	if !TCPHost(host) || port < 1 || port > 65535 {
 		return nil, problems.SSHTCPAddressInvalid.Problem(problems.Params{"value": host, "port": strconv.Itoa(port)})
 	}
 	address := net.JoinHostPort(host, strconv.Itoa(port))
@@ -66,14 +66,15 @@ func (d *Driver) DialTCP(ctx context.Context, m *backend.Member, host string, po
 	}
 }
 
-// tcpHost reports whether DialTCP asks a host to connect to host: an IP
+// TCPHost reports whether DialTCP asks a host to connect to host, as a
+// session's host checks a step's remoteHost before it serves it there: an IP
 // address, without brackets or a zone, or a name of at most 253 bytes,
 // labels of 1 to 63 letters, digits, - and _ between dots, that doesn't
 // start with -. Nothing else, such as a control character or white space,
 // reaches the host. A name the host's resolver reads as an address, as
 // 127.1 or 0x7f.1 are, reaches it as one: a list of addresses to allow or
 // deny would have to read host as the host's resolver does first.
-func tcpHost(host string) bool {
+func TCPHost(host string) bool {
 	if net.ParseIP(host) != nil {
 		return true
 	}

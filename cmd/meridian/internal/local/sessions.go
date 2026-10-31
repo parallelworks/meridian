@@ -22,6 +22,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/expr"
@@ -372,6 +373,11 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 		if p.RemoteHost == "" {
 			p.RemoteHost = "localhost"
 		}
+		// What the cluster's host can't be asked to connect to fails the
+		// step, rather than each request.
+		if !backendssh.TCPHost(clusterAddress(p.RemoteHost)) {
+			return coordinator.SessionPoint{}, problems.SSHTCPAddressInvalid.Problem(problems.Params{"value": p.RemoteHost, "port": strconv.Itoa(remotePort)})
+		}
 	}
 	data, err := jsonv2.Marshal(p)
 	if err != nil {
@@ -379,6 +385,10 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 	}
 	if !serve {
 		return coordinator.SessionPoint{Point: data, Port: s.Port}, nil
+	}
+	if u.Read.Private || u.Read.Marked {
+		// Where it points now is private, as the store keeps it.
+		s.Private = true
 	}
 	served, err := h.serve(ctx, s, p, string(data))
 	if err != nil {
@@ -435,6 +445,9 @@ func (h *SessionHost) serve(ctx context.Context, s coordinator.Session, p sessio
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if sv := h.served[s.ID]; sv != nil {
+		if s.Private {
+			sv.proxy.MarkPrivate()
+		}
 		sv.proxy.Repoint(h.dialer(p))
 		sv.point = point
 		return sv.listener.Port(), nil
@@ -464,6 +477,7 @@ func (h *SessionHost) start(ctx context.Context, s coordinator.Session, p sessio
 	proxy, err := sessionproxy.New(h.life, sessionproxy.Config{
 		User: h.user.Name, Name: s.Name, Label: s.Label, Run: s.Run, Key: s.Key,
 		Session: s.ID, Secret: secret, Keyring: h.keys, Codes: redeemer{h.codes}, Dial: h.dialer(p), Log: h.log,
+		Private: s.Private,
 	})
 	if err != nil {
 		return nil, err
@@ -488,6 +502,16 @@ type redeemer struct{ codes SessionStore }
 
 func (r redeemer) Redeem(ctx context.Context, session string, mac []byte) bool {
 	return r.codes.RedeemSessionCode(ctx, session, mac)
+}
+
+// clusterAddress returns what a cluster's host is asked to connect to for
+// remoteHost: 127.0.0.1 for localhost, or none, rather than whatever its
+// resolver gives first, and any other as it is.
+func clusterAddress(remoteHost string) string {
+	if remoteHost == "" || strings.EqualFold(remoteHost, "localhost") {
+		return "127.0.0.1"
+	}
+	return remoteHost
 }
 
 // dialer returns what connects to where p points: over SSH through a
@@ -525,10 +549,7 @@ func (h *SessionHost) dialer(p sessionPoint) sessionproxy.DialFunc {
 		}
 	}
 	clusterHost, _ := h.cfg.ClusterHost(p.Cluster)
-	host := p.RemoteHost
-	if host == "" || strings.EqualFold(host, "localhost") {
-		host = "127.0.0.1"
-	}
+	host := clusterAddress(p.RemoteHost)
 	return func(ctx context.Context) (net.Conn, error) {
 		return h.dialCluster(ctx, clusterHost, host, p.RemotePort)
 	}
@@ -577,6 +598,9 @@ func (h *SessionHost) Serve(ctx context.Context, live []coordinator.Session) {
 				sv.proxy.SetSecret(secret)
 				sv.salt = string(s.Salt)
 			}
+		}
+		if s.Private {
+			sv.proxy.MarkPrivate()
 		}
 		if string(s.Point) != sv.point {
 			sv.proxy.Repoint(h.dialer(p))
