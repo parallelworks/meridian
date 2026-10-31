@@ -39,7 +39,7 @@ type testSessionStore struct {
 	unserved map[string]bool
 }
 
-func (s *testSessionStore) SessionServing(_ context.Context, id string) (bool, error) {
+func (s *testSessionStore) SessionHeld(_ context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return !s.unserved[id], nil
@@ -105,6 +105,12 @@ func (a *testAnnouncer) lines() []string {
 // to a store of the test's.
 func newTestSessionHost(t *testing.T) (*SessionHost, *testSessionStore, *[]string) {
 	t.Helper()
+	return newTestSessionHostIn(t, t.Context())
+}
+
+// newTestSessionHostIn is newTestSessionHost, made with ctx.
+func newTestSessionHostIn(t *testing.T, ctx context.Context) (*SessionHost, *testSessionStore, *[]string) {
+	t.Helper()
 	cfg, err := LoadConfig(configDir(t, map[string]string{ClustersFile: "hpc:\n  host: farm\n"}), lookup(nil))
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +125,7 @@ func newTestSessionHost(t *testing.T) (*SessionHost, *testSessionStore, *[]strin
 		mu.Unlock()
 		return (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	}
-	h, err := NewSessionHost(t.Context(), cfg, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, nil)
+	h, err := NewSessionHost(ctx, cfg, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,11 +455,46 @@ func TestSessionHostServes(t *testing.T) {
 	}
 }
 
+// TestSessionHostOutlivesItsContext checks that a host serves its
+// sessions until it is closed, whatever becomes of the context it was
+// made with: a link made before that context is done works after it, and
+// reaches the session's service.
+func TestSessionHostOutlivesItsContext(t *testing.T) {
+	leaktest.Check(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	h, _, _ := newTestSessionHostIn(t, ctx)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	s := testSession(map[string]any{})
+	sp, err := h.Point(t.Context(), s, compile.SessionUpdate{Name: s.Name, With: map[string]any{"remotePort": float64(port)}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Point, s.Port = sp.Point, sp.Port
+	link, err := h.Link(t.Context(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	client := sessionClient(t)
+	if code, _ := get(t, client, link); code != http.StatusOK {
+		t.Fatalf("once the host's context is done, the link's code answers %d", code)
+	}
+	base := "http://" + net.JoinHostPort(sessionproxy.HostOf(s.Label), strconv.Itoa(sp.Port)) + "/me/session/alice/web-1/"
+	if code, body := get(t, client, base); code != http.StatusOK || body != "ok" {
+		t.Errorf("once the host's context is done, its session answers %d %q", code, body)
+	}
+}
+
 // TestSessionHostServesAgain checks a session a host takes over, as
 // another process stopped serving it: at its port, or, where another
 // program holds that now, at one the system picks, which the store keeps;
 // a cluster's service it reaches through the cluster's host; and a link
-// session it says once, and again only where it points elsewhere.
+// session it says once, and again only where it points elsewhere, as the
+// store gives it or as a step of this process points it.
 func TestSessionHostServesAgain(t *testing.T) {
 	leaktest.Check(t)
 	h, store, dials := newTestSessionHost(t)
@@ -505,6 +546,17 @@ func TestSessionHostServesAgain(t *testing.T) {
 	h.Serve(t.Context(), []coordinator.Session{moved, link, same})
 	if lines := said.lines(); len(lines) != 4 || lines[3] != "7 docs https://example.com/b" {
 		t.Errorf("pointed elsewhere, the link is said as %q", lines)
+	}
+	// A step of this process points it: said as it does, and not again as
+	// the coordinator's next look gives it.
+	sp, err := h.Point(t.Context(), link, compile.SessionUpdate{Name: link.Name, With: map[string]any{"type": "link", "url": "https://example.com/c"}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link.Point = sp.Point
+	h.Serve(t.Context(), []coordinator.Session{moved, link, same})
+	if lines := said.lines(); len(lines) != 5 || lines[4] != "7 docs https://example.com/c" {
+		t.Errorf("pointed by a step, the link is said as %q", lines)
 	}
 
 	client := sessionClient(t)

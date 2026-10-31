@@ -117,7 +117,7 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	// its sessions' secrets.
 	ssh.Store = coord.StoreID()
 	host.Attach(coord.StoreID(), coord)
-	return &coordination{coord: coord, sessions: host}, nil
+	return &coordination{coord: coord, sessions: host, closeSessions: host.Close, closeCoord: coord.Close}, nil
 }
 
 // A coordination is what coordinate opens: a coordinator of the store,
@@ -125,13 +125,19 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 type coordination struct {
 	coord    *coordinator.Coordinator
 	sessions *local.SessionHost
+	// closeSessions and closeCoord are the two's Close, which close calls,
+	// and a test sees the order of.
+	closeSessions func()
+	closeCoord    func() error
 }
 
 // close closes the session host, and then the coordinator, once it has
-// stopped serving.
+// stopped serving: until the host closes, its sessions' proxies redeem
+// codes with the coordinator's store, and reach clusters' services
+// through its ssh backend.
 func (co *coordination) close() error {
-	co.sessions.Close()
-	return co.coord.Close()
+	co.closeSessions()
+	return co.closeCoord()
 }
 
 // progress returns the command's progress display (local.Progress), on
