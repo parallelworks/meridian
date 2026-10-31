@@ -9,9 +9,11 @@ permissions:
   contents: read
 
 # A newer push to a PR supersedes the run before it. Runs on canary are never
-# canceled, so that every merged commit keeps its own result.
+# canceled, so that every merged commit keeps its own result: each commit has
+# a group of its own, since a group holds one pending run and cancels it when
+# another arrives, whatever cancel-in-progress says.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/canary' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/canary' }}
 
 # Naming the shell adds pipefail, which the default shell leaves off.
