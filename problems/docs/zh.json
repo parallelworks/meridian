@@ -1584,10 +1584,26 @@
   },
   "source_on_platform": {
     "title": "平台存储的工作流",
-    "why": "以 marketplace/ 或 workflow/ 开头的 uses: 指定的是由 ACTIVATE 等平台保存的工作流。Meridian 本身从 Git 仓库读取工作流。",
+    "why": "以 marketplace/ 或 workflow/ 开头的 uses: 指定的是由 ACTIVATE 等平台保存的工作流。Meridian 本身从 Git 仓库读取工作流，只有通过你的映射才会读取平台存储的工作流：sources.yaml 的 workflows 把这样的 uses: 映射到 Git 仓库中的工作流，然后像 github/ 或 gitlab/ 的 uses: 一样读取并固定它。",
     "fix": [
-      "在存储所用工作流的平台上运行该工作流。",
-      "或者通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>@<修订>，并在 with: $yaml 中指定其文件。"
+      "在 sources.yaml 的 workflows 中，以 uses: 为键，把该工作流映射到 Git 中的工作流，例如 marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}。",
+      "或者在 uses: 本身中通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>@<修订>，并在 with: $yaml 中指定其文件。"
+    ]
+  },
+  "source_version_invalid": {
+    "title": "映射无法使用的市场工作流版本",
+    "why": "在 sources.yaml 的 workflows 中，键 marketplace/<slug>/{version} 映射市场工作流某个 slug 的每个版本：其 yaml 中以及其 uses 的 @ 之后的 {version} 代表 uses: 所指定的版本。版本是工作流自身的文本，因此在 Git 读取任何内容之前，它只能由字母、数字、.、_、+ 和 - 组成，不能以 . 或 - 开头，最多 255 字节，而且由它得出的修订和文件必须是 uses: 能指定的，这样它既不能指向仓库外的文件，也不会被当作选项读取。",
+    "fix": [
+      "指定映射能使用的版本，例如 v1.2。",
+      "或者在 sources.yaml 的 workflows 中用该版本自己的键 marketplace/<slug>/<版本> 映射它。"
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "未映射的市场工作流最新版本",
+    "why": "marketplace/<slug> 或 marketplace/<slug>/latest 形式的 uses: 指定的是该项目的最新版本，由其平台决定。sources.yaml 中某个 slug 的映射 marketplace/<slug>/{version} 无法知道它是哪个版本，因此 Meridian 只通过最新版本自己的键 marketplace/<slug>/latest 来映射它：这是你选择的工作流，而不是该项目的最高版本。",
+    "fix": [
+      "把消息中指出的键 marketplace/<slug>/latest 添加到 sources.yaml 的 workflows 中，映射到你认为是最新的工作流。",
+      "或者在 uses: 中指定版本，例如 marketplace/<slug>/<版本>。"
     ]
   },
   "source_revision_not_found": {
@@ -1879,6 +1895,27 @@
     "fix": [
       "按其键的要求更正该值。",
       "对需要更多设置的主机，如端口、登录用户、跳板主机或 IPv6 地址，请指定你的 ssh_config 中定义的别名。"
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "映射的不是平台存储的工作流",
+    "why": "sources.yaml 的 workflows 中的每个键都是一个指定平台存储的工作流的 uses:：marketplace/<slug>/<版本> 指定市场工作流的一个版本；marketplace/<slug>/{version} 指定其 slug 中没有自己的键映射的每个版本；workflow/<名称> 指定已保存的工作流。版本模板是整个版本，键的其他部分不能含有花括号。",
+    "fix": [
+      "按 uses: 的写法写键，例如 marketplace/tools/v1.2、marketplace/tools/{version} 或 workflow/nightly。"
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "同一工作流的两个映射",
+    "why": "按格式 1 读取 uses: 的方式，sources.yaml 的 workflows 中有两个键指定同一个工作流：marketplace/<slug>@<版本> 与 marketplace/<slug>/<版本> 是同一个，marketplace/<slug> 与 marketplace/<slug>/latest 也是同一个。运行会读取其中哪个映射并不明确。",
+    "fix": [
+      "只保留其中一个。"
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "映射到的不是 Git 中的工作流",
+    "why": "sources.yaml 的 workflows 中的每个映射都像步骤的 uses: 那样指定 Git 仓库中的工作流：uses 写作 github/<所有者>/<仓库>[@<修订>] 或 gitlab/<组>/<项目>[@<修订>]；yaml 是其文件，未指定其他文件时为 workflow.yaml；host 是 GitLab 项目的服务器，必须在 gitlab-servers 中注册。Git 像对待任何 uses: 一样用你的凭据访问它，因此它不能指定平台存储的另一个工作流，也不能是 URL。只有 slug 的键 marketplace/<slug>/{version} 才能在映射中以 {version} 写出版本，写在其 yaml 中和其 uses 的 @ 之后。",
+    "fix": [
+      "按步骤指定 Git 中工作流的方式写映射，例如 {uses: github/acme/flows@main, yaml: flows/tools.yaml}。"
     ]
   },
   "key_file_invalid": {

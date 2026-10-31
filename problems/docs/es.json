@@ -1584,10 +1584,26 @@
   },
   "source_on_platform": {
     "title": "Flujo de trabajo que guarda una plataforma",
-    "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git.",
+    "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git, y lee uno que guarda una plataforma solo a través de una asignación tuya: los workflows de sources.yaml asignan ese uses: a un flujo de trabajo de un repositorio Git, que entonces se lee y se fija como un uses: de github/ o gitlab/.",
     "fix": [
-      "Ejecuta el flujo de trabajo en la plataforma que guarda el flujo de trabajo que usa.",
-      "O nombra el flujo de trabajo por su repositorio Git, como github/<propietario>/<repositorio>@<revisión>, con su archivo en with: $yaml."
+      "Asigna el flujo de trabajo en los workflows de sources.yaml, con el uses: como clave, al flujo de trabajo en Git: por ejemplo, marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}.",
+      "O nombra el flujo de trabajo por su repositorio Git en el propio uses:, como github/<propietario>/<repositorio>@<revisión>, con su archivo en with: $yaml."
+    ]
+  },
+  "source_version_invalid": {
+    "title": "Versión de un flujo de trabajo del marketplace que una asignación no admite",
+    "why": "En los workflows de sources.yaml, una clave marketplace/<slug>/{version} asigna cada versión del slug de un flujo de trabajo del marketplace: {version}, en su yaml y tras la @ de su uses, representa la versión que nombra un uses:. La versión es texto del propio flujo de trabajo, así que antes de que Git lea nada debe tener solo letras, dígitos, ., _, + y -, no empezar por . ni por -, tener como mucho 255 bytes, y la revisión y el archivo que da deben ser unos que un uses: pueda nombrar, para que no nombre un archivo fuera del repositorio ni se lea como una opción.",
+    "fix": [
+      "Nombra una versión que la asignación admita, como v1.2.",
+      "O asigna esa versión con una clave propia, marketplace/<slug>/<versión>, en los workflows de sources.yaml."
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "Última versión de un flujo de trabajo del marketplace sin asignar",
+    "why": "Un uses: de marketplace/<slug>, o de marketplace/<slug>/latest, nombra la última versión del elemento, que decide su plataforma. La asignación de un slug en sources.yaml, marketplace/<slug>/{version}, no puede saber cuál es, así que Meridian asigna la última solo con una clave propia, marketplace/<slug>/latest: tu elección del flujo de trabajo, no la versión más alta del elemento.",
+    "fix": [
+      "Añade la clave que nombra el mensaje, marketplace/<slug>/latest, a los workflows de sources.yaml, asignada al flujo de trabajo que consideres la última.",
+      "O nombra una versión en el uses:, como marketplace/<slug>/<versión>."
     ]
   },
   "source_revision_not_found": {
@@ -1879,6 +1895,27 @@
     "fix": [
       "Corrige el valor como necesita su clave.",
       "Para un host que necesite más, como un puerto, un usuario con el que iniciar sesión, un host de salto o una dirección IPv6, nombra un alias que defina tu ssh_config."
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "Asignación de algo que no es un flujo de trabajo que guarda una plataforma",
+    "why": "Cada clave de los workflows de sources.yaml es un uses: que nombra un flujo de trabajo que guarda una plataforma: marketplace/<slug>/<versión>, una versión de un flujo de trabajo del marketplace; marketplace/<slug>/{version}, cada versión de su slug que ninguna clave propia asigna; o workflow/<nombre>, un flujo de trabajo guardado. Una plantilla de versión es la versión entera, y ninguna otra parte de una clave lleva una llave.",
+    "fix": [
+      "Escribe la clave como la escribe un uses:, como marketplace/tools/v1.2, marketplace/tools/{version} o workflow/nightly."
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "Dos asignaciones de un mismo flujo de trabajo",
+    "why": "Dos claves de los workflows de sources.yaml nombran el mismo flujo de trabajo, como el formato 1 lee un uses:: marketplace/<slug>@<versión> y marketplace/<slug>/<versión> son uno, y también lo son marketplace/<slug> y marketplace/<slug>/latest. No está claro cuál de sus asignaciones leería una ejecución.",
+    "fix": [
+      "Quédate con una de las dos."
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "Asignación a algo que no es un flujo de trabajo en Git",
+    "why": "Cada asignación de los workflows de sources.yaml nombra un flujo de trabajo de un repositorio Git como lo hace el uses: de un paso: uses, como github/<propietario>/<repositorio>[@<revisión>] o gitlab/<grupo>/<proyecto>[@<revisión>]; yaml, su archivo, workflow.yaml si no nombra otro; y host, el servidor de un proyecto de GitLab, que gitlab-servers debe registrar. Git lo alcanza con tus credenciales, como para cualquier uses:, así que no puede nombrar otro flujo de trabajo que guarde una plataforma, ni una URL. Solo la clave de un slug, marketplace/<slug>/{version}, puede escribir la versión en su asignación, como {version}, en su yaml y tras la @ de su uses.",
+    "fix": [
+      "Escribe la asignación como un paso nombra un flujo de trabajo en Git, como {uses: github/acme/flows@main, yaml: flows/tools.yaml}."
     ]
   },
   "key_file_invalid": {
