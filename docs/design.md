@@ -467,7 +467,10 @@ the SHA-256 hash of its content: 218 files.
   cluster's from a number or a boolean, gave `""`, and an input that takes
   a name, such as a Slurm partition, given a list, gave its JSON text.
   ACTIVATE takes the same fix as it creates a run. Both check the shape
-  of the value the run reads, a default included. And ACTIVATE's fix
+  of the value the run reads, a default included; but a default written
+  as an expression ACTIVATE checks only as it evaluates it, later, where
+  Meridian checks what it gives as it compiles. None of the known
+  workflows' inputs of these types has one. And ACTIVATE's fix
   gives a `compute-clusters`, `compute-resources` or `bucket` input its
   default, when that is non-empty text, only for `""` and null, where its
   fallback gave it for any value but text, a mapping among them. Meridian
