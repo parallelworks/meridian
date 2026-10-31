@@ -466,10 +466,13 @@ the SHA-256 hash of its content: 218 files.
   or a bucket's details, as its `ip` or `uri`, from a list, or of a
   cluster's from a number or a boolean, gave `""`, and an input that takes
   a name, such as a Slurm partition, given a list, gave its JSON text.
-  ACTIVATE takes the same fix as it creates a run, and with it gives a
-  cluster's or a bucket's input its default only for `""` and null, as
-  Meridian does, where it gave it for any value but text, a mapping among
-  them. Of the 218 known workflows'
+  ACTIVATE takes the same fix as it creates a run. Both check the shape
+  of the value the run reads, a default included. And ACTIVATE's fix
+  gives a `compute-clusters`, `compute-resources` or `bucket` input its
+  default, when that is non-empty text, only for `""` and null, where its
+  fallback gave it for any value but text, a mapping among them. Meridian
+  does the same for these three types' null, and gives every type's `""`
+  its default, whatever that is. Of the 218 known workflows'
   inputs of these types, 206 `compute-clusters`, 7 `compute-resources`,
   11 `bucket` and 315 of the others, none is `multi`, and no default is a
   list, a number or a boolean; and none of the 261 of their 270 calls
