@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -56,7 +57,9 @@ func TestClusterMembers(t *testing.T) {
 }
 
 // TestCoordinationClose checks that closing what coordinate opened closes
-// its session host too, whose sessions' ports then listen no more.
+// its session host too, whose sessions' ports then listen no more, and
+// before the coordinator, whose store the host's proxies redeem codes
+// with.
 func TestCoordinationClose(t *testing.T) {
 	parallel(t)
 	env := runEnv(t)
@@ -91,8 +94,15 @@ func TestCoordinationClose(t *testing.T) {
 		t.Fatalf("the session's port doesn't listen: %v", err)
 	}
 	conn.Close()
+	var closed []string
+	closeSessions, closeCoord := co.closeSessions, co.closeCoord
+	co.closeSessions = func() { closed = append(closed, "sessions"); closeSessions() }
+	co.closeCoord = func() error { closed = append(closed, "coordinator"); return closeCoord() }
 	if err := co.close(); err != nil {
 		t.Fatal(err)
+	}
+	if !slices.Equal(closed, []string{"sessions", "coordinator"}) {
+		t.Errorf("close closed %q, in that order", closed)
 	}
 	if conn, err := net.DialTimeout("tcp", address, time.Second); err == nil {
 		conn.Close()

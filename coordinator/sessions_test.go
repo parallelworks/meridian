@@ -604,8 +604,8 @@ func TestSessionsTakenOver(t *testing.T) {
 		return nil
 	}
 	waitFor(t, func() bool { return served(hb, "one-1") != nil && served(hc, "two-1") != nil })
-	if serving, err := a.SessionServing(t.Context(), was["one-1"].ID); err != nil || !serving {
-		t.Errorf("a sees the session b serves as served: %t, %v", serving, err)
+	if held, err := a.SessionHeld(t.Context(), was["one-1"].ID); err != nil || !held {
+		t.Errorf("a sees the session b serves as held: %t, %v", held, err)
 	}
 
 	stopA := serving(a)
@@ -786,7 +786,9 @@ func TestSessionsMadeTogether(t *testing.T) {
 // TestSessionsOpenedOnceAGeneration checks that ServeSessions opens a
 // sealed session once for each generation it is sealed as, and serves it
 // as that opened to on the looks after, until a step points it again,
-// sealed as a newer one; and forgets it once it has ended.
+// sealed as a newer one; that it serves it with the salt the store has,
+// which a reset changes, and the generation not; and that it forgets it
+// once it has ended.
 func TestSessionsOpenedOnceAGeneration(t *testing.T) {
 	parallel(t)
 	h := &testHost{}
@@ -822,6 +824,18 @@ func TestSessionsOpenedOnceAGeneration(t *testing.T) {
 	waitFor(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return len(h.served) > served+2 })
 	if !servedAt("1") {
 		t.Errorf("served from what it opened, the session is %+v", h.lastServed())
+	}
+	// A reset: still what it opened, with the new salt.
+	was := h.lastServed()[0]
+	if err := c.ResetSession(t.Context(), was.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		live := h.lastServed()
+		return len(live) == 1 && string(live[0].Salt) != string(was.Salt) && servedAt("1")
+	})
+	if gen, n := opened(); gen != 2 || n != 1 {
+		t.Errorf("after a reset, it holds %d opened, generation %d", n, gen)
 	}
 	point(2)
 	waitFor(t, func() bool { gen, n := opened(); return gen == 3 && n == 1 && servedAt("2") })

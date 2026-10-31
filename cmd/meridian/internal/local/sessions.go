@@ -31,14 +31,14 @@ import (
 
 // SessionStore is what a host keeps of a store's sessions in the store, as
 // the coordinator keeps it (coordinator.Coordinator's AddSessionCode,
-// RedeemSessionCode, SessionServed and SessionServing): their one-time
+// RedeemSessionCode, SessionServed and SessionHeld): their one-time
 // codes, how it serves each, which any process shows, and whether a
-// process serves one.
+// process holds one, as the one that serves it does.
 type SessionStore interface {
 	AddSessionCode(ctx context.Context, id string, mac []byte, lifetime time.Duration) error
 	RedeemSessionCode(ctx context.Context, id string, mac []byte) bool
 	SessionServed(ctx context.Context, id string, port int, p *problem.Problem) error
-	SessionServing(ctx context.Context, id string) (bool, error)
+	SessionHeld(ctx context.Context, id string) (bool, error)
 }
 
 // A SessionHost serves a store's sessions on this machine
@@ -761,10 +761,10 @@ func (h *SessionHost) Link(ctx context.Context, s coordinator.Session) (string, 
 	if store == nil {
 		return "", errors.New("local: the session host has no store before Attach")
 	}
-	switch serving, err := store.SessionServing(ctx, s.ID); {
+	switch held, err := store.SessionHeld(ctx, s.ID); {
 	case err != nil:
 		return "", err
-	case !serving:
+	case !held:
 		return "", problems.SessionNotServed.Problem(problems.Params{"run": s.Run, "key": s.Key, "root": s.Root})
 	}
 	return NewSessionLink(ctx, store, h.keys, h.user.Name, s, s.Port, p.Slug)
