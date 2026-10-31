@@ -449,18 +449,27 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	if err := s.View(ctx, s.readID); err != nil {
 		return err
 	}
-	var erased bool
+	var pending bool
 	if err := s.Tx(ctx, func(tx *Tx) error {
-		var err error
-		erased, err = tx.eraseDigests()
+		found, err := tx.eraseDigests()
+		if err != nil {
+			return err
+		}
+		if found {
+			if err := tx.markErasePending(); err != nil {
+				return err
+			}
+		}
+		pending, err = tx.erasePending()
 		return err
 	}); err != nil {
 		return err
 	}
 	// A process that ended between a run's end and the checkpoint after it
-	// left the log holding the run's secret record; and the digests just
-	// erased, if any, are in it, which this process erased.
-	s.eraseWAL(context.WithoutCancel(ctx), erased)
+	// left the log holding the run's secret record, which the store's
+	// marker says, as it says of the digests just erased, if any: this
+	// process warns of those as of its own, if it can't truncate the log.
+	s.eraseWAL(context.WithoutCancel(ctx), pending)
 	return nil
 }
 

@@ -560,8 +560,7 @@ func (tx *Tx) EndRun(id string, outcome plan.Outcome, reason plan.Reason) error 
 	if _, err := tx.eraseDigests(); err != nil {
 		return err
 	}
-	tx.erased = true
-	return nil
+	return tx.markErased()
 }
 
 // deleteRecords deletes the secret record and the job records of the run

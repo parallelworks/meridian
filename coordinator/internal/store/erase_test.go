@@ -821,6 +821,143 @@ func TestCloseWarnsOfItsOwn(t *testing.T) {
 	}
 }
 
+// TestCloseWarnsOfLeftRecord checks the store's mark of a secret record
+// the write-ahead log may hold, which outlives a process that ended before
+// it truncated the log: a later process whose Open can't truncate it
+// either, as a short command beside a run going on, warns of it as it
+// closes; once a truncation has finished, which deletes the mark, one that
+// can't truncate says nothing. The mark is a count, which holds nothing of
+// what was deleted.
+func TestCloseWarnsOfLeftRecord(t *testing.T) {
+	t.Parallel()
+	r := newErasureRig(t)
+	t.Cleanup(func() {
+		if err := r.s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	open := func() (*Store, func() string) {
+		t.Helper()
+		var mu sync.Mutex
+		var buf bytes.Buffer
+		w := &lockedWriter{&mu, &buf}
+		s, err := Open(t.Context(), r.path, &Options{Log: slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn}))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s, func() string {
+			mu.Lock()
+			defer mu.Unlock()
+			return buf.String()
+		}
+	}
+	mark := func() string {
+		t.Helper()
+		var value string
+		inTx(t, r.s, func(tx *Tx) error {
+			err := tx.queryRow("SELECT value FROM meridian_store WHERE key = '" + walErasePending + "'").Scan(&value)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		})
+		return value
+	}
+
+	release := r.hold()
+	// A process that ends a run, and ends itself before it can truncate
+	// the log: its record stays in it, and so does the mark.
+	left, _ := open()
+	var id string
+	inTx(t, left, func(tx *Tx) error {
+		var err error
+		if id, err = tx.NewRunID(); err != nil {
+			return err
+		}
+		if err := tx.InsertRun(NewRun{ID: id, Plan: testPlan(t), DefaultGroup: "local", RunDir: "/r", WorkflowID: fakeJobID(991)}); err != nil {
+			return err
+		}
+		return tx.InsertRecord(id, 1, []byte("the-wrapped-data-key"), []byte("a-record-left-behind"))
+	})
+	inTx(t, left, func(tx *Tx) error { return tx.EndRun(id, plan.OutcomeSuccess, "") })
+	if err := left.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := mark(); got != "1" {
+		t.Fatalf("the mark of a record left in the log is %q, want a count of 1", got)
+	}
+	short, warnings := open()
+	if err := short.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := warnings(); !strings.Contains(got, "the next Open truncates it") {
+		t.Errorf("a store whose Open couldn't truncate a record left in the log didn't warn:\n%s", got)
+	}
+
+	// Once a truncation has finished, the mark is gone, and a store that
+	// can't truncate says nothing.
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	cleared, _ := open()
+	if err := cleared.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := mark(); got != "" {
+		t.Errorf("once the log was truncated, the mark is %q", got)
+	}
+	release = r.hold()
+	defer func() { _ = release() }()
+	quiet, warnings := open()
+	if err := quiet.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := warnings(); got != "" {
+		t.Errorf("once the mark was gone, a store that couldn't truncate warned:\n%s", got)
+	}
+}
+
+// TestOpenMarksDigests checks that an Open that erases plain digests, a
+// release before kept, marks them as a deletion the write-ahead log may
+// hold, where it can't truncate the log, as a run's end does its record.
+func TestOpenMarksDigests(t *testing.T) {
+	t.Parallel()
+	path := newPath(t)
+	s := openAt(t, path)
+	a := claimedAttempt(t, s, 'a')
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeSuccess}); err != nil {
+			return err
+		}
+		_, err := tx.exec("UPDATE meridian_attempts SET complete_digest = ? WHERE id = ?", []byte("a-plain-digest"), a.ID)
+		return err
+	})
+	// Another process reads as this one opens.
+	reading, done, result := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		result <- s.View(context.WithoutCancel(t.Context()), func(tx *Tx) error {
+			if _, err := tx.Attempt(a.ID); err != nil {
+				return err
+			}
+			close(reading)
+			<-done
+			return nil
+		})
+	}()
+	<-reading
+	again := openAt(t, path)
+	var value string
+	if err := again.View(t.Context(), func(tx *Tx) error {
+		return tx.queryRow("SELECT value FROM meridian_store WHERE key = '" + walErasePending + "'").Scan(&value)
+	}); err != nil || value != "1" {
+		t.Errorf("the mark of digests an Open erased, which it couldn't truncate, is %q, %v", value, err)
+	}
+	close(done)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A lockedWriter writes to w under mu, for a log that goroutines write.
 type lockedWriter struct {
 	mu *sync.Mutex

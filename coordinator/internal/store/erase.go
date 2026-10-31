@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -79,9 +80,91 @@ func (s *Store) eraseLast() {
 	pending, here := s.pending, s.erasedHere
 	s.lastTried = true
 	s.walMu.Unlock()
-	if pending && !s.truncateWAL(context.WithoutCancel(s.closing)) && here {
+	if pending && !s.truncateMarked(context.WithoutCancel(s.closing), s.truncateWAL) && here {
 		s.warnPending()
 	}
+}
+
+// walErasePending is the key of meridian_store whose value counts the
+// transactions that deleted a secret record, or digests (eraseDigests),
+// since a truncation of the write-ahead log last finished after them,
+// which then deletes it (clearErasePending): a count, which holds nothing
+// of what was deleted. It outlives a process that ended before it could
+// truncate the log, so that one whose Open's truncation is held up warns
+// of that record as of its own.
+const walErasePending = "wal_erase_pending"
+
+// markErased marks the transaction as one that deleted a secret record,
+// which the write-ahead log is truncated of once it commits (erased), and
+// in the store, until a truncation finishes (markErasePending).
+func (tx *Tx) markErased() error {
+	tx.erased = true
+	return tx.markErasePending()
+}
+
+// markErasePending counts a deletion of a secret record in the store's
+// marker (walErasePending), in the transaction that deletes it.
+func (tx *Tx) markErasePending() error {
+	_, err := tx.exec(`INSERT INTO meridian_store (key, value) VALUES ('` + walErasePending + `', '1')
+ON CONFLICT (key) DO UPDATE SET value = CAST(CAST(meridian_store.value AS INTEGER) + 1 AS TEXT)`)
+	return err
+}
+
+// erasePending reports whether the store's marker says the write-ahead
+// log may hold a secret record deleted since a truncation last finished.
+func (tx *Tx) erasePending() (bool, error) {
+	var n int
+	err := tx.queryRow("SELECT count(*) FROM meridian_store WHERE key = '" + walErasePending + "'").Scan(&n)
+	return n > 0, err
+}
+
+// erasePendingMark returns the store's marker's value, or "" where it has
+// none, as a truncation reads it before it begins (truncateMarked).
+func (s *Store) erasePendingMark(ctx context.Context) string {
+	var mark string
+	err := s.View(ctx, func(tx *Tx) error {
+		err := tx.queryRow("SELECT value FROM meridian_store WHERE key = '" + walErasePending + "'").Scan(&mark)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		s.log.DebugContext(ctx, "store: read whether the write-ahead log may hold a secret record", "error", err)
+		return ""
+	}
+	return mark
+}
+
+// truncateMarked truncates the write-ahead log with truncate, and reports
+// whether it did; once it did, it deletes the store's marker, unless
+// another deletion marked it since it read it, before it began, which the
+// log may hold past this truncation; and truncates the log of that
+// deletion too, which holds nothing secret, if it can.
+func (s *Store) truncateMarked(ctx context.Context, truncate func(context.Context) bool) bool {
+	mark := s.erasePendingMark(ctx)
+	if !truncate(ctx) {
+		return false
+	}
+	if mark == "" {
+		return true
+	}
+	var cleared bool
+	if err := s.Tx(ctx, func(tx *Tx) error {
+		res, err := tx.exec("DELETE FROM meridian_store WHERE key = '"+walErasePending+"' AND value = ?", mark)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		cleared = n > 0
+		return err
+	}); err != nil {
+		s.log.DebugContext(ctx, "store: clear the mark of a secret record the write-ahead log may hold", "error", err)
+	}
+	if cleared {
+		truncate(ctx)
+	}
+	return true
 }
 
 // eraseWAL truncates the write-ahead log once a transaction has deleted a
@@ -103,7 +186,7 @@ func (s *Store) eraseWAL(ctx context.Context, here bool) {
 	s.walMu.Lock()
 	heldUp := s.heldUp
 	s.walMu.Unlock()
-	if s.truncateWAL(ctx) {
+	if s.truncateMarked(ctx, s.truncateWAL) {
 		if s.truncated != nil {
 			s.truncated()
 		}
@@ -171,7 +254,7 @@ func (s *Store) eraseLater() {
 		s.walMu.Lock()
 		heldUp := s.heldUp
 		s.walMu.Unlock()
-		if s.truncateWALNow(s.closing) {
+		if s.truncateMarked(s.closing, s.truncateWALNow) {
 			if s.truncated != nil {
 				s.truncated()
 			}
