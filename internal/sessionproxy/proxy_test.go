@@ -1183,14 +1183,14 @@ func TestOriginNull(t *testing.T) {
 	}
 }
 
-// TestIdentityHeaders checks that none of the headers with which format
-// 1's platform tells a service who asks reaches the service as a browser
-// sent it, as a service might trust it; and that Meridian sets none of
-// them, which it signs none of.
+// TestIdentityHeaders checks that no header whose name starts with X-PW-,
+// as those with which format 1's platform tells a service who asks, in any
+// case, reaches the service as a browser sent it, as a service might trust
+// it; and that Meridian sets none of them, which it signs none of.
 func TestIdentityHeaders(t *testing.T) {
 	r := newRig(t, nil)
 	header := http.Header{"Cookie": {r.login()}, "X-Kept": {"kept"}}
-	names := []string{"X-PW-User", "X-PW-User-Token", "X-PW-Subject", "X-PW-ImpersonatedBy", "X-PW-Impersonated-By", "x-pw-anything"}
+	names := []string{"X-PW-Example", "X-Pw-Other-Header", "X-pW-MiXeD", "x-pw-anything"}
 	for _, h := range names {
 		header.Set(h, "forged")
 	}

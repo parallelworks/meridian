@@ -276,7 +276,10 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     knows, which fails; a calling step's own `ssh:`, which is refused;
     and an action the coordinator performs with an `ssh:` of its own,
     which connects to no host
-    ([Steps on another host](#steps-on-another-host)).
+    ([Steps on another host](#steps-on-another-host));
+  - how a session is served, where, and at what name and link, what a
+    step that points it may give, and when a browser that opened it is
+    signed out ([Serving a session](#serving-a-session)).
 
 ### Conformance
 
@@ -5622,7 +5625,9 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   made to it meanwhile (`session_not_ready`); serves it at that port, or,
   where another program holds that now, at one the system picks; and says
   which in the store, so that every process shows it. Where it can serve
-  it at none, it says why there, once (`session_local_port_refused`),
+  it at none, it says why there, once: `session_local_port_taken`, as
+  where every port the system picked is another program's on `[::1]`, or
+  `session_local_port_refused`, as where the system won't let it listen;
   which `meridian session url` says too, and tries again each time it
   looks.
 
@@ -5644,15 +5649,19 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   port. Safari wasn't checked.
 - **The path.** Each request's path loses the session's, which
   `X-Forwarded-Prefix` gives the service, as format 1's platform passes a
-  tunnel's on; a `Location` the service gives under `/` is put back under
-  it, and every cookie it sets is held to it, without a `Domain`. `<user>`
-  is the login name of the user who runs Meridian, the same bytes as the
+  tunnel's on; a path the browser escaped, as `%2F`, goes on as it is,
+  under it. A `Location` the service gives under `/`, or at `localhost`
+  without a port, the host the service was asked for, is put back under
+  the session's path; one already under it, a relative one, and one at
+  another host are left as they are. Every cookie the service sets is held
+  to the session's path with its slash, without a `Domain`. `<user>` is
+  the login name of the user who runs Meridian, the same bytes as the
   `PW_USER` that workflows build the path from (`internal/login`), so a
   name a URL's path would escape, any outside letters, digits, `.`, `_`,
   `-`, `@` and `~`, as SSSD's `user@domain`, and `.` and `..`, can't be
-  served (`session_user_unsupported`). `/` and the path
-  without its slash lead to the path; anything else on the port is
-  nothing (`session_not_here`).
+  served (`session_user_unsupported`). `/` and the path without its slash
+  lead to the path (302); anything else on the port is nothing
+  (`session_not_here`).
 - **The port** listens on both of this machine's loopback addresses,
   127.0.0.1 and `[::1]`, the same port of both, and never on another
   address, which another machine reaches through `ssh -L`: one the system
@@ -5693,17 +5702,17 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
 - **What the service gets** is nothing until a request has passed all of
   that: no connection to it is opened before. Then it gets the request
   without Meridian's code and cookies, with `localhost` as its host, as
-  format 1's platform gives it, and the browser's `Authorization`, which
-  is the service's own; and none of the headers format 1's platform says
-  who asks with, `X-PW-User`, `X-PW-User-Token`, `X-PW-Subject` and
-  `X-PW-Impersonated-By`, which Meridian neither passes on from the
-  browser nor sets, as it signs none. The browser gets its answer without
-  any cookie named as Meridian's, or without a name, nor `Clear-Site-Data`.
+  format 1's platform gives it, `X-Forwarded-Proto: http`, and the
+  browser's `Authorization`, which is the service's own; and none of the
+  headers whose names start with `X-PW-`, which format 1's platform uses
+  to say who asks: Meridian neither passes them on from the browser nor
+  sets them, as it signs none. The service may answer as slowly as it
+  likes, as a long poll does. The browser gets its answer without any
+  cookie named as Meridian's, or without a name, nor `Clear-Site-Data`.
 - **Pointing it elsewhere.** Each place a session points has a transport
-  of its own, as format 1's platform keeps one for each target: once a
-  step points the session elsewhere, every request goes there, and no
-  connection to where it pointed is used again; those of requests going
-  on, as a WebSocket's, run on until they end.
+  of its own: once a step points the session elsewhere, every request goes
+  there, and no connection to where it pointed is used again; those of
+  requests going on, as a WebSocket's, run on until they end.
 - **Bounds.** A session has 16 connections to its service open, or
   opening, at once, at most, a quarter of what the ssh backend opens over
   its connection to a host. A request waits ten seconds at most for one,
@@ -5723,39 +5732,14 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   the cookie is 401, with `WWW-Authenticate: Meridian-Link`, a scheme of
   Meridian's own, which no browser answers itself.
 
-Where format 1's platform serves a session otherwise:
+Where format 1's platform serves a session otherwise, as a workflow, or
+the person who runs it, sees:
 
 - **Where.** It serves it over HTTPS, at the platform's host, behind the
-  platform's login, and its path redirects go through its login (307);
-  Meridian serves it over HTTP, on this machine's loopback addresses, at a
-  host name of the session's own, behind a link's code and a cookie
-  (401), and sends `X-Forwarded-Proto: http`. The path without its slash
-  is a 302 here, where the platform gives 301; `/` is the platform's own
-  page there, and leads to the session here.
-- **Location.** Both put a path the service gives under `/` back under
-  the session's path. Meridian leaves one already under it, a relative
-  one, and one at another host as they are, and puts one at `localhost`
-  without a port, the host the service was asked for, under the session's
-  path; the platform reads `./…`, `.`, `?…`, `#…` and an empty one
-  against the prefix, though not `x` or `../x`, and puts other hosts' at
-  its own.
-- **Cookies.** The platform keeps a cookie's `Domain`, holds it to the
-  session's path without its slash, and drops none; Meridian removes
-  `Domain`, holds it to the path with its slash, and drops those named as
-  its own, or without a name, and `Clear-Site-Data`.
-- **Headers.** The platform removes the browser's `Authorization`, which
-  Meridian passes on, and sets `X-PW-User` and a signed token of who
-  asks, which Meridian doesn't: both remove the browser's.
-- **Paths.** Meridian passes an escaped path on as the browser escaped
-  it, as `%2F`, under the session's; the platform decodes it, and `%2F`
-  reaches the service as `/`.
-- **Answers.** The platform answers a service that doesn't send its
-  headers within 30 seconds with 502; Meridian waits as long as the
-  service takes, as a long poll can. Its own answers are JSON there, and
-  text here.
-- **Where requests may come from, and how many.** Meridian's checks of a
-  request's host name, `Origin` and fetch metadata, and its bound on a
-  session's connections, above, are its own.
+  platform's login; Meridian serves it over HTTP, on this machine's
+  loopback addresses, at a host name of the session's own, behind a
+  link's code and a cookie. Its own answers are the platform's pages
+  there, and pages of text here.
 - **Names.** The platform names a session of a run no step called, whose
   `prompt-for-name` gives none, `<workflow>_<number>_<key>`; Meridian names
   it by its key and 40 random bits, since the run has no number yet as
