@@ -825,6 +825,27 @@
       "只在一个会话上保留 redirect: true，在其他会话上删除它或设为 false。"
     ]
   },
+  "session_user_unsupported": {
+    "title": "会话路径无法容纳的登录名",
+    "why": "Meridian 像格式 1 的平台那样，在本机的 /me/session/<user>/<name>/ 上提供会话，而工作流根据 PW_USER（运行 Meridian 的用户的登录名）构造该路径，以给应用设置基础路径或打印其地址。因此路径按字节原样包含登录名：转义之后就不再是交给应用的路径。只由字母、数字、.、_ 和 - 组成的名称无需转义；其他名称无法提供会话。",
+    "fix": [
+      "以登录名只含字母、数字、.、_ 和 - 的用户运行工作流。"
+    ]
+  },
+  "session_local_port_taken": {
+    "title": "会话的端口已被占用",
+    "why": "Meridian 在本机回环地址 127.0.0.1 的各自端口上提供每个会话：即 update-session 的 localPort 给出的端口，或 Meridian 选择的端口。工作流给出的端口上已有其他程序在监听。由于工作流可能会让用户打开那个端口，Meridian 不会改用别的端口。",
+    "fix": [
+      "停止在该端口上监听的程序，或给 localPort 一个空闲的端口，或去掉 localPort，让 Meridian 自己选择。"
+    ]
+  },
+  "session_local_port_refused": {
+    "title": "本机不允许监听的会话端口",
+    "why": "Meridian 在本机回环地址 127.0.0.1 的各自端口上提供每个会话：即 update-session 的 localPort 给出的端口，或 Meridian 选择的端口。系统拒绝了工作流给出的端口：在大多数系统上，1024 以下的端口是特权端口，而 Meridian 以你的身份运行，没有该特权。",
+    "fix": [
+      "给 localPort 一个 1024 到 65535 之间的端口，或去掉 localPort，让 Meridian 自己选择。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on 不是运行位置",
     "why": "作业的 runs-on: 用于选择作业的运行位置，但其中的表达式得到的值没有指定任何位置。runs-on 接受执行组的名称（如 execution-groups 输入给出的值）、带有 execution-group: 的映射、带有 environment: 及其集群和名称的映射，或计算目标（如 compute-target 输入给出的值）。",
@@ -2372,6 +2393,42 @@
     "why": "工作进程在内存中保存尝试的凭据，并阻止你的其他进程（包括作业的步骤）从内存中读取它，或跟踪它发送的内容。它在 Linux、macOS 和 FreeBSD 上能做到这一点。其他系统（例如 NetBSD 和 OpenBSD）没有给进程任何阻止该用户的其他进程跟踪它的方法，因此工作进程会拒绝在那里运行，而不是以较弱的保护运行作业。",
     "fix": [
       "在其主机运行 Linux、macOS 或 FreeBSD 的成员上运行该作业。"
+    ]
+  },
+  "session_unreachable": {
+    "title": "会话的服务没有响应",
+    "why": "Meridian 通过把每个请求转到工作流为会话指定的地址来提供会话：经 SSH 通过其集群的主机，或在本机上。该地址没有响应：服务尚未启动、已经停止、在另一个地址上监听，或主机不肯连接它，或会话还有太多连接正在建立。",
+    "fix": [
+      "等服务启动后重新加载页面。",
+      "用 meridian status 和 meridian logs 检查运行。"
+    ]
+  },
+  "session_unauthorized": {
+    "title": "没有 Meridian 的链接就请求的会话",
+    "why": "本机上的任何人都能连接它的回环地址，因此 Meridian 只向打开了它为你生成的链接的浏览器提供会话。链接中含有一个只能在十分钟内使用一次的代码，它会给浏览器一个该会话的 Cookie，该 Cookie 在运行结束或执行 meridian session reset 之前有效。此浏览器没有这样的 Cookie：它的链接已被使用或已过期，或者它没有打开任何链接。",
+    "fix": [
+      "用消息给出的运行和会话键运行 meridian session url，并在你使用该会话的浏览器中打开它打印的链接。"
+    ]
+  },
+  "session_cross_origin": {
+    "title": "来自其他页面的会话请求",
+    "why": "对浏览器来说，127.0.0.1 的所有端口都是同一个站点，因此本机上其他程序提供的页面本可以向此会话的应用发送带有你该会话 Cookie 的请求，而 WebSocket 连接也不受页面自身来源的限制。因此，对于 WebSocket 连接，以及 GET、HEAD、OPTIONS 以外的请求，Meridian 通过 Origin 和 Sec-Fetch-Site 请求头检查它是否来自会话自己的页面，并拒绝其他请求。",
+    "fix": [
+      "请从会话自己的页面使用应用。"
+    ]
+  },
+  "session_not_here": {
+    "title": "此路径上没有会话",
+    "why": "Meridian 在 127.0.0.1 的各自端口上、路径 /me/session/<user>/<name>/ 之下提供每个会话，就像格式 1 的平台在该路径下提供会话，而工作流把该路径作为应用的基础路径。端口上的其他内容都不属于该会话。",
+    "fix": [
+      "打开 meridian session url 打印的会话链接。"
+    ]
+  },
+  "session_host_refused": {
+    "title": "以其他主机名请求的会话",
+    "why": "会话的端口在本机的回环地址上监听，而 Meridian 只回应以其名称之一发来的请求，以免主机名被设法解析到 127.0.0.1 的网页访问到会话（DNS 重绑定）。",
+    "fix": [
+      "按 meridian session url 打印的那样，在 127.0.0.1、localhost 或 [::1] 上打开会话，或通过到其中之一的 ssh -L 打开。"
     ]
   },
   "source_server_unknown": {

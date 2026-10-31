@@ -825,6 +825,27 @@
       "Deja redirect: true en una sola sesión, y quítalo, o ponlo a false, en las demás."
     ]
   },
+  "session_user_unsupported": {
+    "title": "Nombre de inicio de sesión que la ruta de una sesión no puede contener",
+    "why": "Meridian sirve una sesión en esta máquina en /me/session/<usuario>/<nombre>/, como hace la plataforma del formato 1, y los flujos de trabajo construyen esa ruta a partir de PW_USER, el nombre de inicio de sesión de quien ejecuta Meridian, para dar a una aplicación su ruta base o mostrar su dirección. Así que la ruta contiene el nombre tal cual, byte a byte: escapado, no sería la ruta que se dio a la aplicación. Un nombre de letras, dígitos, ., _ y - no necesita escaparse; cualquier otro no se puede servir.",
+    "fix": [
+      "Ejecuta el flujo de trabajo como un usuario cuyo nombre de inicio de sesión solo tenga letras, dígitos, ., _ y -."
+    ]
+  },
+  "session_local_port_taken": {
+    "title": "Puerto de la sesión en uso",
+    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina: el puerto que da el localPort de update-session, o uno que elige Meridian. Otra cosa escucha en el puerto que dio el flujo de trabajo. Meridian no toma otro, ya que el flujo de trabajo puede decirle al usuario que abra ese.",
+    "fix": [
+      "Detén lo que escucha en el puerto, da a localPort un puerto libre, o quita localPort, para que Meridian elija uno."
+    ]
+  },
+  "session_local_port_refused": {
+    "title": "Puerto de la sesión en el que esta máquina no deja escuchar",
+    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina: el puerto que da el localPort de update-session, o uno que elige Meridian. El sistema rechazó el puerto que dio el flujo de trabajo: los puertos por debajo de 1024 son privilegiados en la mayoría de los sistemas, y Meridian se ejecuta como tú, sin ese privilegio.",
+    "fix": [
+      "Da a localPort un puerto de 1024 a 65535, o quítalo, para que Meridian elija uno."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",
@@ -2372,6 +2393,42 @@
     "why": "Un worker guarda en su memoria la credencial del intento, e impide que tus otros procesos, entre ellos los pasos de un trabajo, la lean allí o rastreen lo que envía. Puede hacerlo en Linux, macOS y FreeBSD. Otros sistemas, como NetBSD y OpenBSD, no dan a un proceso ninguna forma de impedir que los otros procesos del usuario lo rastreen, así que el worker se niega a ejecutarse en ellos, en lugar de ejecutar un trabajo con menos protección.",
     "fix": [
       "Ejecuta el trabajo en un miembro cuyos hosts ejecuten Linux, macOS o FreeBSD."
+    ]
+  },
+  "session_unreachable": {
+    "title": "El servicio de la sesión no responde",
+    "why": "Meridian sirve una sesión pasando cada petición a la dirección a la que la apuntó el flujo de trabajo: por SSH, a través del host de su clúster, o en esta máquina. Esa dirección no respondió: el servicio aún no ha empezado, se ha detenido, escucha en otra dirección, o el host no quiso conectar con ella, o todavía se están abriendo demasiadas conexiones de la sesión.",
+    "fix": [
+      "Espera a que empiece el servicio, y vuelve a cargar la página.",
+      "Revisa la ejecución, con meridian status y meridian logs."
+    ]
+  },
+  "session_unauthorized": {
+    "title": "Sesión pedida sin un enlace de Meridian",
+    "why": "Cualquiera en esta máquina puede conectar con su dirección de bucle local, así que Meridian sirve una sesión solo a un navegador que abrió un enlace que hizo para ti. El enlace lleva un código que funciona una vez, en diez minutos, y que da al navegador una cookie de la sesión, que funciona hasta que termina la ejecución, o hasta meridian session reset. Este navegador no tiene esa cookie: su enlace ya se usó, o caducó, o no abrió ninguno.",
+    "fix": [
+      "Ejecuta meridian session url con la ejecución y la clave de la sesión, tal como las da el mensaje, y abre el enlace que muestra, en el navegador con el que usas la sesión."
+    ]
+  },
+  "session_cross_origin": {
+    "title": "Petición a una sesión desde otra página",
+    "why": "Para un navegador, todos los puertos de 127.0.0.1 son un mismo sitio, así que una página que sirve otro programa en esta máquina podría, si no, enviar a la aplicación de esta sesión peticiones que llevan tu cookie para ella, ya que las conexiones WebSocket tampoco se limitan al origen de una página. Así que para una conexión WebSocket, y una petición que no sea GET, HEAD u OPTIONS, Meridian comprueba que viene de las propias páginas de la sesión, por sus cabeceras Origin y Sec-Fetch-Site, y rechaza cualquier otra.",
+    "fix": [
+      "Usa la aplicación desde las propias páginas de la sesión."
+    ]
+  },
+  "session_not_here": {
+    "title": "Ninguna sesión en esta ruta",
+    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, bajo la ruta /me/session/<usuario>/<nombre>/, como la plataforma del formato 1 la sirve bajo esa ruta, que los flujos de trabajo dan a una aplicación como su ruta base. Nada más en el puerto es de la sesión.",
+    "fix": [
+      "Abre el enlace de la sesión, que muestra meridian session url."
+    ]
+  },
+  "session_host_refused": {
+    "title": "Sesión pedida en otro nombre de host",
+    "why": "El puerto de una sesión escucha en la dirección de bucle local de esta máquina, y Meridian solo responde a peticiones dirigidas a ella por uno de sus nombres, para que una página web cuyo nombre de host se hizo resolver a 127.0.0.1 no pueda llegar a la sesión (DNS rebinding).",
+    "fix": [
+      "Abre la sesión en 127.0.0.1, localhost o [::1], como la muestra meridian session url, o a través de ssh -L a una de ellas."
     ]
   },
   "source_server_unknown": {

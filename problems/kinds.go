@@ -249,6 +249,16 @@ var (
 	SessionRedirectTwice = define(Error, "session_redirect_twice", "More than one session to take the user to", "keys")
 )
 
+// Serving a run's sessions on this machine, which a session provider
+// refuses the run, or the step that points a session, with: user is the
+// login name of the user who runs Meridian, as it is; port a port of
+// 127.0.0.1, as text.
+var (
+	SessionUserUnsupported  = define(Error, "session_user_unsupported", "Login name a session's path can't hold", "user")
+	SessionLocalPortTaken   = define(Error, "session_local_port_taken", "Session's port in use", "port")
+	SessionLocalPortRefused = define(Error, "session_local_port_refused", "Session's port this machine won't listen on", "port")
+)
+
 // Creating and starting a run: what the caller gives the compiler, and
 // what Start decides again.
 var (
@@ -819,6 +829,20 @@ var (
 	AttemptLeaseLapsed          = defineCommand("attempt_lease_lapsed", "Attempt's lease about to lapse")
 	WorkerHardenFailed          = defineCommand("worker_harden_failed", "Worker's memory can't be protected", "reason")
 	WorkerSystemUnsupported     = defineCommand("worker_system_unsupported", "System where the worker can't protect its memory", "os")
+)
+
+// What a session's port answers a browser with, in CommandRegistry, for a
+// request it doesn't pass on to the session's service: name is the
+// session's name; run and key the run's ID and the session's key in its
+// sessions:, with which meridian session url makes a link to it; path
+// the path the port serves the session at, as /me/session/<user>/<name>/;
+// and host the host the request asked for, as its Host header gives it.
+var (
+	SessionUnreachable  = defineCommand("session_unreachable", "Session's service not answering", "name")
+	SessionUnauthorized = defineCommand("session_unauthorized", "Session asked for without a link of Meridian's", "run", "key")
+	SessionCrossOrigin  = defineCommand("session_cross_origin", "Request to a session from another page")
+	SessionNotHere      = defineCommand("session_not_here", "No session at this path", "path")
+	SessionHostRefused  = defineCommand("session_host_refused", "Session asked for at another host name", "host")
 )
 
 // The worker API's own problems, in WorkerRegistry, with which a coordinator

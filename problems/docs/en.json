@@ -709,6 +709,24 @@
       "Keep redirect: true on one session, and remove it, or set it to false, on the others."
     ]
   },
+  "session_user_unsupported": {
+    "why": "Meridian serves a session on this machine at /me/session/<user>/<name>/, as format 1's platform does, and workflows build that path from PW_USER, the login name of the user who runs Meridian, to give an app its base path or to print its address. So the path holds the login name as it is, byte for byte: escaped, it wouldn't be the path the app was given. A name of letters, digits, ., _ and - needs no escaping; any other can't be served.",
+    "fix": [
+      "Run the workflow as a user whose login name has only letters, digits, ., _ and -."
+    ]
+  },
+  "session_local_port_taken": {
+    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address: the port update-session's localPort gives, or one Meridian picks. Something else listens on the port the workflow gave. Meridian doesn't take another, since the workflow can tell the user to open that one.",
+    "fix": [
+      "Stop what listens on the port, give localPort a port that is free, or leave localPort out, so that Meridian picks one."
+    ]
+  },
+  "session_local_port_refused": {
+    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address: the port update-session's localPort gives, or one Meridian picks. The system refused the port the workflow gave: ports below 1024 are privileged on most systems, and Meridian runs as you, without the privilege.",
+    "fix": [
+      "Give localPort a port from 1024 to 65535, or leave it out, so that Meridian picks one."
+    ]
+  },
   "runs_on_invalid": {
     "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
     "fix": [
@@ -2042,6 +2060,37 @@
     "why": "A worker holds the attempt's credential in its memory, and keeps your other processes, a job's steps among them, from reading it there or tracing what it sends. It can on Linux, macOS and FreeBSD. Other systems, such as NetBSD and OpenBSD, give a process no way to keep the user's other processes from tracing it, so the worker refuses to run there, rather than run a job with less protection.",
     "fix": [
       "Run the job on a member whose hosts run Linux, macOS or FreeBSD."
+    ]
+  },
+  "session_unreachable": {
+    "why": "Meridian serves a session by passing each request on to the address the workflow pointed it at: over SSH, through its cluster's host, or on this machine. That address didn't answer: the service hasn't started yet, has stopped, listens at another address, or the host wouldn't connect to it, or too many of the session's connections are still opening.",
+    "fix": [
+      "Wait for the service to start, and load the page again.",
+      "Check the run, with meridian status and meridian logs."
+    ]
+  },
+  "session_unauthorized": {
+    "why": "Anyone on this machine can connect to its loopback address, so Meridian serves a session only to a browser that opened a link it made for you. The link holds a code that works once, within ten minutes, and that gives the browser a cookie for the session, which works until the run ends, or meridian session reset. This browser has no such cookie: its link was used already, or expired, or it opened none.",
+    "fix": [
+      "Run meridian session url with the run and the session's key, as the message gives them, and open the link it prints, in the browser you use the session in."
+    ]
+  },
+  "session_cross_origin": {
+    "why": "To a browser, every port of 127.0.0.1 is one site, so a page that another program serves on this machine could otherwise send this session's app requests that carry your cookie for it, as WebSocket connections aren't held to a page's own origin either. So for a WebSocket connection, and a request other than GET, HEAD or OPTIONS, Meridian checks that it comes from the session's own pages, by its Origin and Sec-Fetch-Site headers, and refuses any other.",
+    "fix": [
+      "Use the app from the session's own pages."
+    ]
+  },
+  "session_not_here": {
+    "why": "Meridian serves each session on a port of its own of 127.0.0.1, under the path /me/session/<user>/<name>/, as format 1's platform serves it under that path, which workflows give an app as its base path. Nothing else on the port is the session's.",
+    "fix": [
+      "Open the session's link, which meridian session url prints."
+    ]
+  },
+  "session_host_refused": {
+    "why": "A session's port listens on this machine's loopback address, and Meridian answers only requests addressed to it by one of its names, so that a web page whose host name was made to resolve to 127.0.0.1 can't reach the session (DNS rebinding).",
+    "fix": [
+      "Open the session at 127.0.0.1, localhost or [::1], as meridian session url prints it, or through ssh -L to one of them."
     ]
   },
   "source_server_unknown": {

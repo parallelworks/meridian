@@ -5500,6 +5500,68 @@ their workers store them.
   coordinates running. `meridian status` shows a run
   that has been stopped, and hasn't ended, as `stopping`, with why.
 
+### Serving a session
+
+A run's session is served on this machine, on a port of its own of
+127.0.0.1, at the path format 1's platform serves it at,
+`/me/session/<user>/<name>/` (`internal/sessionproxy`). Nothing provides
+Sessions to `meridian run` yet; this is what will serve them.
+
+- **The path.** Each request's path loses the session's, which
+  `X-Forwarded-Prefix` gives the service, as format 1's platform passes a
+  tunnel's on; a `Location` the service gives under `/` is put back under
+  it, and every cookie it sets is held to it, without a `Domain`. `<user>`
+  is the login name of the user who runs Meridian, the same bytes as the
+  `PW_USER` that workflows build the path from (`internal/login`), so a
+  name a URL's path would escape, any outside letters, digits, `.`, `_`
+  and `-`, can't be served (`session_user_unsupported`). `/` and the path
+  without its slash lead to the path; anything else on the port is
+  nothing (`session_not_here`).
+- **The port** listens on 127.0.0.1 alone, never on another address,
+  which another machine reaches through `ssh -L`: `update-session`'s
+  `localPort`, or one the system picks. One in use, or one the system
+  won't give, is a problem of its own (`session_local_port_taken`,
+  `session_local_port_refused`); Meridian doesn't take another, which the
+  workflow can't tell the user.
+- **Who may use it.** Anyone on this machine can connect to its loopback
+  address, so a session is served only to a browser that holds its
+  cookie. A link Meridian prints holds a one-time code, 128 random bits,
+  of which only the keyed hash is kept, which works once, within ten
+  minutes, and gives the browser the cookie, sending it on to the same
+  URL without the code, which no cache keeps. The cookie holds the
+  session's secret, an HMAC-SHA256, under a key derived from the state
+  directory's key file, of the store's ID, the session's and a salt, each
+  field led by its length; it is HttpOnly, SameSite=Strict, and held to
+  the session's path, never `/`, where every port of 127.0.0.1 would get
+  it. Replacing the salt signs every browser out.
+- **Where a request may come from.** To a browser, every port of
+  127.0.0.1 is one site, so SameSite doesn't keep another port's page
+  out, and a WebSocket isn't held to its page's origin either. So a
+  WebSocket, and any request but GET, HEAD or OPTIONS, is served only
+  with an `Origin`, if it has one, that is the one it was sent to, and a
+  `Sec-Fetch-Site`, if it has one, of `same-origin` or `none`
+  (`session_cross_origin`). A request addressed to another host than
+  127.0.0.1, `localhost` or `[::1]`, at any port, as a page whose name
+  was made to resolve to 127.0.0.1 sends, is refused
+  (`session_host_refused`).
+- **What the service gets** is nothing until a request has passed all of
+  that: no connection to it is opened before. Then it gets the request
+  without Meridian's code and cookies, with `localhost` as its host, as
+  format 1's platform gives it, and the browser's `Authorization`, which
+  is the service's own; and the browser gets its answer without any
+  cookie named as Meridian's, nor `Clear-Site-Data`, which would sign it
+  out of every session.
+- **Bounds.** A session has 16 connections to its service open, or
+  opening, at once, at most, a quarter of what the ssh backend opens over
+  its connection to a host. A request waits ten seconds at most for one,
+  and then is told the service doesn't answer (`session_unreachable`),
+  while a dial it gave up on goes on holding its place until it ends: so
+  a browser that retries a service that doesn't answer can't take what
+  the host's other sessions need. A browser has ten seconds to send a
+  request's headers, and a connection waits two minutes for its next.
+- **Pages.** What the port answers itself is a page of text, in the
+  language the browser asks for, which no cache keeps.
+
 ## Editors and web UIs
 
 Editors and web UIs validate workflows, expand matrices and evaluate
