@@ -62,7 +62,8 @@ type elsewhere = askedRun[*workerapi.StepRun]
 func (a *attempt) runElsewhere(ctx context.Context, key logKey, req *workerapi.StepRunRequest, s stops, note *problems.Diagnostic) elsewhere {
 	path := a.job.Steps[key.step].Path
 	return askRun(ctx, a, key, s, note, runAsk[*workerapi.StepRun]{
-		what: "step run",
+		what:   "step run",
+		masked: req.Masked,
 		ask: func(ctx context.Context) (*workerapi.StepRun, error) {
 			return a.client.stepRun(ctx, req)
 		},

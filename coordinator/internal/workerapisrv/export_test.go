@@ -74,3 +74,7 @@ func SetRecheck(s *Server, d time.Duration) { s.polls.every = d }
 // SetChildRecheck sets how often a poll for a child's end reads the store
 // again.
 func SetChildRecheck(s *Server, d time.Duration) { s.childRecheck = d }
+
+// SetAfterEndRead sets what s calls as a poll for a child's end has read
+// the child.
+func SetAfterEndRead(s *Server, f func()) { s.afterEndRead = f }

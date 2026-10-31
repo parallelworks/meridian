@@ -188,6 +188,8 @@
   "step_run_request_failed": "The step runs on another host, and the worker's request to the coordinator for its run there failed: {reason}.",
   "step_run_outputs_unwritten": "The worker couldn't add what the step wrote to $OUTPUTS on the other host to the file it would have written here: {reason}.",
   "step_run_output_line_too_long": "The step wrote the output \"{name}\" on the other host, whose line in $OUTPUTS here, escaped, would be longer than {limit} bytes, so none of its outputs were added.",
+  "masks_too_many": "The step's run of its own, of the workflow it calls or on another host, would mask {count} strings, more than the limit of {limit}.",
+  "masks_too_large": "The strings the step's run of its own, of the workflow it calls or on another host, would mask come to {size} bytes, more than the limit of {limit}.",
   "step_ssh_not_supported": "The step's ssh: names another host to run it on, which this worker can't do for a step that calls a workflow, nor in an attempt of a version of the worker API before 3.",
   "step_ssh_reads_worker": "The step's ssh: names its host from {ref}, which only its job's worker knows, so it can't run on another host than its job's.",
   "step_off_job_host": "The step's ssh: is null or gives no remoteHost, so format 1 runs it where its job would run without its ssh:, which this worker, on the host the job's ssh: names, can't do for a step that calls a workflow, nor in an attempt of a version of the worker API before 3.",

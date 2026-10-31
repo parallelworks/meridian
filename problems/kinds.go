@@ -416,6 +416,14 @@ var (
 	StepRunRequestFailed     = define(Error, "step_run_request_failed", "Request to the coordinator for a step's run on another host that failed", "reason")
 	StepRunOutputsUnwritten  = define(Error, "step_run_outputs_unwritten", "Outputs of a step on another host the worker couldn't add", "reason")
 	StepRunOutputLineTooLong = define(Error, "step_run_output_line_too_long", "Output of a step on another host too long to add", "name", "limit")
+	// MasksTooMany is a step's try, or its cleanup's, that calls a
+	// workflow or runs on another host, whose run of its own would mask
+	// count strings, more than limit, the most the coordinator takes
+	// (workerapi.MaxMasks); and MasksTooLarge one whose strings to mask
+	// come to size bytes, more than limit (workerapi.MaxMaskedBytes). The
+	// worker fails the step rather than ask for the run with fewer.
+	MasksTooMany  = define(Error, "masks_too_many", "Too many strings to mask for a step's run of its own", "count", "limit")
+	MasksTooLarge = define(Error, "masks_too_large", "Strings to mask too large for a step's run of its own", "size", "limit")
 	// CheckoutPathNotFound is an entry of a parallelworks/checkout step's
 	// with: sparse_checkout, path, that names nothing in the commit the
 	// step was pinned to; CheckoutSubmodules a checkout of all of the
