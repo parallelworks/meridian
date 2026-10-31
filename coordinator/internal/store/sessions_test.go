@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -110,6 +111,14 @@ func TestSessions(t *testing.T) {
 		}
 		if got := ids(tx.LiveSessions()); len(got) != 4 {
 			t.Errorf("the live sessions are %v", got)
+		}
+		for path, want := range map[string][]string{"": {"a", "c"}, `[["build",0]]`: {"e"}, `[["build",1]]`: {"g"}, `[["test",0]]`: nil} {
+			if got := ids(tx.CallSessions(root, path)); !slices.Equal(got, want) {
+				t.Errorf("the sessions of the call %q are %v, want %v", path, got, want)
+			}
+		}
+		if _, err := tx.CallSessions("999", ""); !errors.Is(err, ErrNotFound) {
+			t.Errorf("CallSessions of a run the store hasn't = %v", err)
 		}
 		return nil
 	})
@@ -261,6 +270,9 @@ func TestSessionsEndWithRoot(t *testing.T) {
 		if live, err := tx.LiveSessions(); err != nil || len(live) != 0 {
 			t.Errorf("once the root ended, the live sessions are %d, %v", len(live), err)
 		}
+		if live, err := tx.CallSessions(root, ""); err != nil || len(live) != 0 {
+			t.Errorf("once the root ended, its call's sessions are %d, %v", len(live), err)
+		}
 		for _, id := range []string{"a", "b"} {
 			got, err := tx.Session(id)
 			if err != nil {
@@ -296,13 +308,13 @@ func TestSessionsEndWithRoot(t *testing.T) {
 	checkIntegrity(t, s)
 }
 
-// TestServeSession checks a session's lease, which its process holds as
+// TestHoldSession checks a session's hold, which its process holds as
 // long as it serves it: one at a time, in this process or another; taken,
 // it resets the session, its codes with it, and forgets its port, before
 // it returns; let go, its file is gone, and another may take it; and a
 // session that has ended, or that the store hasn't, is never taken, nor
 // one of a store opened only to read.
-func TestServeSession(t *testing.T) {
+func TestHoldSession(t *testing.T) {
 	t.Parallel()
 	s := open(t)
 	root := createRun(t, s)
@@ -318,7 +330,7 @@ func TestServeSession(t *testing.T) {
 		t.Errorf("a session no process took is held: %t, %v", held, err)
 	}
 	inTx(t, s, func(tx *Tx) error { return tx.PointSession("a", []byte(`{}`), nil, 0, 7000) })
-	release, err := s.ServeSession(t.Context(), "a", []byte("taken"))
+	release, err := s.HoldSession(t.Context(), "a", []byte("taken"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +339,7 @@ func TestServeSession(t *testing.T) {
 	}
 	file := s.file + ".session-a.lock"
 	if _, err := os.Lstat(file); err != nil {
-		t.Errorf("the lease's file: %v", err)
+		t.Errorf("the hold's file: %v", err)
 	}
 	inTx(t, s, func(tx *Tx) error {
 		got, err := tx.Session("a")
@@ -339,8 +351,8 @@ func TestServeSession(t *testing.T) {
 		}
 		return err
 	})
-	if _, err := s.ServeSession(t.Context(), "a", []byte("again")); !errors.Is(err, ErrSessionServed) {
-		t.Errorf("ServeSession of a session served = %v, want ErrSessionServed", err)
+	if _, err := s.HoldSession(t.Context(), "a", []byte("again")); !errors.Is(err, ErrSessionHeld) {
+		t.Errorf("HoldSession of a session served = %v, want ErrSessionHeld", err)
 	}
 	inTx(t, s, func(tx *Tx) error {
 		got, err := tx.Session("a")
@@ -349,9 +361,9 @@ func TestServeSession(t *testing.T) {
 		}
 		return err
 	})
-	other, err := s.ServeSession(t.Context(), "b", []byte("b"))
+	other, err := s.HoldSession(t.Context(), "b", []byte("b"))
 	if err != nil {
-		t.Fatalf("ServeSession of another session = %v", err)
+		t.Fatalf("HoldSession of another session = %v", err)
 	}
 	other()
 	release()
@@ -362,24 +374,24 @@ func TestServeSession(t *testing.T) {
 		t.Errorf("SessionHeld of no session's ID = %v", err)
 	}
 	if _, err := os.Lstat(file); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the lease's file is there once it is let go: %v", err)
+		t.Errorf("the hold's file is there once it is let go: %v", err)
 	}
-	again, err := s.ServeSession(t.Context(), "a", []byte("again"))
+	again, err := s.HoldSession(t.Context(), "a", []byte("again"))
 	if err != nil {
-		t.Fatalf("ServeSession once let go = %v", err)
+		t.Fatalf("HoldSession once let go = %v", err)
 	}
 	again()
 
 	inTx(t, s, func(tx *Tx) error { return tx.EndRun(root, plan.OutcomeSuccess, "") })
-	if _, err := s.ServeSession(t.Context(), "a", []byte("ended")); !errors.Is(err, ErrState) {
-		t.Errorf("ServeSession of an ended session = %v, want ErrState", err)
+	if _, err := s.HoldSession(t.Context(), "a", []byte("ended")); !errors.Is(err, ErrState) {
+		t.Errorf("HoldSession of an ended session = %v, want ErrState", err)
 	}
 	if _, err := os.Lstat(file); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the lease of an ended session is held: %v", err)
+		t.Errorf("the hold of an ended session is held: %v", err)
 	}
 	for _, bad := range []string{"nothing", "../a", ""} {
-		if _, err := s.ServeSession(t.Context(), bad, []byte("x")); !errors.Is(err, ErrNotFound) {
-			t.Errorf("ServeSession(%q) = %v, want ErrNotFound", bad, err)
+		if _, err := s.HoldSession(t.Context(), bad, []byte("x")); !errors.Is(err, ErrNotFound) {
+			t.Errorf("HoldSession(%q) = %v, want ErrNotFound", bad, err)
 		}
 	}
 	ro, err := Open(t.Context(), s.file, &Options{ReadOnly: true})
@@ -393,13 +405,13 @@ func TestServeSession(t *testing.T) {
 		_, err := tx.MakeSession(testSession("c", live, live, "c", "c-1"))
 		return err
 	})
-	held, err := s.ServeSession(t.Context(), "c", []byte("c"))
+	held, err := s.HoldSession(t.Context(), "c", []byte("c"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held()
-	if _, err := ro.ServeSession(t.Context(), "c", []byte("x")); !errors.Is(err, ErrReadOnly) {
-		t.Errorf("ServeSession read only = %v, want ErrReadOnly", err)
+	if _, err := ro.HoldSession(t.Context(), "c", []byte("x")); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("HoldSession read only = %v, want ErrReadOnly", err)
 	}
 }
 

@@ -86,7 +86,7 @@ func (s *Store) EndpointHeld(name string) (bool, error) {
 	if !endpointName.MatchString(name) {
 		return false, fmt.Errorf("store: %q isn't an endpoint's name", name)
 	}
-	return flock.Held(s.file + "." + name + ".lock")
+	return flock.Held(s.lockFile("", name))
 }
 
 // A Hold is an endpoint that this process holds, until it releases it,
@@ -133,7 +133,7 @@ func (s *Store) holdEndpoint(ctx context.Context, name, holder string, idle bool
 	if holder == "" {
 		return nil, errors.New("store: an endpoint without a holder")
 	}
-	unlock, err := flock.Lock(ctx, s.file+"."+name+".lock")
+	unlock, err := flock.Lock(ctx, s.lockFile("", name))
 	if err != nil {
 		return nil, fmt.Errorf("store: lock the endpoint %s: %w", name, err)
 	}

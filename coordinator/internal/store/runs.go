@@ -98,6 +98,15 @@ type Run struct {
 	WaitedAt   time.Time
 }
 
+// RootID returns the ID of the root of the run's tree: the run's own, for
+// a run no step called.
+func (r *Run) RootID() string {
+	if r.Parent != nil {
+		return r.Parent.Root
+	}
+	return r.ID
+}
+
 // A NewRun is a run to store.
 type NewRun struct {
 	// ID is the run's ID, which NewRunID gave.

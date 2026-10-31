@@ -45,12 +45,11 @@ type SessionHost interface {
 	// says: it returns where the session points, encoded, which the store
 	// keeps, and which the host is given again, and the port it serves it
 	// at. Where serve isn't set, as for a session another process serves,
-	// it serves nothing, and returns the port the step gave, or the one
-	// s is served at already. A refusal, as of a port in use, is a
-	// problem of a workflow's kind, which fails the step; any other error,
-	// one it couldn't answer, which the step asks again. It mustn't log or
-	// quote what u.With gives where u.Read says it read a variable, a
-	// password or a secret.
+	// it serves nothing, and returns the port s is served at already. A
+	// refusal, as of a port in use, is a problem of a workflow's kind,
+	// which fails the step; any other error, one it couldn't answer, which
+	// the step asks again. It mustn't log or quote what u.With gives where
+	// u.Read says it read a variable, a password or a secret.
 	Point(ctx context.Context, s Session, u compile.SessionUpdate, serve bool) (SessionPoint, error)
 	// Serve has the host serve live, the store's sessions that haven't
 	// ended that this process serves, as the store has them, and no
@@ -300,15 +299,7 @@ func (p sessionProvider) Make(ctx context.Context, runID string, sessions map[st
 		if err != nil {
 			return err
 		}
-		root := run.ID
-		if run.Parent != nil {
-			root = run.Parent.Root
-		}
-		path, err := callPathOf(tx, run)
-		if err != nil {
-			return err
-		}
-		callPath, err := encodeCallPath(path)
+		root, callPath, err := callOf(tx, run)
 		if err != nil {
 			return err
 		}
@@ -363,7 +354,7 @@ func (p sessionProvider) Make(ctx context.Context, runID string, sessions map[st
 // none of, that hasn't ended, is session_unknown, and a with: that names
 // none session_name_empty. The host reads where it points, and serves it
 // there (SessionHost.Point), where this process serves the session, as it
-// does once it has taken it (takeSession); the store keeps it, sealed from
+// does once it has taken it (holdSession); the store keeps it, sealed from
 // then on where with:, or what the session was made of, read a variable,
 // a password or a secret.
 func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) error {
@@ -392,7 +383,7 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 	if err != nil {
 		return err
 	}
-	s, serve, err := c.takeSession(ctx, s)
+	s, serve, err := c.holdSession(ctx, s)
 	if err != nil {
 		return err
 	}
@@ -441,7 +432,7 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 // serve none, and lets them go.
 //
 // It takes each session that points somewhere, and that no process serves,
-// to serve it, which resets it (takeSession): those that another process
+// to serve it, which resets it (holdSession): those that another process
 // serves, which they hold, it leaves to them, salt and codes and all.
 func (c *Coordinator) ServeSessions(ctx context.Context) error {
 	if err := c.writable(); err != nil {
@@ -452,11 +443,11 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 		return errors.New("coordinator: no session host to serve sessions")
 	}
 	c.sessionsMu.Lock()
-	if c.sessionLeases != nil {
+	if c.sessionHolds != nil {
 		c.sessionsMu.Unlock()
 		return errors.New("coordinator: ServeSessions is already running")
 	}
-	c.sessionLeases = map[string]func(){}
+	c.sessionHolds, c.sessionsOpened = map[string]func(){}, map[string]openedSession{}
 	c.sessionsMu.Unlock()
 	defer func() {
 		c.sessionsMu.Lock()
@@ -464,10 +455,10 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 		// The host stops serving them before they are let go, so that
 		// no other process serves one while this one still does.
 		host.Serve(context.WithoutCancel(ctx), nil)
-		for _, release := range c.sessionLeases {
+		for _, release := range c.sessionHolds {
 			release()
 		}
-		c.sessionLeases, c.sessionsSeen = nil, nil
+		c.sessionHolds, c.sessionsSeen, c.sessionsOpened = nil, nil, nil
 	}()
 	ticker := time.NewTicker(c.sessionsPoll)
 	defer ticker.Stop()
@@ -490,7 +481,7 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 
 // serveSessions has the host serve the store's sessions that haven't ended
 // that this process serves: those it took already, and those that point
-// somewhere that no process serves, which it takes (takeSession). It lets
+// somewhere that no process serves, which it takes (holdSession). It lets
 // go of those that have ended, once the host serves them no more.
 func (c *Coordinator) serveSessions(ctx context.Context) error {
 	c.sessionsMu.Lock()
@@ -499,16 +490,16 @@ func (c *Coordinator) serveSessions(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	mine := make([]Session, 0, len(c.sessionLeases))
+	mine := make([]Session, 0, len(c.sessionHolds))
 	ids := make(map[string]bool, len(live))
 	for _, s := range live {
 		ids[s.ID] = true
-		if _, ok := c.sessionLeases[s.ID]; !ok && s.Point == nil {
+		if _, ok := c.sessionHolds[s.ID]; !ok && s.Point == nil {
 			// One that points nowhere is served by none, and taken by
 			// the process whose step points it first.
 			continue
 		}
-		s, ok, err := c.takeSession(ctx, s)
+		s, ok, err := c.holdSession(ctx, s)
 		switch {
 		case errors.Is(err, store.ErrState) || errors.Is(err, store.ErrNotFound):
 			// It ended since it was read.
@@ -519,49 +510,49 @@ func (c *Coordinator) serveSessions(ctx context.Context) error {
 		}
 	}
 	c.opts.SessionHost.Serve(ctx, mine)
-	for id, release := range c.sessionLeases {
+	for id, release := range c.sessionHolds {
 		if !ids[id] {
 			release()
-			delete(c.sessionLeases, id)
+			delete(c.sessionHolds, id)
 		}
 	}
-	// The lease files of those that have ended since, which a process
+	// The hold files of those that have ended since, which a process
 	// that ended while it held them left, go too.
 	for id := range c.sessionsSeen {
 		if seen[id] {
 			continue
 		}
-		if err := c.store.ForgetSessionLease(id); err != nil {
-			c.log.Warn("coordinator: couldn't remove an ended session's lease", "session", id, "err", err)
+		if err := c.store.ForgetSessionHold(id); err != nil {
+			c.log.Warn("coordinator: couldn't remove an ended session's hold", "session", id, "err", err)
 		}
 	}
 	c.sessionsSeen = seen
 	return nil
 }
 
-// takeSession takes the session s for this process to serve, unless it
-// serves it already (store.Store.ServeSession), which resets it, and
+// holdSession takes the session s for this process to serve, unless it
+// serves it already (store.Store.HoldSession), which resets it, and
 // returns s as the host is to serve it, with its new salt, and whether
 // this process serves it: not while ServeSessions doesn't run, nor while
 // another process serves it, which holds it. The caller holds sessionsMu,
 // from before it read s until the host has been asked to serve it, so that
 // no reset of this process's comes between.
-func (c *Coordinator) takeSession(ctx context.Context, s Session) (Session, bool, error) {
-	if c.sessionLeases == nil {
+func (c *Coordinator) holdSession(ctx context.Context, s Session) (Session, bool, error) {
+	if c.sessionHolds == nil {
 		return s, false, nil
 	}
-	if _, ok := c.sessionLeases[s.ID]; ok {
+	if _, ok := c.sessionHolds[s.ID]; ok {
 		return s, true, nil
 	}
 	salt := newSalt()
-	release, err := c.store.ServeSession(ctx, s.ID, salt)
+	release, err := c.store.HoldSession(ctx, s.ID, salt)
 	switch {
-	case errors.Is(err, store.ErrSessionServed):
+	case errors.Is(err, store.ErrSessionHeld):
 		return s, false, nil
 	case err != nil:
 		return s, false, err
 	}
-	c.sessionLeases[s.ID] = release
+	c.sessionHolds[s.ID] = release
 	s.Salt = salt
 	return s, true, nil
 }
@@ -573,28 +564,6 @@ func (c *Coordinator) wakeSessions() {
 	case c.sessionsWake <- struct{}{}:
 	default:
 	}
-}
-
-// RunSessions returns the sessions of the tree whose root is the run root,
-// those that have ended too, in the order they were made: what a private
-// one is, and where it points, only where the coordinator holds the keys
-// to open it, which one opened only to read the store doesn't.
-func (c *Coordinator) RunSessions(ctx context.Context, root string) ([]Session, error) {
-	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) { return tx.Sessions(root) })
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Session, len(read.stored))
-	for i, s := range read.stored {
-		if c.sealer == nil && s.Sealed != nil {
-			out[i] = sessionOf(s)
-			continue
-		}
-		if out[i], err = read.open(ctx, i); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
 }
 
 // CallSessions returns the sessions, that haven't ended, of the run run's
@@ -613,35 +582,28 @@ func (c *Coordinator) CallSessions(ctx context.Context, run string) ([]Session, 
 		if err != nil {
 			return nil, err
 		}
-		root := r.ID
-		if r.Parent != nil {
-			root = r.Parent.Root
-		}
-		path, err := callPathOf(tx, r)
+		root, callPath, err := callOf(tx, r)
 		if err != nil {
 			return nil, err
 		}
-		callPath, err := encodeCallPath(path)
-		if err != nil {
-			return nil, err
-		}
-		all, err := tx.Sessions(root)
-		return slices.DeleteFunc(all, func(s store.Session) bool { return s.CallPath != callPath || !s.EndedAt.IsZero() }), err
+		return tx.CallSessions(root, callPath)
 	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Session, len(read.stored))
-	for i, s := range read.stored {
-		if c.sealer == nil && s.Sealed != nil {
-			out[i] = sessionOf(s)
-			continue
-		}
-		if out[i], err = read.open(ctx, i); err != nil {
-			return nil, err
-		}
+	return read.openAll(ctx)
+}
+
+// callOf returns where the run r is called in its tree, as its sessions
+// are kept by it (store.Session.CallPath): its root's ID, and the calls
+// from the root down to it, encoded.
+func callOf(tx *store.Tx, r *store.Run) (root, callPath string, err error) {
+	path, err := callPathOf(tx, r)
+	if err != nil {
+		return "", "", err
 	}
-	return out, nil
+	callPath, err = encodeCallPath(path)
+	return r.RootID(), callPath, err
 }
 
 // AddSessionCode keeps a one-time code of the session id, by its keyed
@@ -677,8 +639,8 @@ func (c *Coordinator) RedeemSessionCode(ctx context.Context, id string, mac []by
 // process serves, as it serves it anew, or at another port than before, or
 // can't (store.Tx.SessionServed): the port it serves it at, and, where p is
 // nil, no problem; or, where p is set, why it can't, which leaves the port
-// as it is. What shows the session, as meridian status and meridian
-// session url do, in any process, shows it so.
+// as it is. What shows the session, as meridian session url does, in any
+// process, shows it so.
 func (c *Coordinator) SessionServed(ctx context.Context, id string, port int, p *problem.Problem) error {
 	if err := c.writable(); err != nil {
 		return err
@@ -687,7 +649,7 @@ func (c *Coordinator) SessionServed(ctx context.Context, id string, port int, p 
 }
 
 // SessionServing reports whether a process serves the session id now: one
-// that holds its lease (store.Store.ServeSession), this one or another.
+// that holds it (store.Store.HoldSession), this one or another.
 func (c *Coordinator) SessionServing(_ context.Context, id string) (bool, error) {
 	return c.store.SessionHeld(id)
 }
@@ -714,6 +676,10 @@ func (c *Coordinator) ResetSession(ctx context.Context, id string) error {
 // liveSessions returns the store's sessions that haven't ended, opened,
 // but those it can't open, which it leaves out, and logs, so that one
 // doesn't keep the others from being served; and the IDs of all of them.
+// A sealed one whose generation is the one ServeSessions opened last is
+// what it opened to then (sessionsOpened): sealed data is never sealed
+// again as the same generation, so it is unchanged, and a look every
+// sessionsPoll opens only what changed. The caller holds sessionsMu.
 func (c *Coordinator) liveSessions(ctx context.Context) ([]Session, map[string]bool, error) {
 	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) { return tx.LiveSessions() })
 	if err != nil {
@@ -723,14 +689,36 @@ func (c *Coordinator) liveSessions(ctx context.Context) ([]Session, map[string]b
 	ids := make(map[string]bool, len(read.stored))
 	for i, s := range read.stored {
 		ids[s.ID] = true
+		if o, ok := c.sessionsOpened[s.ID]; ok && s.Sealed != nil && o.generation == s.Generation {
+			opened := sessionOf(s)
+			opened.Def, opened.Point = o.def, o.point
+			out = append(out, opened)
+			continue
+		}
 		opened, err := read.open(ctx, i)
 		if err != nil {
 			c.log.Warn("coordinator: couldn't open a session to serve it", "session", s.ID, "err", err)
 			continue
 		}
+		if s.Sealed != nil && c.sessionsOpened != nil {
+			c.sessionsOpened[s.ID] = openedSession{generation: s.Generation, def: opened.Def, point: opened.Point}
+		}
 		out = append(out, opened)
 	}
+	for id := range c.sessionsOpened {
+		if !ids[id] {
+			delete(c.sessionsOpened, id)
+		}
+	}
 	return out, ids, nil
+}
+
+// An openedSession is what a sealed session's data opened to, as of the
+// generation it was sealed as, which liveSessions keeps between looks.
+type openedSession struct {
+	generation uint64
+	def        map[string]any
+	point      []byte
 }
 
 // sessionsRead are sessions as the store holds them, read with the data
@@ -770,6 +758,24 @@ func (c *Coordinator) readSessions(ctx context.Context, read func(*store.Tx) ([]
 		return nil
 	})
 	return r, err
+}
+
+// openAll returns the sessions read as Sessions, in order: what a private
+// one is, and where it points, only where the coordinator holds the keys
+// to open it, which one opened only to read the store doesn't.
+func (r *sessionsRead) openAll(ctx context.Context) ([]Session, error) {
+	out := make([]Session, len(r.stored))
+	for i, s := range r.stored {
+		if r.c.sealer == nil && s.Sealed != nil {
+			out[i] = sessionOf(s)
+			continue
+		}
+		var err error
+		if out[i], err = r.open(ctx, i); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // open returns the i'th session read as a Session: its data in the clear,
