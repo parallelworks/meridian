@@ -1606,8 +1606,17 @@ The coordinator encrypts and stores it.
   transaction that ends the run commits, the store checkpoints the
   write-ahead log into the database and truncates it, so the log keeps no
   copy either. If a reader or a writer in another process holds the log,
-  that checkpoint can't truncate it, and the next one does: when the next
-  run ends, when the store is next opened, or in hopper's maintenance. A
+  that checkpoint can't truncate it: the store tries again until one
+  does, and, where the store closes first, the next Open does. The
+  transaction that deletes the record counts it in the store, and a
+  truncation that finishes counts the deletions it read before it began
+  as covered; both counts only rise. A process warns that the log may
+  still hold a secret record a process deleted, once it has tried for a
+  while, or closes first, only while a deletion is counted that no
+  truncation covered: its own, a running run's, or one a process that
+  ended before it could truncate left. Each Open truncates the log, which
+  a run going on in another process holds up as often as not, so a short
+  command, as `meridian session url`, says nothing while none is. A
   backup of the database taken before the run ended holds the record,
   sealed, as it was.
 - **Stored, not held in memory.** Coordinator replicas keep no state between
