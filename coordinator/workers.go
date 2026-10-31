@@ -123,7 +123,7 @@ func (r claimReadier) ReadyAttempt(ctx context.Context, run *store.Run, a *store
 	tree := r.tree(run, root, dirs.root, p, rec)
 	return &workerapisrv.Ready{
 		Job: res.Job, Run: reads.Reads(in.Run), Needs: reads.ReadsNeeds(in.Needs), Tree: tree, StepRun: stepRun,
-		RunDir: dirs.run, RunDirOnMember: dirs.own,
+		RunDir: dirs.run, RunDirOnMember: dirs.own, Env: c.opts.Env,
 	}, nil
 }
 

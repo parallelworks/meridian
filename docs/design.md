@@ -4255,7 +4255,11 @@ own runs.
   one is a secret to the jobs that need the job. They go over the environment the workflow gives the step, as in
   format 1, and the worker's own over them. Without a platform, `PW_JOB_ID`
   is the run's ID and `PW_PARENT_JOB_DIR` its directory; a child run's are
-  its root's ([Workflows a step calls](#workflows-a-step-calls)).
+  its root's ([Workflows a step calls](#workflows-a-step-calls)). The
+  `meridian` command gives `PW_USER`, format 1's name of the person who
+  runs the workflow, as the login name of the user who runs it
+  (`coordinator.Options.Env`), which known workflows build a session's
+  path from, `/me/session/${PW_USER}/…`.
 - **The shell** is bash, or sh, as `shell:` says: format 1 runs no other.
 - **The env context on the worker.** As in format 1, `env` reads the
   workflow's `env:`, the job's over it, the step's over that, and the
