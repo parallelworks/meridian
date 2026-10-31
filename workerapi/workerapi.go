@@ -346,14 +346,15 @@ const MaxChildRequest = 4 << 20
 // MaxActionRequest.
 const MaxStepRunRequest = 4 << 20
 
-// MaxStepRunMasked is the most bytes a StepRunRequest's Masked hold in
-// all, which the step run's secret record keeps.
-const MaxStepRunMasked = 1 << 20
+// MaxMaskedBytes is the most bytes a ChildRequest's or a
+// StepRunRequest's Masked hold in all, which the child run's secret record
+// keeps.
+const MaxMaskedBytes = 1 << 20
 
-// MaxStepRunMasks is the most strings a StepRunRequest's Masked hold:
-// each is masked in every line the step run's worker logs, and in each of
-// its step's outputs, which one masked makes a secret.
-const MaxStepRunMasks = 10_000
+// MaxMasks is the most strings a ChildRequest's or a StepRunRequest's
+// Masked hold: each is masked in every line the child run's workers log,
+// and in each of its steps' outputs, which one masked makes a secret.
+const MaxMasks = 10_000
 
 // MaxOutputs is the most bytes of a step's $OUTPUTS file that a worker
 // reads (docs/design.md, Outputs), as the file holds them; and the most of
@@ -983,7 +984,8 @@ type ChildRequest struct {
 	EnvSecrets  []string `json:"envSecrets,omitzero"`
 	// Masked are the strings the worker masks for the step: its run's
 	// secrets', and what its job and step made from one, which the child's
-	// jobs mask too (Tree.Masked).
+	// jobs mask too (Tree.Masked): MaxMasks of them, of MaxMaskedBytes
+	// bytes, at most, or the request is 400.
 	Masked []string `json:"masked,omitzero"`
 	// WorkingDirectory is the step's own working-directory:, as Step gave
 	// it (plan.ReadyStep.WorkingDirectory): a path relative to its run's
@@ -1024,8 +1026,8 @@ type Child struct {
 // is null or names no host, which the coordinator evaluates itself and
 // refuses the request where they differ; the state of the job at the try
 // (StepRunState); and the strings the worker masks at the try, which the
-// step run's worker masks too, MaxStepRunMasks of them, of
-// MaxStepRunMasked bytes, at most. Every member is of version 3.
+// step run's worker masks too, MaxMasks of them, of MaxMaskedBytes
+// bytes, at most. Every member is of version 3.
 type StepRunRequest struct {
 	Step    int          `json:"step,omitzero"`
 	Try     int          `json:"try,omitzero"`
