@@ -30,6 +30,17 @@ import (
 	"github.com/parallelworks/meridian/workerapi"
 )
 
+// runSessions returns the sessions of the tree whose root is the run root,
+// those that have ended too, in the order they were made, as CallSessions
+// opens them.
+func (c *Coordinator) runSessions(ctx context.Context, root string) ([]Session, error) {
+	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) { return tx.Sessions(root) })
+	if err != nil {
+		return nil, err
+	}
+	return read.openAll(ctx)
+}
+
 // testHost is a session host of a test's. It refuses a session whose
 // refuse: is true, names each session of a run no step called by its key
 // and a number of its own, points a session where with: says, at a port
@@ -148,7 +159,7 @@ func TestSessionsMade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := c.RunSessions(t.Context(), id)
+	got, err := c.runSessions(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +242,7 @@ func TestSessionsUpdate(t *testing.T) {
 	if !slices.Equal(points, want) {
 		t.Errorf("the host pointed\n%s\nwant\n%s", strings.Join(points, "\n"), strings.Join(want, "\n"))
 	}
-	sessions, err := c.RunSessions(t.Context(), root)
+	sessions, err := c.runSessions(t.Context(), root)
 	if err != nil || len(sessions) != 1 {
 		t.Fatal(sessions, err)
 	}
@@ -295,7 +306,7 @@ func TestSessionsPrivate(t *testing.T) {
 	if len(stored) != 4 || stored["plain"].Generation != 1 || stored["other"].Generation != 1 {
 		t.Errorf("the plain and other sessions, sealed once they pointed from a secret and a password, are %+v", stored)
 	}
-	opened, err := c.RunSessions(t.Context(), root)
+	opened, err := c.runSessions(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +329,7 @@ func TestSessionsPrivate(t *testing.T) {
 	}
 
 	ro := open(t, Options{Database: c.opts.Database, ReadOnly: true})
-	shown, err := ro.RunSessions(t.Context(), root)
+	shown, err := ro.runSessions(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,14 +354,14 @@ func TestSessionCodesAndReset(t *testing.T) {
 	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); err != nil {
 		t.Fatal(err)
 	}
-	made, err := c.RunSessions(t.Context(), root)
+	made, err := c.runSessions(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.opts.Sessions.Update(t.Context(), compile.SessionUpdate{Root: root, Name: "desktop-1", With: map[string]any{"remotePort": float64(1)}}); err != nil {
 		t.Fatal(err)
 	}
-	sessions, err := c.RunSessions(t.Context(), root)
+	sessions, err := c.runSessions(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,19 +436,19 @@ jobs:
 		t.Error("the host was never asked to serve the session where the step pointed it")
 	}
 	waitFor(t, func() bool { return h.lastServed() != nil && len(h.lastServed()) == 0 })
-	sessions, err := r.c.RunSessions(t.Context(), id)
+	sessions, err := r.c.runSessions(t.Context(), id)
 	if err != nil || len(sessions) != 1 || sessions[0].EndedAt.IsZero() || sessions[0].Point != nil {
 		t.Fatalf("once the run ended, its sessions are %+v, %v", sessions, err)
 	}
-	// Its lease is let go of, and its file gone.
-	lease := r.c.opts.Database + ".session-" + sessions[0].ID + ".lock"
-	waitFor(t, func() bool { _, err := os.Lstat(lease); return errors.Is(err, fs.ErrNotExist) })
+	// Its hold is let go of, and its file gone.
+	hold := r.c.opts.Database + ".session-" + sessions[0].ID + ".lock"
+	waitFor(t, func() bool { _, err := os.Lstat(hold); return errors.Is(err, fs.ErrNotExist) })
 }
 
-// TestSessionLeaseLeft checks that the file of the lease of a session
+// TestSessionHoldLeft checks that the file of the hold of a session
 // whose process ended while it served it, which no process took over,
 // goes as the session ends.
-func TestSessionLeaseLeft(t *testing.T) {
+func TestSessionHoldLeft(t *testing.T) {
 	parallel(t)
 	h := &testHost{}
 	c := open(t, Options{SessionHost: h})
@@ -446,13 +457,13 @@ func TestSessionLeaseLeft(t *testing.T) {
 	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); err != nil {
 		t.Fatal(err)
 	}
-	made, err := c.RunSessions(t.Context(), root)
+	made, err := c.runSessions(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The file another process's lease left, as it ended.
-	lease := c.opts.Database + ".session-" + made[0].ID + ".lock"
-	if err := os.WriteFile(lease, nil, 0o600); err != nil {
+	// The file another process's hold left, as it ended.
+	hold := c.opts.Database + ".session-" + made[0].ID + ".lock"
+	if err := os.WriteFile(hold, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Two looks at the store, the second after one that saw the session.
@@ -460,13 +471,13 @@ func TestSessionLeaseLeft(t *testing.T) {
 	looks := len(h.served)
 	h.mu.Unlock()
 	waitFor(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return len(h.served) > looks+1 })
-	if _, err := os.Lstat(lease); err != nil {
-		t.Fatalf("the lease's file of a session that hasn't ended is gone: %v", err)
+	if _, err := os.Lstat(hold); err != nil {
+		t.Fatalf("the hold's file of a session that hasn't ended is gone: %v", err)
 	}
 	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error { return tx.EndRun(root, plan.OutcomeSuccess, "") }); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { _, err := os.Lstat(lease); return errors.Is(err, fs.ErrNotExist) })
+	waitFor(t, func() bool { _, err := os.Lstat(hold); return errors.Is(err, fs.ErrNotExist) })
 }
 
 // TestServeSessionsNeedsHost checks that a coordinator without a session
@@ -486,13 +497,13 @@ func TestServeSessionsNeedsHost(t *testing.T) {
 		t.Error("a coordinator opened only to read the store provides Sessions")
 	}
 	// One process serves its sessions once: a second ServeSessions would
-	// take its leases from under the first.
+	// take its holds from under the first.
 	served := open(t, Options{SessionHost: &testHost{}})
 	serveSessions(t, served)
 	waitFor(t, func() bool {
 		served.sessionsMu.Lock()
 		defer served.sessionsMu.Unlock()
-		return served.sessionLeases != nil
+		return served.sessionHolds != nil
 	})
 	// Without the guard, it would serve until its context ends.
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -548,7 +559,7 @@ func TestSessionsTakenOver(t *testing.T) {
 	point(c, "two-1", 2)
 	byName := func() map[string]Session {
 		t.Helper()
-		got, err := a.RunSessions(t.Context(), root)
+		got, err := a.runSessions(t.Context(), root)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -664,7 +675,7 @@ func TestSessionsOfAChild(t *testing.T) {
 	if err := c.opts.Sessions.Make(t.Context(), child, map[string]any{"desktop": map[string]any{"redirect": true}}, map[string]string{"desktop": "child-desktop"}, expr.Read{Private: true}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.RunSessions(t.Context(), root)
+	got, err := c.runSessions(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,7 +741,7 @@ func TestSessionsOfAnEndedRun(t *testing.T) {
 	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); !errors.Is(err, store.ErrState) {
 		t.Errorf("Make for an ended run = %v, want ErrState", err)
 	}
-	if got, err := c.RunSessions(t.Context(), root); err != nil || len(got) != 0 {
+	if got, err := c.runSessions(t.Context(), root); err != nil || len(got) != 0 {
 		t.Errorf("the ended run's sessions are %+v, %v", got, err)
 	}
 }
@@ -748,9 +759,59 @@ func TestSessionsMadeTogether(t *testing.T) {
 	// a is made before b, whose name is taken.
 	wantProblem(t, c.opts.Sessions.Make(t.Context(), root, map[string]any{"a": map[string]any{}, "b": map[string]any{}}, map[string]string{"a": "free", "b": "taken"}, expr.Read{}),
 		problems.SessionNameTaken)
-	if got, err := c.RunSessions(t.Context(), root); err != nil || len(got) != 0 {
+	if got, err := c.runSessions(t.Context(), root); err != nil || len(got) != 0 {
 		t.Errorf("the run's sessions, once one's name was taken, are %+v, %v", got, err)
 	}
+}
+
+// TestSessionsOpenedOnceAGeneration checks that ServeSessions opens a
+// sealed session once for each generation it is sealed as, and serves it
+// as that opened to on the looks after, until a step points it again,
+// sealed as a newer one; and forgets it once it has ended.
+func TestSessionsOpenedOnceAGeneration(t *testing.T) {
+	parallel(t)
+	h := &testHost{}
+	c := open(t, Options{SessionHost: h})
+	p := c.opts.Sessions
+	root, _ := create(t, c, plainWorkflow, nil, nil)
+	if err := p.Make(t.Context(), root, map[string]any{"secret": map[string]any{}}, map[string]string{"secret": "secret-1"}, expr.Read{Private: true}); err != nil {
+		t.Fatal(err)
+	}
+	serveSessions(t, c)
+	point := func(port float64) {
+		t.Helper()
+		if err := p.Update(t.Context(), compile.SessionUpdate{Root: root, Name: "secret-1", With: map[string]any{"remotePort": port}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opened := func() (uint64, int) {
+		c.sessionsMu.Lock()
+		defer c.sessionsMu.Unlock()
+		for _, o := range c.sessionsOpened {
+			return o.generation, len(c.sessionsOpened)
+		}
+		return 0, 0
+	}
+	servedAt := func(port string) bool {
+		live := h.lastServed()
+		return len(live) == 1 && strings.Contains(string(live[0].Point), `"remotePort":`+port)
+	}
+	// Made sealed as generation 1, and pointed as 2.
+	point(1)
+	waitFor(t, func() bool { gen, n := opened(); return gen == 2 && n == 1 && servedAt("1") })
+	served := len(h.served)
+	waitFor(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return len(h.served) > served+2 })
+	if !servedAt("1") {
+		t.Errorf("served from what it opened, the session is %+v", h.lastServed())
+	}
+	point(2)
+	waitFor(t, func() bool { gen, n := opened(); return gen == 3 && n == 1 && servedAt("2") })
+
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error { return tx.EndRun(root, plan.OutcomeSuccess, "") }); err != nil {
+		t.Fatal(err)
+	}
+	c.wakeSessions()
+	waitFor(t, func() bool { _, n := opened(); return n == 0 && h.lastServed() != nil && len(h.lastServed()) == 0 })
 }
 
 // TestSessionsServedPastOneUnopened checks that a session its process
@@ -815,7 +876,7 @@ func TestSessionServed(t *testing.T) {
 	ro := open(t, Options{Database: c.opts.Database, ReadOnly: true})
 	shown := func() Session {
 		t.Helper()
-		got, err := ro.RunSessions(t.Context(), root)
+		got, err := ro.runSessions(t.Context(), root)
 		if err != nil || len(got) != 1 {
 			t.Fatal(got, err)
 		}
@@ -994,7 +1055,7 @@ func TestSessionsOfCalls(t *testing.T) {
 			t.Errorf("the %s child's sessions are named %v, want %v", which, names[which], want[call])
 		}
 	}
-	got, err := c.RunSessions(t.Context(), root)
+	got, err := c.runSessions(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1075,7 +1136,7 @@ func TestSessionsPointedTogether(t *testing.T) {
 	if stored.Sealed == nil || stored.Data != nil || stored.Generation < 1 || stored.Generation > steps {
 		t.Errorf("pointed together, the session is kept %q, sealed %t, of generation %d", stored.Data, stored.Sealed != nil, stored.Generation)
 	}
-	got, err := b.RunSessions(t.Context(), root)
+	got, err := b.runSessions(t.Context(), root)
 	if err != nil || len(got) != 1 || !got[0].Private || !strings.HasPrefix(string(got[0].Point), `{"remotePort":`) {
 		t.Errorf("pointed together, the session opens as %+v, %v", got, err)
 	}
