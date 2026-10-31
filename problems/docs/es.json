@@ -1553,18 +1553,19 @@
   },
   "cluster_unknown": {
     "title": "Clúster desconocido",
-    "why": "El valor de una entrada compute-clusters nombra un clúster, y la ejecución ve sus detalles, como su ip y su schedulerType. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, digan lo que digan include-workspace, provider y csp de la entrada, que solo eligen lo que lista un formulario.",
+    "why": "El valor de una entrada compute-clusters o compute-resources nombra un clúster, y la ejecución ve sus detalles, como su ip y su schedulerType. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, digan lo que digan include-workspace, provider y csp de la entrada, que solo eligen lo que lista un formulario.",
     "fix": [
       "Elige uno de los clústeres que indica el mensaje, o el workspace.",
-      "O define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él."
+      "O define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él.",
+      "Un clúster de Kubernetes, que una entrada compute-resources puede nombrar en una plataforma, no se puede elegir aquí: ejecutado por sí solo, Meridian solo conoce los clústeres de clusters.yaml y el workspace. Ejecuta un flujo de trabajo así en una plataforma que proporcione el clúster de Kubernetes."
     ]
   },
   "clusters_none": {
     "title": "Ningún clúster entre los que elegir",
-    "why": "El valor de una entrada compute-clusters nombra un clúster. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, y no hay clusters.yaml, o no define ningún clúster.",
+    "why": "El valor de una entrada compute-clusters o compute-resources nombra un clúster. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, y no hay clusters.yaml, o no define ningún clúster.",
     "fix": [
       "Define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él.",
-      "O ejecuta el flujo de trabajo en una plataforma que proporcione los clústeres de la entrada."
+      "O ejecuta el flujo de trabajo en una plataforma que proporcione los clústeres de la entrada: ejecutado por sí solo, Meridian solo conoce los clústeres de clusters.yaml y el workspace, así que un clúster de Kubernetes, que una entrada compute-resources puede nombrar en una plataforma, no está disponible aquí."
     ]
   },
   "bucket_uri_invalid": {
