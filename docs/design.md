@@ -1177,7 +1177,11 @@ made from one, it doesn't hold in another form either.
    and tells the provider what evaluating them read: what is made from a
    variable or a password is private, and from a secret masked as what is
    made from one is. One that fails to evaluate fails the run, as an
-   `env:` value does, without showing what it read. Create only checks
+   `env:` value does, without showing what it read. As in format 1, only
+   one session may have `redirect: true`, the one the person who runs the
+   workflow is taken to: Create refuses two that the workflow writes so,
+   and Start two that expressions give so (`session_redirect_twice`).
+   Create only checks
    them, as they are written, since a run that is created may never start.
    Making them again for a run that has them makes nothing more, and a
    rerun, whose sessions ended with the run, makes them again. A run with
@@ -2906,7 +2910,14 @@ checkout.
 - **update-session** updates the session its `name` names, as text,
   through Sessions (`Sessions.Update`), with the rest of its `with:` as
   it was evaluated, and whether that read a variable or a password, which
-  the provider keeps private, or a secret, which it masks. A name is any
+  the provider keeps private, or a secret, which it masks. Its keys, and
+  those of its `targetInfo`, are read as format 1 reads them, as Go's
+  encoding/json decodes an object into a struct: `LocalPort` is
+  `localPort`, which the compiler neither warns about nor drops, and of
+  keys that differ only in case, the last in byte order counts, as
+  json.Marshal orders a map's keys before format 1 decodes them.
+  `local_port`, which one known workflow writes, is no key of it, and is
+  ignored with a warning, as format 1 ignores it. A name is any
   session's: `${{ sessions.<key> }}` gives one of the run's own, as format
   1's does, but Meridian doesn't hold a step to those. The provider
   decides whether the run may update the session, as format 1's platform

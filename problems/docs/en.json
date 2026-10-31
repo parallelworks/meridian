@@ -703,6 +703,12 @@
       "Remove disconnect-timeout, or write it as format 1 reads it, such as -1 for a step that never gives up on its host."
     ]
   },
+  "session_redirect_twice": {
+    "why": "A session with redirect: true is the one the person who runs the workflow is taken to once it is ready, and a run can take them to one session only. So format 1 refuses a workflow in which more than one session has it, as the run is created. A redirect: that an expression gives is checked as the run starts, once it is known.",
+    "fix": [
+      "Keep redirect: true on one session, and remove it, or set it to false, on the others."
+    ]
+  },
   "runs_on_invalid": {
     "why": "A job's runs-on: picks where it runs, and an expression in it gave something that names no place. runs-on takes an execution group's name, as an execution-groups input gives it; a mapping with execution-group:, or with environment: and its cluster and name; or a compute target, as a compute-target input gives it.",
     "fix": [

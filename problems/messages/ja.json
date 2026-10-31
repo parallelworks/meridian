@@ -114,6 +114,7 @@
   "value_too_deep": "この値は入れ子が深すぎるため、実行とともに保存できません。実行の入れ子は最大 {max} 段階です。",
   "ssh_disconnect_timeout_ignored": "Meridian は disconnect-timeout (ここでは {value}) に従いません。負の disconnect-timeout の場合と同じく、ホスト上のステップはホストとの接続が失われている間も実行を続けます。",
   "ssh_disconnect_timeout_invalid": "ssh: の disconnect-timeout は {value} ですが、形式 1 はこれを読めないため、ステップを失敗させます。Meridian はこのキーを無視し、ステップを実行します。",
+  "session_redirect_twice": "redirect: true にできるセッションは 1 つだけですが、{keys} のそれぞれがそうなっています。",
 
   "runs_on_invalid": "runs-on の値には、{value} ではなく、実行グループの名前か、実行グループ、環境、コンピュートターゲットのいずれかを指定するマッピングを指定してください。",
   "resources_invalid": "{key, select, cpu {resources の CPU には、{value} ではなく、4、0.5、500m のようなコア数を指定してください。} memory {resources のメモリには、{value} ではなく、8Gi や 512Mi のようなバイト数を指定してください。} gpu {resources の GPU には、{value} ではなく整数を指定してください。} other {resources の「{key}」の値 {value} は有効ではありません。}}",

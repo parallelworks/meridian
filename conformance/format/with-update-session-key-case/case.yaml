@@ -1,0 +1,14 @@
+description: >-
+  parallelworks/update-session reads the keys of its with:, and of its
+  targetInfo, case aside, as Go's encoding/json decodes them into its
+  fields: Name is name and localport is localPort, so neither is unknown,
+  and Name counts as the name it needs. local_port is no key of it, and is
+  ignored with a warning.
+source: ACTIVATE's update-session action
+expect:
+  diagnostics:
+    - severity: warning
+      code: unknown_key
+      path: /jobs/main/steps/0/with/local_port
+      line: 10
+      column: 11
