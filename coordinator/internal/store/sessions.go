@@ -259,6 +259,27 @@ func (s *Store) ServeSession(ctx context.Context, id string, salt []byte) (relea
 	return release, nil
 }
 
+// ForgetSessionLease removes the file of the lease of the session id, which
+// has ended (ServeSession), as one left by a process that ended while it
+// held it: unless a process holds it, which removes it as it lets it go.
+func (s *Store) ForgetSessionLease(id string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	if !sessionID.MatchString(id) {
+		return ErrNotFound
+	}
+	release, err := flock.TryLock(s.file + ".session-" + id + ".lock")
+	if errors.Is(err, flock.ErrHeld) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
+}
+
 // AddSessionCode keeps a one-time code of the session id, by its keyed
 // hash, mac, for lifetime, by the store's clock, which RedeemSessionCode
 // reads too, and deletes the store's codes that have expired: ErrNotFound
@@ -310,7 +331,7 @@ func (tx *Tx) endSessions(root int64) error {
 	if _, err := tx.exec("DELETE FROM meridian_session_codes WHERE session_id IN (SELECT id FROM meridian_sessions WHERE root_id = ?)", root); err != nil {
 		return err
 	}
-	_, err = tx.exec("UPDATE meridian_sessions SET data = NULL, data_sealed = NULL, salt = X'', ended_at = ?, updated_at = ? WHERE root_id = ? AND ended_at IS NULL",
+	_, err = tx.exec("UPDATE meridian_sessions SET data = NULL, data_sealed = NULL, salt = X'', serve_problem = NULL, ended_at = ?, updated_at = ? WHERE root_id = ? AND ended_at IS NULL",
 		now, now, root)
 	return err
 }

@@ -208,6 +208,9 @@ type Coordinator struct {
 	// (takeSession).
 	sessionsMu    sync.Mutex
 	sessionLeases map[string]func()
+	// sessionsSeen are the IDs of the store's sessions that hadn't ended
+	// as ServeSessions last looked, which sessionsMu guards too.
+	sessionsSeen map[string]bool
 	// inserter inserts runs' workflows, and served works their jobs while
 	// Serve runs.
 	inserter *hopper.Client[*sql.Tx]

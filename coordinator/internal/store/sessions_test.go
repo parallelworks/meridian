@@ -225,7 +225,8 @@ func TestSessionCodes(t *testing.T) {
 
 // TestSessionsEndWithRoot checks that a tree's sessions end as its root
 // ends, those its children made among them, and not before: their data and
-// their salts are erased, their codes deleted, the store no longer finds them by name or
+// their salts, and why they couldn't be served, are erased, their codes
+// deleted, the store no longer finds them by name or
 // among those live, a reset or a point of one is ErrState, and another
 // session may take the name.
 func TestSessionsEndWithRoot(t *testing.T) {
@@ -242,6 +243,9 @@ func TestSessionsEndWithRoot(t *testing.T) {
 			return err
 		}
 		if err := tx.PointSession("a", nil, []byte("sealed"), 1, 9000, false); err != nil {
+			return err
+		}
+		if err := tx.SessionServed("a", 0, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "9000"})); err != nil {
 			return err
 		}
 		return tx.AddSessionCode("a", []byte("code"), time.Hour)
@@ -262,7 +266,7 @@ func TestSessionsEndWithRoot(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if got.EndedAt.IsZero() || got.Data != nil || got.Sealed != nil || len(got.Salt) != 0 {
+			if got.EndedAt.IsZero() || got.Data != nil || got.Sealed != nil || len(got.Salt) != 0 || got.Problem != nil {
 				t.Errorf("session %s once its root ended: %+v", id, got)
 			}
 		}

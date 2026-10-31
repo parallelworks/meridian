@@ -5,7 +5,9 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -29,11 +31,13 @@ import (
 // refuse: is true, names each session of a run no step called by its key
 // and a number of its own, points a session where with: says, at a port
 // it gives, refusing a with: whose remoteHost is refuse as a port in use,
-// and records what it is asked to point, and whether to serve it there,
-// and what it is asked to serve.
+// and records whether it checked a called workflow's sessions, what it is
+// asked to point, and whether to serve it there, and what it is asked to
+// serve.
 type testHost struct {
 	mu     sync.Mutex
 	n      int
+	called []bool
 	points []string
 	served [][]Session
 }
@@ -41,6 +45,7 @@ type testHost struct {
 func (h *testHost) Check(_ context.Context, sessions map[string]any, called bool) (map[string]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.called = append(h.called, called)
 	for key, def := range sessions {
 		if d, _ := def.(map[string]any); d["refuse"] == true {
 			return nil, fmt.Errorf("the host refuses the session %s", key)
@@ -128,6 +133,9 @@ func TestSessionsMade(t *testing.T) {
 	names, err := p.Check(t.Context(), sessions)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if h.called == nil || h.called[0] {
+		t.Errorf("a run no step called had its sessions checked as a called workflow's: %v", h.called)
 	}
 	id, _ := create(t, c, plainWorkflow, nil, nil)
 	for range 2 {
@@ -409,13 +417,51 @@ jobs:
 	waitFor(t, func() bool { return h.lastServed() != nil && len(h.lastServed()) == 0 })
 	sessions, err := r.c.RunSessions(t.Context(), id)
 	if err != nil || len(sessions) != 1 || sessions[0].EndedAt.IsZero() || sessions[0].Point != nil {
-		t.Errorf("once the run ended, its sessions are %+v, %v", sessions, err)
+		t.Fatalf("once the run ended, its sessions are %+v, %v", sessions, err)
 	}
+	// Its lease is let go of, and its file gone.
+	lease := r.c.opts.Database + ".session-" + sessions[0].ID + ".lock"
+	waitFor(t, func() bool { _, err := os.Lstat(lease); return errors.Is(err, fs.ErrNotExist) })
+}
+
+// TestSessionLeaseLeft checks that the file of the lease of a session
+// whose process ended while it served it, which no process took over,
+// goes as the session ends.
+func TestSessionLeaseLeft(t *testing.T) {
+	parallel(t)
+	h := &testHost{}
+	c := open(t, Options{SessionHost: h})
+	serveSessions(t, c)
+	root, _ := create(t, c, plainWorkflow, nil, nil)
+	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); err != nil {
+		t.Fatal(err)
+	}
+	made, err := c.RunSessions(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file another process's lease left, as it ended.
+	lease := c.opts.Database + ".session-" + made[0].ID + ".lock"
+	if err := os.WriteFile(lease, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Two looks at the store, the second after one that saw the session.
+	h.mu.Lock()
+	looks := len(h.served)
+	h.mu.Unlock()
+	waitFor(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return len(h.served) > looks+1 })
+	if _, err := os.Lstat(lease); err != nil {
+		t.Fatalf("the lease's file of a session that hasn't ended is gone: %v", err)
+	}
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error { return tx.EndRun(root, plan.OutcomeSuccess, "") }); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { _, err := os.Lstat(lease); return errors.Is(err, fs.ErrNotExist) })
 }
 
 // TestServeSessionsNeedsHost checks that a coordinator without a session
 // host, or opened only to read the store, serves no sessions, and the
-// latter makes and points none.
+// latter makes and points none; and that one serves them once at a time.
 func TestServeSessionsNeedsHost(t *testing.T) {
 	parallel(t)
 	c := open(t, Options{})
@@ -428,6 +474,21 @@ func TestServeSessionsNeedsHost(t *testing.T) {
 	}
 	if ro.opts.Sessions != nil {
 		t.Error("a coordinator opened only to read the store provides Sessions")
+	}
+	// One process serves its sessions once: a second ServeSessions would
+	// take its leases from under the first.
+	served := open(t, Options{SessionHost: &testHost{}})
+	serveSessions(t, served)
+	waitFor(t, func() bool {
+		served.sessionsMu.Lock()
+		defer served.sessionsMu.Unlock()
+		return served.sessionLeases != nil
+	})
+	// Without the guard, it would serve until its context ends.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := served.ServeSessions(ctx); err == nil {
+		t.Error("ServeSessions served twice at once")
 	}
 }
 
@@ -991,7 +1052,8 @@ func TestSessionsPointedTogether(t *testing.T) {
 // calls, which the coordinator names, its host checks all the same.
 func TestSessionsOfACallChecked(t *testing.T) {
 	parallel(t)
-	c := open(t, Options{SessionHost: &testHost{}})
+	h := &testHost{}
+	c := open(t, Options{SessionHost: h})
 	p := c.opts.Sessions.(sessionProvider)
 	p.call = &sessionCall{workflow: "w", root: "1", path: []callLevel{{Job: "build", Step: 0}}}
 	if _, err := p.Check(t.Context(), map[string]any{"desktop": map[string]any{"refuse": true}}); err == nil {
@@ -1000,6 +1062,9 @@ func TestSessionsOfACallChecked(t *testing.T) {
 	names, err := p.Check(t.Context(), map[string]any{"desktop": map[string]any{}})
 	if err != nil || names["desktop"] != "w_1_build_step_0_desktop" {
 		t.Errorf("Check = %v, %v", names, err)
+	}
+	if !slices.Equal(h.called, []bool{true, true}) {
+		t.Errorf("the host checked a called workflow's sessions as %v", h.called)
 	}
 }
 

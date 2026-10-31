@@ -455,7 +455,7 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 		for _, release := range c.sessionLeases {
 			release()
 		}
-		c.sessionLeases = nil
+		c.sessionLeases, c.sessionsSeen = nil, nil
 	}()
 	ticker := time.NewTicker(c.sessionsPoll)
 	defer ticker.Stop()
@@ -483,7 +483,7 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 func (c *Coordinator) serveSessions(ctx context.Context) error {
 	c.sessionsMu.Lock()
 	defer c.sessionsMu.Unlock()
-	live, err := c.liveSessions(ctx)
+	live, seen, err := c.liveSessions(ctx)
 	if err != nil {
 		return err
 	}
@@ -513,6 +513,17 @@ func (c *Coordinator) serveSessions(ctx context.Context) error {
 			delete(c.sessionLeases, id)
 		}
 	}
+	// The lease files of those that have ended since, which a process
+	// that ended while it held them left, go too.
+	for id := range c.sessionsSeen {
+		if seen[id] {
+			continue
+		}
+		if err := c.store.ForgetSessionLease(id); err != nil {
+			c.log.Warn("coordinator: couldn't remove an ended session's lease", "session", id, "err", err)
+		}
+	}
+	c.sessionsSeen = seen
 	return nil
 }
 
@@ -617,12 +628,18 @@ func (c *Coordinator) SessionServed(ctx context.Context, id string, port int, p 
 }
 
 // ResetSession replaces the salt of the session id, which signs out every
-// browser that holds its secret, and deletes its one-time codes.
+// browser that holds its secret, and deletes its one-time codes. It holds
+// sessionsMu as it does, so that a look of ServeSessions's, and a step's
+// point, reads the session wholly before the reset or after it; the look
+// it wakes serves the new salt.
 func (c *Coordinator) ResetSession(ctx context.Context, id string) error {
 	if err := c.writable(); err != nil {
 		return err
 	}
-	if err := c.store.Tx(ctx, func(tx *store.Tx) error { return tx.ResetSession(id, newSalt()) }); err != nil {
+	c.sessionsMu.Lock()
+	err := c.store.Tx(ctx, func(tx *store.Tx) error { return tx.ResetSession(id, newSalt()) })
+	c.sessionsMu.Unlock()
+	if err != nil {
 		return err
 	}
 	c.wakeSessions()
@@ -631,14 +648,16 @@ func (c *Coordinator) ResetSession(ctx context.Context, id string) error {
 
 // liveSessions returns the store's sessions that haven't ended, opened,
 // but those it can't open, which it leaves out, and logs, so that one
-// doesn't keep the others from being served.
-func (c *Coordinator) liveSessions(ctx context.Context) ([]Session, error) {
+// doesn't keep the others from being served; and the IDs of all of them.
+func (c *Coordinator) liveSessions(ctx context.Context) ([]Session, map[string]bool, error) {
 	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) { return tx.LiveSessions() })
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]Session, 0, len(read.stored))
+	ids := make(map[string]bool, len(read.stored))
 	for i, s := range read.stored {
+		ids[s.ID] = true
 		opened, err := read.open(ctx, i)
 		if err != nil {
 			c.log.Warn("coordinator: couldn't open a session to serve it", "session", s.ID, "err", err)
@@ -646,7 +665,7 @@ func (c *Coordinator) liveSessions(ctx context.Context) ([]Session, error) {
 		}
 		out = append(out, opened)
 	}
-	return out, nil
+	return out, ids, nil
 }
 
 // sessionsRead are sessions as the store holds them, read with the data
