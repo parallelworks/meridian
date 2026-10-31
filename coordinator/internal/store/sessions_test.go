@@ -115,27 +115,27 @@ func TestSessions(t *testing.T) {
 	})
 
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.PointSession("a", []byte(`{"point":1}`), nil, 0, 8080, true); err != nil {
+		if err := tx.PointSession("a", []byte(`{"point":1}`), nil, 0, 8080); err != nil {
 			return err
 		}
 		got, _ := tx.Session("a")
-		if string(got.Data) != `{"point":1}` || got.Port != 8080 || !got.PortGiven {
+		if string(got.Data) != `{"point":1}` || got.Port != 8080 {
 			t.Errorf("pointed in the clear: %+v", got)
 		}
-		if err := tx.PointSession("a", nil, []byte("sealed 1"), 1, 0, false); err != nil {
+		if err := tx.PointSession("a", nil, []byte("sealed 1"), 1, 0); err != nil {
 			return err
 		}
 		got, _ = tx.Session("a")
-		if got.Data != nil || string(got.Sealed) != "sealed 1" || got.Generation != 1 || got.Port != 0 || got.PortGiven {
+		if got.Data != nil || string(got.Sealed) != "sealed 1" || got.Generation != 1 || got.Port != 0 {
 			t.Errorf("pointed sealed: %+v", got)
 		}
-		if err := tx.PointSession("a", []byte(`{}`), nil, 0, 1, false); !errors.Is(err, ErrState) {
+		if err := tx.PointSession("a", []byte(`{}`), nil, 0, 1); !errors.Is(err, ErrState) {
 			t.Errorf("in the clear once sealed = %v, want ErrState", err)
 		}
-		if err := tx.PointSession("a", nil, []byte("sealed again"), 1, 1, false); !errors.Is(err, ErrState) {
+		if err := tx.PointSession("a", nil, []byte("sealed again"), 1, 1); !errors.Is(err, ErrState) {
 			t.Errorf("sealed as a generation that isn't newer = %v, want ErrState", err)
 		}
-		if err := tx.PointSession("nothing", nil, nil, 0, 0, false); !errors.Is(err, ErrNotFound) {
+		if err := tx.PointSession("nothing", nil, nil, 0, 0); !errors.Is(err, ErrNotFound) {
 			t.Errorf("a session the store hasn't = %v", err)
 		}
 		return nil
@@ -242,10 +242,10 @@ func TestSessionsEndWithRoot(t *testing.T) {
 		if _, err := tx.MakeSession(testSession("b", root, child, "child", "child-1")); err != nil {
 			return err
 		}
-		if err := tx.PointSession("a", nil, []byte("sealed"), 1, 9000, false); err != nil {
+		if err := tx.PointSession("a", nil, []byte("sealed"), 1, 9000); err != nil {
 			return err
 		}
-		if err := tx.SessionServed("a", 0, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "9000"})); err != nil {
+		if err := tx.SessionServed("a", 0, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "9000", "picked": "false"})); err != nil {
 			return err
 		}
 		return tx.AddSessionCode("a", []byte("code"), time.Hour)
@@ -276,7 +276,7 @@ func TestSessionsEndWithRoot(t *testing.T) {
 		if err := tx.ResetSession("a", []byte("x")); !errors.Is(err, ErrState) {
 			t.Errorf("a reset of an ended session = %v, want ErrState", err)
 		}
-		if err := tx.PointSession("a", []byte("{}"), nil, 0, 1, false); !errors.Is(err, ErrState) {
+		if err := tx.PointSession("a", []byte("{}"), nil, 0, 1); !errors.Is(err, ErrState) {
 			t.Errorf("pointing an ended session = %v, want ErrState", err)
 		}
 		if err := tx.AddSessionCode("a", []byte("x"), time.Hour); !errors.Is(err, ErrState) {
@@ -298,10 +298,10 @@ func TestSessionsEndWithRoot(t *testing.T) {
 
 // TestServeSession checks a session's lease, which its process holds as
 // long as it serves it: one at a time, in this process or another; taken,
-// it resets the session, its codes with it, before it returns; let go, its
-// file is gone, and another may take it; and a session that has ended, or
-// that the store hasn't, is never taken, nor one of a store opened only to
-// read.
+// it resets the session, its codes with it, and forgets its port, before
+// it returns; let go, its file is gone, and another may take it; and a
+// session that has ended, or that the store hasn't, is never taken, nor
+// one of a store opened only to read.
 func TestServeSession(t *testing.T) {
 	t.Parallel()
 	s := open(t)
@@ -314,9 +314,16 @@ func TestServeSession(t *testing.T) {
 		}
 		return tx.AddSessionCode("a", []byte("code"), time.Hour)
 	})
+	if held, err := s.SessionHeld("a"); err != nil || held {
+		t.Errorf("a session no process took is held: %t, %v", held, err)
+	}
+	inTx(t, s, func(tx *Tx) error { return tx.PointSession("a", []byte(`{}`), nil, 0, 7000) })
 	release, err := s.ServeSession(t.Context(), "a", []byte("taken"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if held, err := s.SessionHeld("a"); err != nil || !held {
+		t.Errorf("a session taken isn't held: %t, %v", held, err)
 	}
 	file := s.file + ".session-a.lock"
 	if _, err := os.Lstat(file); err != nil {
@@ -324,8 +331,8 @@ func TestServeSession(t *testing.T) {
 	}
 	inTx(t, s, func(tx *Tx) error {
 		got, err := tx.Session("a")
-		if err == nil && string(got.Salt) != "taken" {
-			t.Errorf("the session, taken, has the salt %q", got.Salt)
+		if err == nil && (string(got.Salt) != "taken" || got.Port != 0) {
+			t.Errorf("the session, taken, has the salt %q, and the port %d", got.Salt, got.Port)
 		}
 		if ok, err := tx.RedeemSessionCode("a", []byte("code")); ok || err != nil {
 			t.Errorf("a code from before the session was taken = %t, %v", ok, err)
@@ -348,6 +355,12 @@ func TestServeSession(t *testing.T) {
 	}
 	other()
 	release()
+	if held, err := s.SessionHeld("a"); err != nil || held {
+		t.Errorf("a session let go of is held: %t, %v", held, err)
+	}
+	if _, err := s.SessionHeld("../a"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SessionHeld of no session's ID = %v", err)
+	}
 	if _, err := os.Lstat(file); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the lease's file is there once it is let go: %v", err)
 	}
@@ -398,17 +411,17 @@ func TestSessionServed(t *testing.T) {
 	t.Parallel()
 	s := open(t)
 	root := createRun(t, s)
-	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "7000"})
+	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "7000", "picked": "false"})
 	inTx(t, s, func(tx *Tx) error {
 		for _, id := range []string{"a", "b"} {
 			if _, err := tx.MakeSession(testSession(id, root, root, id, id+"-1")); err != nil {
 				return err
 			}
 		}
-		if err := tx.PointSession("a", []byte(`{}`), nil, 0, 7000, true); err != nil {
+		if err := tx.PointSession("a", []byte(`{}`), nil, 0, 7000); err != nil {
 			return err
 		}
-		if err := tx.PointSession("b", nil, []byte("sealed"), 1, 7001, true); err != nil {
+		if err := tx.PointSession("b", nil, []byte("sealed"), 1, 7001); err != nil {
 			return err
 		}
 		if err := tx.SessionServed("a", 0, taken); err != nil {
@@ -432,7 +445,7 @@ func TestSessionServed(t *testing.T) {
 		if a.Port != 7002 || a.Problem != nil {
 			t.Errorf("a session served at another port is %+v", a)
 		}
-		if err := tx.PointSession("b", nil, []byte("sealed again"), 2, 7001, true); err != nil {
+		if err := tx.PointSession("b", nil, []byte("sealed again"), 2, 7001); err != nil {
 			return err
 		}
 		b, _ = tx.Session("b")

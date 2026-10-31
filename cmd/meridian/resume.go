@@ -67,12 +67,14 @@ func runResume(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int
 	}
 	interrupts, stopSignals := c.notify()
 	defer stopSignals()
-	coord, err := coordinate(ctx, c, dirs, cfg, db)
+	coord, sessions, err := coordinate(ctx, c, dirs, cfg, db)
 	if err != nil {
 		return c.fail(err)
 	}
-	// The coordinator is closed once it has stopped serving.
+	// The coordinator is closed once it has stopped serving, and its
+	// sessions' host before it.
 	defer func() { _ = coord.Close() }()
+	defer sessions.Close()
 	s, err := coord.Resume(ctx, id, func(s *coordinator.RunStatus) error { return checkRunDir(ctx, coord, s) })
 	if err != nil {
 		return c.fail(runNotFound(id, err))
@@ -85,6 +87,9 @@ func runResume(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int
 	// stopped.
 	defer func() { _ = logs.Close() }()
 	progress := local.NewProgress(c.stdout, c.stderr, c.json)
+	// Each session the run's steps point, this process says it serves
+	// as it does: on a person's terminal, with a link.
+	sessions.AnnounceTo(progress, c.showsSessionLinks())
 	if err := progress.Resumed(id, s.RunDir); err != nil {
 		return c.fail(err)
 	}

@@ -119,6 +119,13 @@ func (f configFile) cluster(name string, key, n *yaml.Node) (cluster, error) {
 // order.
 func (c *Config) ClusterNames() []string { return slices.Sorted(maps.Keys(c.clusters)) }
 
+// ClusterHost returns the host of the clusters file's cluster named name,
+// which is its id too, and whether the file has it.
+func (c *Config) ClusterHost(name string) (string, bool) {
+	cl, ok := c.clusters[name]
+	return cl.host, ok
+}
+
 // resolveClusters gives the value of a compute-clusters input, or a
 // compute-resources one, as format 1 resolves one: the workspace's name,
 // or a cluster's of the clusters file, or each of a list of them, becomes

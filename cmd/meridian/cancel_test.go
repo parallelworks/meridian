@@ -123,10 +123,11 @@ func TestCancelUncoordinated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coord, err := coordinate(t.Context(), c, dirs, cfg, db)
+	coord, sessions, err := coordinate(t.Context(), c, dirs, cfg, db)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sessions.Close()
 	if err := coord.Cancel(t.Context(), "1"); err != nil {
 		t.Fatal(err)
 	}

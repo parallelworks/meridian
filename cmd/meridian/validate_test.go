@@ -469,12 +469,18 @@ jobs:
 		t.Errorf("meridian validate --start without the secret = %+v", r)
 	}
 	sessions := writeFile(t, "s.yaml", "sessions:\n  desktop:\n    useTLS: false\njobs:\n  main:\n    steps:\n      - run: echo\n")
-	// Creating the run refuses it already, without --start too.
-	if r := runCLI(t, env, "", "validate", sessions); r.code != exitInvalid || !strings.Contains(r.stdout, "(resolver_missing)") {
+	// Sessions this machine serves are checked and named as the run is
+	// created, and made by none as validate --start starts it.
+	if r := runCLI(t, env, "", "validate", sessions); r.code != exitOK || r.stdout != "" {
 		t.Errorf("meridian validate with sessions = %+v", r)
 	}
-	if r := runCLI(t, env, "", "validate", "--start", sessions); r.code != exitInvalid || !strings.Contains(r.stdout, "s.yaml:1:1: error:") || !strings.Contains(r.stdout, "(resolver_missing)") {
+	if r := runCLI(t, env, "", "validate", "--start", sessions); r.code != exitOK || r.stdout != "" {
 		t.Errorf("meridian validate --start with sessions = %+v", r)
+	}
+	// One meridian run can't serve, without --start too.
+	detached := writeFile(t, "d.yaml", "sessions:\n  desktop:\n    detach: true\njobs:\n  main:\n    steps:\n      - run: echo\n")
+	if r := runCLI(t, env, "", "validate", detached); r.code != exitInvalid || !strings.Contains(r.stdout, "(session_field_unsupported)") {
+		t.Errorf("meridian validate with a detached session = %+v", r)
 	}
 }
 

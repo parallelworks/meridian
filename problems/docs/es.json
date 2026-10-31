@@ -834,16 +834,17 @@
   },
   "session_local_port_taken": {
     "title": "Puerto de la sesión en uso",
-    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina: el puerto que da el localPort de update-session, o uno que elige Meridian. Otra cosa escucha en el puerto que dio el flujo de trabajo. Meridian no toma otro, ya que el flujo de trabajo puede decirle al usuario que abra ese.",
+    "why": "Meridian sirve cada sesión en un puerto propio de las direcciones de bucle local de esta máquina, 127.0.0.1 y [::1], el mismo puerto en ambas, uno que elige el sistema. Un proceso que toma una sesión, como después de que terminara el meridian run que la servía, la sirve en el puerto en que se servía antes, y, donde otro programa lo tiene ahora, en otro. Donde el sistema eligió el puerto, cada puerto que eligió, tantas veces como Meridian lo pidió, era de otro programa en [::1], así que Meridian no sirve la sesión en ninguno.",
     "fix": [
-      "Detén lo que escucha en el puerto, da a localPort un puerto libre, o quita localPort, para que Meridian elija uno."
+      "Para un puerto en que se servía antes la sesión: nada, ya que Meridian sirve la sesión en otro puerto, que da meridian session url.",
+      "Para un puerto que eligió el sistema: busca qué tiene puertos en [::1], como muestra ss -ltn, detenlo y vuelve a ejecutar meridian resume."
     ]
   },
   "session_local_port_refused": {
     "title": "Puerto de la sesión en el que esta máquina no deja escuchar",
-    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina: el puerto que da el localPort de update-session, o uno que elige Meridian. El sistema rechazó el puerto que dio el flujo de trabajo: los puertos por debajo de 1024 son privilegiados en la mayoría de los sistemas, y Meridian se ejecuta como tú, sin ese privilegio.",
+    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina, uno que elige el sistema, o, para una sesión que toma un proceso, aquel en que se servía antes. El sistema no dejó que Meridian escuchara allí, como donde una política restringe los puertos en que un programa puede escuchar.",
     "fix": [
-      "Da a localPort un puerto de 1024 a 65535, o quítalo, para que Meridian elija uno."
+      "Permite que Meridian escuche en los puertos de 127.0.0.1 y [::1] que elige el sistema, y vuelve a ejecutar meridian resume, o meridian session url."
     ]
   },
   "session_name_taken": {
@@ -872,6 +873,55 @@
     "why": "Como decide la plataforma del formato 1, una ejecución puede apuntar una sesión que creó su propio árbol, y también un flujo de trabajo al que llama; una cuyo flujo de trabajo tiene '*' en permissions: actúa como la persona que la ejecuta, y puede apuntar cualquier sesión suya. Esta sesión es de otra ejecución, y el árbol de esta ejecución no pide '*'.",
     "fix": [
       "Apunta una sesión que creó el propio árbol de la ejecución, como la da ${{ sessions.<clave> }}, o da al flujo de trabajo de arriba del árbol permissions: ['*'], si ha de actuar como tú."
+    ]
+  },
+  "session_field_unsupported": {
+    "title": "Sesión que meridian run no puede servir",
+    "why": "meridian run sirve una sesión en esta máquina, mientras dura su ejecución, en un puerto propio. detach: true pide una sesión que sobrevive a su ejecución, lo que necesita un coordinador que sobreviva al comando, como será meridian serve. openAI: true pide a una plataforma registrar la sesión como el punto de acceso de un modelo, lo que no está aquí. useCustomDomain: true lo ignora, como el formato 1 donde una plataforma no tiene dominio para sesiones: aquí cada sesión tiene un nombre de host propio.",
+    "fix": [
+      "Quita el campo, o ponlo a false, para ejecutar el flujo de trabajo con meridian run."
+    ]
+  },
+  "session_name_needed": {
+    "title": "Sesión que pide un nombre",
+    "why": "El formulario del formato 1 pide a quien ejecuta un flujo de trabajo el nombre de una sesión cuyo prompt-for-name no da valor por defecto. meridian run no pregunta a nadie: nombra la sesión por su valor por defecto, que debe ser un nombre que la ruta de una URL contenga tal cual, como lo contiene la ruta de la sesión, y no puede ser una expresión, que solo se evalúa después de nombrar la sesión.",
+    "fix": [
+      "Da a prompt-for-name un valor por defecto literal, como {default: mi-sesion}."
+    ]
+  },
+  "session_update_unsupported": {
+    "title": "update-session que meridian run no puede hacer",
+    "why": "targetInfo apunta una sesión a un recurso de Kubernetes, al que llega una plataforma con sus propias credenciales, y openAI y apiKey la registran como el punto de acceso de un modelo: meridian run no tiene ninguna de las dos cosas.",
+    "fix": [
+      "Quita el campo del with: de update-session."
+    ]
+  },
+  "session_url_invalid": {
+    "title": "Enlace que no es una URL http o https",
+    "why": "update-session con type: link apunta la sesión a una URL, que meridian muestra para que la abra quien ejecuta el flujo de trabajo, y para la que no sirve nada. Debe ser una URL http o https absoluta.",
+    "fix": [
+      "Da a url la dirección de la página, como https://example.com/."
+    ]
+  },
+  "session_port_invalid": {
+    "title": "Puerto que update-session no puede leer",
+    "why": "remotePort, el puerto del servicio, es un número entero de 1 a 65535, o el texto de uno, como lo lee el formato 1, y un túnel lo necesita; el formato 1 acepta más, como -1 o +80, que Meridian rechaza. localPort, el formato 1 lo ignora, y también Meridian, que sirve una sesión en un puerto que elige el sistema; pero el formato 1 aún hace fallar un paso cuyo localPort no es un número, o el texto de un número entero, y también Meridian.",
+    "fix": [
+      "Da remotePort como un número de 1 a 65535, como remotePort: 8888, y quita localPort."
+    ]
+  },
+  "session_target_unknown": {
+    "title": "Destino de una sesión que no nombra ningún clúster",
+    "why": "El target de un túnel es desde dónde se llega a su servicio: el workspace, esta máquina, para ninguno, \"\", localhost o user-workspace; o un clúster, por su id, que, para un clúster de clusters.yaml, es su nombre, como lo da ${{ inputs.<clúster>.id }}. Meridian llega al servicio por SSH a través del host del clúster.",
+    "fix": [
+      "Apunta target a ${{ inputs.<clúster>.id }} de una entrada compute-clusters, o añade el clúster a clusters.yaml."
+    ]
+  },
+  "session_tls_unsupported": {
+    "title": "Sesión por TLS a la que meridian run aún no llega",
+    "why": "Un túnel a esta máquina cuya sesión tiene useTLS: true se sirve por HTTPS hacia su servicio. meridian run aún no puede comprobar el certificado de un servicio de esta máquina, y no llega a él por HTTP en su lugar. Un túnel a un clúster ignora useTLS, como el formato 1.",
+    "fix": [
+      "Sirve la aplicación por HTTP en la dirección de bucle local de esta máquina, y quita useTLS de la sesión."
     ]
   },
   "runs_on_invalid": {
@@ -2479,6 +2529,34 @@
     "why": "Cada sesión se sirve en un nombre de host propio, <etiqueta>.localhost, cuya etiqueta son 128 bits aleatorios, que un navegador resuelve a la dirección de bucle local de esta máquina. Un navegador envía una cookie solo a su host, sea cual sea el puerto, así que ninguna petición a otro nombre, como 127.0.0.1, localhost o el de otra sesión, lleva la cookie de la sesión, y el almacenamiento de sus páginas es solo de la sesión; y el puerto de la sesión escucha en las dos direcciones de bucle local de esta máquina, 127.0.0.1 y [::1], donde tiene IPv6, así que ningún otro programa puede responder en el nombre y el puerto de la sesión. Meridian solo responde a peticiones dirigidas a ese nombre: rechaza una a 127.0.0.1, a localhost, o a un nombre que se hizo resolver a 127.0.0.1 (DNS rebinding). Chrome y Firefox resuelven por sí mismos cualquier nombre bajo localhost a esta máquina, y también curl y el resolvedor de systemd; un navegador que no lo hace no puede abrir la sesión, y Meridian no la sirve en 127.0.0.1 en su lugar.",
     "fix": [
       "Abre la sesión en la dirección que muestra meridian session url, en un navegador que resuelva los nombres bajo localhost, como Chrome y Firefox, o a través de ssh -L hacia ella."
+    ]
+  },
+  "session_key_unknown": {
+    "title": "Ejecución sin esa sesión",
+    "why": "meridian session encuentra la sesión de una ejecución por su clave en las sessions: del flujo de trabajo, entre las de la llamada de la ejecución en su árbol que no han terminado: una sesión termina con la ejecución de arriba de su árbol. El mensaje lista las claves que tiene la ejecución.",
+    "fix": [
+      "Da la clave de una de las sesiones de la ejecución, como la dice la salida de la ejecución al servir la sesión."
+    ]
+  },
+  "session_not_ready": {
+    "title": "Sesión que aún no se sirve",
+    "why": "Una sesión se sirve una vez que un paso que usa parallelworks/update-session la apunta a un servicio, y el proceso que la sirve, que la toma, escucha en un puerto para ella; solo entonces tiene un enlace.",
+    "fix": [
+      "Espera al paso, que muestra meridian run, y vuelve a pedirlo."
+    ]
+  },
+  "session_not_served": {
+    "title": "Sesión que ningún proceso sirve",
+    "why": "Una sesión la sirve el meridian run, resume o cancel que la tomó, mientras ese proceso vive. Ese proceso canjea el código de un solo uso de su enlace, así que meridian session url no crea ninguno mientras ningún proceso sirve la sesión, pues nada lo canjearía.",
+    "fix": [
+      "Ejecuta meridian resume con la ejecución de arriba del árbol de la sesión, que vuelve a servir sus sesiones, y después pide un enlace."
+    ]
+  },
+  "login_name_unknown": {
+    "title": "Sin nombre de inicio de sesión para quien ejecuta meridian",
+    "why": "La ruta de una sesión es /me/session/<usuario>/<nombre>/, donde <usuario> es el nombre de inicio de sesión del usuario que ejecuta Meridian, como lo leen los flujos de trabajo de PW_USER. Meridian lo lee de la base de datos de usuarios del sistema, o si no de $USER, y no encontró ninguno.",
+    "fix": [
+      "Ejecuta meridian como un usuario que tenga la base de datos de usuarios del sistema, o pon USER al nombre de inicio de sesión."
     ]
   },
   "source_server_unknown": {

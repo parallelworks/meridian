@@ -35,10 +35,11 @@ func createdRun(t *testing.T, env map[string]string, workflow string) (string, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	coord, err := coordinate(t.Context(), c, w.dirs, w.cfg, db)
+	coord, sessions, err := coordinate(t.Context(), c, w.dirs, w.cfg, db)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sessions.Close()
 	defer coord.Close()
 	dirOf, err := runDirs(c, "")
 	if err != nil {

@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
@@ -85,9 +86,8 @@ type Session struct {
 	Def   map[string]any
 	Point []byte
 	// Port is the port of 127.0.0.1 the session is served at, or 0 before
-	// it points somewhere, and PortGiven whether the step gave it.
-	Port      int
-	PortGiven bool
+	// its process serves it at one.
+	Port int
 	// Problem is why the process that serves the session can't, as its
 	// host last said (Coordinator.SessionServed), or nil.
 	Problem *problem.Problem
@@ -105,10 +105,9 @@ type Session struct {
 type SessionPoint struct {
 	// Point is where it points, encoded as the host reads it again: JSON.
 	Point []byte
-	// Port is the port of 127.0.0.1 the host serves the session at, and
-	// PortGiven whether the step gave it.
-	Port      int
-	PortGiven bool
+	// Port is the port of 127.0.0.1 the host serves the session at, or
+	// the one it is served at already, for a host that doesn't serve it.
+	Port int
 }
 
 // sessionData is what the store keeps of a session as its data
@@ -181,11 +180,19 @@ func encodeCallPath(path []callLevel) (string, error) {
 	return string(b), err
 }
 
+// maxSessionName is the most bytes of a name sessionName gives: a
+// session's path holds its name, and its cookie is held to that path,
+// which a browser ignores past 1 KiB.
+const maxSessionName = 128
+
 // sessionName returns the name of the session key of the workflow that is
 // called at path in the tree whose root is the run root, of the workflow
 // named workflow, as format 1 names it: the workflow, the root, each call's
 // job and step, as step_<n>, and the key, joined with underscores, what of
-// each a session's path can't hold as it is made a hyphen.
+// each a session's path can't hold as it is made a hyphen. A name longer
+// than maxSessionName keeps its start, and ends with a hyphen and the
+// first 64 bits of the whole one's SHA-256, in hex, so that it is as
+// long, and the same each time.
 func sessionName(workflow, root string, path []callLevel, key string) string {
 	parts := []string{workflow, root}
 	for _, l := range path {
@@ -203,7 +210,12 @@ func sessionName(workflow, root string, path []callLevel, key string) string {
 			return '-'
 		}, part)
 	}
-	return strings.Join(parts, "_")
+	name := strings.Join(parts, "_")
+	if len(name) > maxSessionName {
+		sum := sha256.Sum256([]byte(name))
+		name = name[:maxSessionName-17] + "-" + hex.EncodeToString(sum[:8])
+	}
+	return name
 }
 
 // workflowName returns the name of the workflow at location, a run's own
@@ -403,14 +415,14 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 			return err
 		}
 		if now.Sealed == nil && !s.Private && !u.Read.Private && !u.Read.Marked {
-			return tx.PointSession(s.ID, data, nil, 0, point.Port, point.PortGiven)
+			return tx.PointSession(s.ID, data, nil, 0, point.Port)
 		}
 		gen := now.Generation + 1
 		sealed, err := c.sealSession(ctx, tx, s.Root, s.ID, gen, data)
 		if err != nil {
 			return err
 		}
-		return tx.PointSession(s.ID, nil, sealed, gen, point.Port, point.PortGiven)
+		return tx.PointSession(s.ID, nil, sealed, gen, point.Port)
 	})
 	if err != nil {
 		return err
@@ -585,6 +597,53 @@ func (c *Coordinator) RunSessions(ctx context.Context, root string) ([]Session, 
 	return out, nil
 }
 
+// CallSessions returns the sessions, that haven't ended, of the run run's
+// sessions:: those that its call in its tree made, which every try,
+// attempt and matrix instance of the call shares, so that any of their
+// runs finds them, in the order they were made; or, for a run no step
+// called, its own. What a private one is, and where it points, is there
+// only where the coordinator holds the keys to open it. A run the store
+// hasn't is ErrRunNotFound.
+func (c *Coordinator) CallSessions(ctx context.Context, run string) ([]Session, error) {
+	read, err := c.readSessions(ctx, func(tx *store.Tx) ([]store.Session, error) {
+		r, err := tx.Run(run)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrRunNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		root := r.ID
+		if r.Parent != nil {
+			root = r.Parent.Root
+		}
+		path, err := callPathOf(tx, r)
+		if err != nil {
+			return nil, err
+		}
+		callPath, err := encodeCallPath(path)
+		if err != nil {
+			return nil, err
+		}
+		all, err := tx.Sessions(root)
+		return slices.DeleteFunc(all, func(s store.Session) bool { return s.CallPath != callPath || !s.EndedAt.IsZero() }), err
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Session, len(read.stored))
+	for i, s := range read.stored {
+		if c.sealer == nil && s.Sealed != nil {
+			out[i] = sessionOf(s)
+			continue
+		}
+		if out[i], err = read.open(ctx, i); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // AddSessionCode keeps a one-time code of the session id, by its keyed
 // hash, mac, for lifetime, by the store's clock, which a link to it holds.
 func (c *Coordinator) AddSessionCode(ctx context.Context, id string, mac []byte, lifetime time.Duration) error {
@@ -625,6 +684,12 @@ func (c *Coordinator) SessionServed(ctx context.Context, id string, port int, p 
 		return err
 	}
 	return c.store.Tx(ctx, func(tx *store.Tx) error { return tx.SessionServed(id, port, p) })
+}
+
+// SessionServing reports whether a process serves the session id now: one
+// that holds its lease (store.Store.ServeSession), this one or another.
+func (c *Coordinator) SessionServing(_ context.Context, id string) (bool, error) {
+	return c.store.SessionHeld(id)
 }
 
 // ResetSession replaces the salt of the session id, which signs out every
@@ -737,7 +802,7 @@ func (r *sessionsRead) open(ctx context.Context, i int) (Session, error) {
 func sessionOf(s store.Session) Session {
 	return Session{
 		ID: s.ID, Root: s.Root, Run: s.Run, Key: s.Key, Name: s.Name, Type: s.Type, Redirect: s.Redirect,
-		Label: s.Label, Salt: s.Salt, Port: s.Port, PortGiven: s.PortGiven, Problem: s.Problem, Private: s.Sealed != nil,
+		Label: s.Label, Salt: s.Salt, Port: s.Port, Problem: s.Problem, Private: s.Sealed != nil,
 		UpdatedAt: s.UpdatedAt, EndedAt: s.EndedAt,
 	}
 }

@@ -61,6 +61,7 @@ func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.Acti
 			return workerapi.ActionAnswer{}, err
 		}
 		u.Read = expr.Read{Private: call.Request.Private, Marked: call.Request.Secret}
+		u.SessionKey = compile.SessionKeyNamed(step.With.Written())
 		with, _ := call.Request.With.Get().(map[string]any)
 		diags, err := compile.UpdateSession(ctx, c.opts.Sessions, u, step.Path, with)
 		if err != nil {

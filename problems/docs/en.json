@@ -716,15 +716,16 @@
     ]
   },
   "session_local_port_taken": {
-    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address: the port update-session's localPort gives, or one Meridian picks. Something else listens on the port the workflow gave. Meridian doesn't take another, since the workflow can tell the user to open that one.",
+    "why": "Meridian serves each session on a port of its own of this machine's loopback addresses, 127.0.0.1 and [::1], the same port of both, one the system picks. A process that takes a session over, as after the meridian run that served it ended, serves it at the port it was served at before, and, where another program holds that now, at another. Where the system picked the port, every port it picked, as many times as Meridian asked, was another program's on [::1], so Meridian serves the session at none.",
     "fix": [
-      "Stop what listens on the port, give localPort a port that is free, or leave localPort out, so that Meridian picks one."
+      "For a port the step's session was served at before: nothing, since Meridian serves the session at another port, which meridian session url gives.",
+      "For a port the system picked: find what holds ports on [::1], as ss -ltn shows, stop it, and run meridian resume again."
     ]
   },
   "session_local_port_refused": {
-    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address: the port update-session's localPort gives, or one Meridian picks. The system refused the port the workflow gave: ports below 1024 are privileged on most systems, and Meridian runs as you, without the privilege.",
+    "why": "Meridian serves each session on a port of its own of 127.0.0.1, this machine's loopback address, one the system picks, or, for a session a process takes over, the one it was served at before. The system refused to let Meridian listen there, as where a policy restricts the ports a program may listen on.",
     "fix": [
-      "Give localPort a port from 1024 to 65535, or leave it out, so that Meridian picks one."
+      "Allow Meridian to listen on ports of 127.0.0.1 and [::1] that the system picks, and run meridian resume, or meridian session url, again."
     ]
   },
   "session_name_taken": {
@@ -749,6 +750,48 @@
     "why": "As format 1's platform decides, a run may point a session its own tree made, which a workflow it calls may too; one whose workflow's permissions: hold '*' acts as the person who runs it, and may point any session of theirs. This session is another run's, and this run's tree asks for no '*'.",
     "fix": [
       "Point a session the run's own tree made, as ${{ sessions.<key> }} gives it, or give the workflow at the top of the tree permissions: ['*'], if it is to act as you."
+    ]
+  },
+  "session_field_unsupported": {
+    "why": "meridian run serves a session on this machine, for as long as its run, at a port of its own. detach: true asks for a session that outlives its run, which needs a coordinator that outlives the command, as meridian serve will be. openAI: true asks a platform to register the session as a model's endpoint, which isn't here. useCustomDomain: true it ignores, as format 1 does where a platform has no domain for sessions: each session has a host name of its own here.",
+    "fix": [
+      "Leave the field out, or set it to false, to run the workflow with meridian run."
+    ]
+  },
+  "session_name_needed": {
+    "why": "Format 1's form asks the person who runs a workflow for the name of a session whose prompt-for-name gives no default. meridian run asks no one: it names the session by its default, which must be a name a URL's path holds as it is, as the session's path holds it, and can't be an expression, which is evaluated only after the session is named.",
+    "fix": [
+      "Give prompt-for-name a literal default, as {default: my-session}."
+    ]
+  },
+  "session_update_unsupported": {
+    "why": "targetInfo points a session at a Kubernetes resource, which a platform reaches with its own credentials, and openAI and apiKey register it as a model's endpoint: meridian run has neither.",
+    "fix": [
+      "Leave the field out of update-session's with:."
+    ]
+  },
+  "session_url_invalid": {
+    "why": "update-session with type: link points the session at a URL, which meridian prints for the person who runs the workflow to open, and serves nothing for. It must be an absolute http or https URL.",
+    "fix": [
+      "Give url the page's address, as https://example.com/."
+    ]
+  },
+  "session_port_invalid": {
+    "why": "remotePort, the service's port, is a whole number from 1 to 65535, or text of one, as format 1 reads it, and a tunnel needs it; format 1 takes more, as -1 or +80, which Meridian refuses. localPort, format 1 ignores, and so does Meridian, which serves a session at a port the system picks; but format 1 still fails a step whose localPort isn't a number, or text of a whole number, and so does Meridian.",
+    "fix": [
+      "Give remotePort as a number from 1 to 65535, as remotePort: 8888, and leave localPort out."
+    ]
+  },
+  "session_target_unknown": {
+    "why": "A tunnel's target is where its service is reached from: the workspace, this machine, for none, \"\", localhost or user-workspace; or a cluster, by its id, which, for a cluster of clusters.yaml, is its name, as ${{ inputs.<cluster>.id }} gives it. Meridian reaches the service over SSH through the cluster's host.",
+    "fix": [
+      "Point target at ${{ inputs.<cluster>.id }} of a compute-clusters input, or add the cluster to clusters.yaml."
+    ]
+  },
+  "session_tls_unsupported": {
+    "why": "A tunnel to this machine whose session has useTLS: true is served over HTTPS to its service. meridian run can't yet check the certificate of a service on this machine, and doesn't reach it over plain HTTP instead. A tunnel to a cluster ignores useTLS, as format 1 does.",
+    "fix": [
+      "Serve the app over HTTP on this machine's loopback address, and leave useTLS out of the session."
     ]
   },
   "runs_on_invalid": {
@@ -2134,6 +2177,30 @@
     "why": "Each session is served at a host name of its own, <label>.localhost, whose label is 128 random bits, which a browser resolves to this machine's loopback address. A browser sends a cookie to its host alone, whatever the port, so no request to another name, as 127.0.0.1, localhost or another session's, carries the session's cookie, and its pages' storage is the session's alone; and the session's port listens on both of this machine's loopback addresses, 127.0.0.1 and [::1], where it has IPv6, so no other program can answer at the session's name and port. Meridian answers only requests addressed to that name: one to 127.0.0.1, localhost, or a name made to resolve to 127.0.0.1 (DNS rebinding), it refuses. Chrome and Firefox resolve any name under localhost to this machine themselves, and so do curl and systemd's resolver; a browser that doesn't can't open the session, and Meridian doesn't serve it at 127.0.0.1 instead.",
     "fix": [
       "Open the session at the address meridian session url prints, in a browser that resolves names under localhost, as Chrome and Firefox do, or through ssh -L to it."
+    ]
+  },
+  "session_key_unknown": {
+    "why": "meridian session finds a run's session by its key in the workflow's sessions:, among those of the run's call in its tree that haven't ended: a session ends with the run at the top of its tree. The message lists the keys the run has.",
+    "fix": [
+      "Give the key of one of the run's sessions, as the run's output says it as it serves the session."
+    ]
+  },
+  "session_not_ready": {
+    "why": "A session is served once a step that uses parallelworks/update-session points it at a service, and the process that serves it, which takes it, listens at a port for it; only then has it a link.",
+    "fix": [
+      "Wait for the step, which meridian run shows, and ask again."
+    ]
+  },
+  "session_not_served": {
+    "why": "A session is served by the meridian run, resume or cancel that took it, as long as that process lives. Its link's one-time code is redeemed by that process, so meridian session url makes none while no process serves the session, which nothing would redeem.",
+    "fix": [
+      "Run meridian resume with the run at the top of the session's tree, which serves its sessions again, and then ask for a link."
+    ]
+  },
+  "login_name_unknown": {
+    "why": "A session's path is /me/session/<user>/<name>/, where <user> is the login name of the user who runs Meridian, as workflows read it from PW_USER. Meridian reads it from the system's user database, or else $USER, and found neither.",
+    "fix": [
+      "Run meridian as a user the system's user database has, or set USER to the login name."
     ]
   },
   "source_server_unknown": {

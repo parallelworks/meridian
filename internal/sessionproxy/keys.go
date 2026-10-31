@@ -12,9 +12,9 @@ import (
 
 // KeyLabel is the label under which the key of a Keyring is derived from
 // the state directory's key, as the ssh backend's key of its members'
-// names is: a version of its own, so that a change to what the key makes
-// derives another.
-const KeyLabel = "meridian session tokens v1"
+// names is, which the derivation's info has after "meridian ": a version
+// of its own, so that a change to what the key makes derives another.
+const KeyLabel = "session tokens v1"
 
 // KeyLen is how many bytes a Keyring's key has, and SaltLen a session's
 // salt.

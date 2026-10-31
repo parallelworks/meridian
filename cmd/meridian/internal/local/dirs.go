@@ -15,8 +15,9 @@
 //   - Keys wraps runs' data keys under a key file in the state directory.
 //   - Logs keeps logs as files in the state directory.
 //   - Progress shows a run's events as they happen.
-//
-// There is no local Sessions: a workflow with sessions doesn't run here.
+//   - Sessions serves a run's sessions on this machine, each at a host
+//     name of its own on its loopback addresses (SessionHost), and checks
+//     and names them as a run is created (SessionNames).
 //
 // Every directory and file here that holds the user's config or state
 // belongs to its user, and so does every directory on the way to it, as

@@ -2,12 +2,15 @@ package coordinator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +41,7 @@ type testHost struct {
 	mu     sync.Mutex
 	n      int
 	called []bool
+	keys   []string
 	points []string
 	served [][]Session
 }
@@ -64,7 +68,7 @@ func (h *testHost) Check(_ context.Context, sessions map[string]any, called bool
 
 func (h *testHost) Point(_ context.Context, s Session, u compile.SessionUpdate, serve bool) (SessionPoint, error) {
 	if u.With["remoteHost"] == "refuse" {
-		return SessionPoint{}, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "1"})
+		return SessionPoint{}, problems.SessionLocalPortTaken.Problem(problems.Params{"port": "1", "picked": "false"})
 	}
 	data, err := json.Marshal(u.With, json.Deterministic(true))
 	if err != nil {
@@ -73,7 +77,8 @@ func (h *testHost) Point(_ context.Context, s Session, u compile.SessionUpdate, 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.points = append(h.points, fmt.Sprintf("%s %s %v %s serve=%t", s.Name, s.Key, s.Def, data, serve))
-	return SessionPoint{Point: data, Port: 20000 + len(h.points), PortGiven: u.With["localPort"] != nil}, nil
+	h.keys = append(h.keys, u.SessionKey)
+	return SessionPoint{Point: data, Port: 20000 + len(h.points)}, nil
 }
 
 func (h *testHost) Serve(_ context.Context, live []Session) {
@@ -230,7 +235,7 @@ func TestSessionsUpdate(t *testing.T) {
 	if err != nil || len(sessions) != 1 {
 		t.Fatal(sessions, err)
 	}
-	if s := sessions[0]; string(s.Point) != `{"localPort":7000,"remotePort":9999}` || s.Port != 20002 || !s.PortGiven {
+	if s := sessions[0]; string(s.Point) != `{"localPort":7000,"remotePort":9999}` || s.Port != 20002 {
 		t.Errorf("the session as the store keeps it: %+v", s)
 	}
 	waitFor(t, func() bool {
@@ -407,9 +412,14 @@ jobs:
 	h.mu.Lock()
 	points := slices.Clone(h.points)
 	served := slices.Clone(h.served)
+	keys := slices.Clone(h.keys)
 	h.mu.Unlock()
 	if len(points) != 1 || !strings.HasPrefix(points[0], "desktop-run desktop ") {
 		t.Errorf("the host pointed %q", points)
+	}
+	// The step names it by its key, as format 1 reads its name as written.
+	if !slices.Equal(keys, []string{"desktop"}) {
+		t.Errorf("the host was told the step names the session by %q", keys)
 	}
 	if !slices.ContainsFunc(served, func(live []Session) bool { return len(live) == 1 && live[0].Point != nil }) {
 		t.Error("the host was never asked to serve the session where the step pointed it")
@@ -564,6 +574,9 @@ func TestSessionsTakenOver(t *testing.T) {
 		return nil
 	}
 	waitFor(t, func() bool { return served(hb, "one-1") != nil && served(hc, "two-1") != nil })
+	if serving, err := a.SessionServing(t.Context(), was["one-1"].ID); err != nil || !serving {
+		t.Errorf("a sees the session b serves as served: %t, %v", serving, err)
+	}
 
 	stopA := serving(a)
 	defer stopA()
@@ -768,7 +781,7 @@ func TestSessionsServedPastOneUnopened(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return tx.PointSession(bad.ID, nil, []byte("damaged"), bad.Generation+1, bad.Port, false)
+		return tx.PointSession(bad.ID, nil, []byte("damaged"), bad.Generation+1, bad.Port)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -815,7 +828,7 @@ func TestSessionServed(t *testing.T) {
 	if s := shown(); s.Port != 31000 || s.Problem != nil {
 		t.Errorf("served at another port, the session shows %+v", s)
 	}
-	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "31000"})
+	taken := problems.SessionLocalPortTaken.Problem(problems.Params{"port": "31000", "picked": "false"})
 	if err := c.SessionServed(t.Context(), id, 0, taken); err != nil {
 		t.Fatal(err)
 	}
@@ -998,6 +1011,26 @@ func TestSessionsOfCalls(t *testing.T) {
 	if !slices.Equal(made, all) {
 		t.Errorf("the tree's sessions are %q, want %q", made, all)
 	}
+	// Any run of a call finds the sessions it shares.
+	for which, call := range map[string]string{"retried": "first", "attempted": "first", "other": "fan", "other leaf": "leaf 2"} {
+		shared, err := c.CallSessions(t.Context(), children[which])
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := map[string]string{}
+		for _, s := range shared {
+			found[s.Key] = s.Name
+		}
+		if !maps.Equal(found, want[call]) {
+			t.Errorf("the %s child's call's sessions are %v, want %v", which, found, want[call])
+		}
+	}
+	if own, err := c.CallSessions(t.Context(), root); err != nil || len(own) != 0 {
+		t.Errorf("the root's own sessions are %+v, %v", own, err)
+	}
+	if _, err := c.CallSessions(t.Context(), "999"); !errors.Is(err, ErrRunNotFound) {
+		t.Errorf("CallSessions of a run the store hasn't = %v", err)
+	}
 }
 
 // TestSessionsPointedTogether checks steps of two processes that point one
@@ -1087,5 +1120,19 @@ func TestSessionNames(t *testing.T) {
 	path := []callLevel{{Job: "build", Step: 2}, {Job: "main job", Step: 0, Cleanup: true}}
 	if got := sessionName("my flow", "12", path, "desk/top"); got != "my-flow_12_build_step_2_main-job_step_0_cleanup_desk-top" {
 		t.Errorf("sessionName = %q", got)
+	}
+	// A deep tree's, too long for a cookie's path, is made short, the same
+	// each time, and another call's another.
+	deep := slices.Repeat([]callLevel{{Job: strings.Repeat("j", 30), Step: 1}}, 5)
+	long, again := sessionName("w", "1", deep, "desktop"), sessionName("w", "1", deep, "desktop")
+	other := sessionName("w", "1", deep, "notes")
+	if len(long) != maxSessionName || long != again || other == long || !strings.HasPrefix(long, "w_1_"+strings.Repeat("j", 30)+"_step_1_") ||
+		!regexp.MustCompile(`-[0-9a-f]{16}$`).MatchString(long) {
+		t.Errorf("a deep tree's session is named %q, and %q, and another %q", long, again, other)
+	}
+	full := "w_1_" + strings.Repeat(strings.Repeat("j", 30)+"_step_1_", 5) + "desktop"
+	sum := sha256.Sum256([]byte(full))
+	if want := full[:maxSessionName-17] + "-" + hex.EncodeToString(sum[:8]); long != want {
+		t.Errorf("a deep tree's session is named %q, want %q", long, want)
 	}
 }
