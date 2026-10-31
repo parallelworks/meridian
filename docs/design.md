@@ -1989,6 +1989,14 @@ another repository's copy, its lock or a copy being made is in the cache,
 where a repository's name, as `.github`, can start with one; and a `$yaml`
 with an empty name or `.` in it, or a control character, `./` among them,
 whose reading by ACTIVATE can't be confirmed.
+A reference to a workflow a platform stores reads as ACTIVATE reads it
+too: a `marketplace/` one as the item's slug and version,
+`marketplace/<slug>/<version>`, where the version follows the slug's first
+slash, or, without one, its first `@`, and is `latest` when there is none,
+so that `marketplace/m@v1` and `marketplace/m/v1` are one; a `workflow/`
+one, a saved workflow's name, as it is written; and neither with its
+`$yaml` or `$host`, which ACTIVATE ignores and the schema warns of. A
+platform reads the normal reference as the same item.
 Two steps whose references read the same are pinned once, to one commit,
 however they write it. A pinned workflow keeps its reference beside its
 commit and digest (`Source.Ref`), so Sources reads it again by it, and gives
