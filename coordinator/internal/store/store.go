@@ -325,7 +325,7 @@ func openOnce(ctx context.Context, path string, log *slog.Logger, opts *Options,
 		return nil, err
 	}
 	s := &Store{driver: d, db: d.DB(), log: log, readOnly: readOnly}
-	s.initEraser(ctx, s.db, log)
+	s.initEraser(ctx)
 	s.maxLead = DefaultMaxLead
 	if opts != nil {
 		s.lastTry, s.retriesFor, s.clock = opts.LastTry, opts.RetriesFor, opts.Now

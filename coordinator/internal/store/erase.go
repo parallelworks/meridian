@@ -4,15 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"log/slog"
 	"strconv"
 	"sync"
 	"time"
 )
 
-// A walEraser erases from the store's write-ahead log the secret records
-// its transactions delete (eraseWAL), for the Store it is part of, whose
-// database db is, and which logs to log.
+// A walEraser is the state of a Store's erasure of the secret records its
+// transactions delete from the write-ahead log (Store.eraseWAL), which the
+// Store embeds; its methods are the Store's, which reads its database and
+// logs to its logger as everything else of it does.
 //
 // pending is set while the write-ahead log may hold a secret record a
 // transaction deleted, which a reader or a writer kept a truncation from
@@ -29,9 +29,6 @@ import (
 // checkpointing with the connection of a try that waits for no one, as
 // its checkpoint is about to run (truncateWALNow).
 type walEraser struct {
-	db  *sql.DB
-	log *slog.Logger
-
 	warnAfter     time.Duration
 	walMu         sync.Mutex
 	pending       bool
@@ -46,36 +43,35 @@ type walEraser struct {
 	erased        func()
 }
 
-// initEraser readies e for the store whose database db is, which logs to
-// log, until its close, which ctx, without its cancel, outlives.
-func (e *walEraser) initEraser(ctx context.Context, db *sql.DB, log *slog.Logger) {
-	e.db, e.log = db, log
-	e.closing, e.close = context.WithCancel(context.WithoutCancel(ctx))
-	e.warnAfter = eraseWarnAfter
+// initEraser readies the store's erasure of its write-ahead log until the
+// store closes, which ctx, without its cancel, outlives.
+func (s *Store) initEraser(ctx context.Context) {
+	s.closing, s.close = context.WithCancel(context.WithoutCancel(ctx))
+	s.warnAfter = eraseWarnAfter
 }
 
 // stopErasing ends the goroutine that tries a truncation again, and its
 // try, and waits for it. closing is cancelled under walMu, which a new
 // goroutine starts under, so that none starts after the wait.
-func (e *walEraser) stopErasing() {
-	e.walMu.Lock()
-	e.close()
-	e.walMu.Unlock()
-	e.erasers.Wait()
+func (s *Store) stopErasing() {
+	s.walMu.Lock()
+	s.close()
+	s.walMu.Unlock()
+	s.erasers.Wait()
 }
 
 // eraseLast tries once more, as the store closes, a truncation of the
 // write-ahead log that a reader or a writer held up, once the goroutine
 // that tries it again has ended (stopErasing), and warns if it is held up
 // too; one held up after this one warns itself (eraseWAL).
-func (e *walEraser) eraseLast() {
-	e.stopErasing()
-	e.walMu.Lock()
-	pending := e.pending
-	e.lastTried = true
-	e.walMu.Unlock()
-	if pending && !e.truncateWAL(context.WithoutCancel(e.closing)) {
-		e.warnPending()
+func (s *Store) eraseLast() {
+	s.stopErasing()
+	s.walMu.Lock()
+	pending := s.pending
+	s.lastTried = true
+	s.walMu.Unlock()
+	if pending && !s.truncateWAL(context.WithoutCancel(s.closing)) {
+		s.warnPending()
 	}
 }
 
@@ -92,38 +88,38 @@ func (e *walEraser) eraseLast() {
 // first. hopper's maintenance truncates the log only once it is past
 // 8 MiB, which a log that holds a record needn't be, so the store counts
 // on itself alone.
-func (e *walEraser) eraseWAL(ctx context.Context) {
-	e.walMu.Lock()
-	heldUp := e.heldUp
-	e.walMu.Unlock()
-	if e.truncateWAL(ctx) {
-		if e.truncated != nil {
-			e.truncated()
+func (s *Store) eraseWAL(ctx context.Context) {
+	s.walMu.Lock()
+	heldUp := s.heldUp
+	s.walMu.Unlock()
+	if s.truncateWAL(ctx) {
+		if s.truncated != nil {
+			s.truncated()
 		}
-		e.walMu.Lock()
-		if e.heldUp == heldUp {
-			e.pending = false
+		s.walMu.Lock()
+		if s.heldUp == heldUp {
+			s.pending = false
 		}
-		e.walMu.Unlock()
+		s.walMu.Unlock()
 		return
 	}
-	e.walMu.Lock()
-	defer e.walMu.Unlock()
-	e.heldUp++
+	s.walMu.Lock()
+	defer s.walMu.Unlock()
+	s.heldUp++
 	switch {
-	case e.lastTried:
+	case s.lastTried:
 		// The store has closed, past its last try.
-		e.warnPending()
+		s.warnPending()
 		return
-	case e.closing.Err() != nil:
+	case s.closing.Err() != nil:
 		// Close's last try, which hasn't been made, covers it.
-		e.pending = true
+		s.pending = true
 		return
 	}
-	e.pending = true
-	if !e.erasing {
-		e.erasing = true
-		e.erasers.Go(e.eraseLater)
+	s.pending = true
+	if !s.erasing {
+		s.erasing = true
+		s.erasers.Go(s.eraseLater)
 	}
 }
 
@@ -140,55 +136,55 @@ const (
 // succeeds, or the store closes (eraseWAL), each try without waiting for
 // a reader or a writer (truncateWALNow), and warns once if it has tried
 // for warnAfter, then says so again only below its warnings.
-func (e *walEraser) eraseLater() {
-	if e.erased != nil {
-		defer e.erased()
+func (s *Store) eraseLater() {
+	if s.erased != nil {
+		defer s.erased()
 	}
 	began, warned := time.Now(), false
 	for wait := eraseRetryFirst; ; wait = min(2*wait, eraseRetryMost) {
 		t := time.NewTimer(wait)
 		select {
-		case <-e.closing.Done():
+		case <-s.closing.Done():
 			t.Stop()
-			e.walMu.Lock()
-			e.erasing = false
-			e.walMu.Unlock()
+			s.walMu.Lock()
+			s.erasing = false
+			s.walMu.Unlock()
 			return
 		case <-t.C:
 		}
-		e.walMu.Lock()
-		heldUp := e.heldUp
-		e.walMu.Unlock()
-		if e.truncateWALNow(e.closing) {
-			if e.truncated != nil {
-				e.truncated()
+		s.walMu.Lock()
+		heldUp := s.heldUp
+		s.walMu.Unlock()
+		if s.truncateWALNow(s.closing) {
+			if s.truncated != nil {
+				s.truncated()
 			}
-			e.walMu.Lock()
-			if e.heldUp == heldUp {
-				e.erasing, e.pending = false, false
-				e.walMu.Unlock()
+			s.walMu.Lock()
+			if s.heldUp == heldUp {
+				s.erasing, s.pending = false, false
+				s.walMu.Unlock()
 				return
 			}
 			// A try held up as this one ran may be of a record deleted
 			// after the log it truncated: tried again, from the first wait.
-			e.walMu.Unlock()
+			s.walMu.Unlock()
 			wait = eraseRetryFirst / 2
 			continue
 		}
-		e.walMu.Lock()
-		e.heldUp++
-		e.walMu.Unlock()
-		if !warned && time.Since(began) >= e.warnAfter {
+		s.walMu.Lock()
+		s.heldUp++
+		s.walMu.Unlock()
+		if !warned && time.Since(began) >= s.warnAfter {
 			warned = true
-			e.log.Warn("store: a reader or a writer has kept the write-ahead log from being truncated for a while, so it may still hold a secret record deleted since; it is tried again", "for", time.Since(began).Round(time.Second))
+			s.log.Warn("store: a reader or a writer has kept the write-ahead log from being truncated for a while, so it may still hold a secret record deleted since; it is tried again", "for", time.Since(began).Round(time.Second))
 		}
 	}
 }
 
 // warnPending warns that the log may hold a secret record past the
 // store's close.
-func (e *walEraser) warnPending() {
-	e.log.Warn("store: a reader or a writer kept the write-ahead log from being truncated as the store closed, so it may still hold a secret record deleted since; the next Open truncates it")
+func (s *Store) warnPending() {
+	s.log.Warn("store: a reader or a writer kept the write-ahead log from being truncated as the store closed, so it may still hold a secret record deleted since; the next Open truncates it")
 }
 
 // A queryer is a database or one of its connections, which a checkpoint
@@ -202,8 +198,8 @@ type queryer interface {
 // from the log, or a writer, keeps the checkpoint from finishing once the
 // busy timeout has passed, which the store says in its log only below its
 // warnings, as it tries again (eraseWAL). An error it warns of.
-func (e *walEraser) truncateWAL(ctx context.Context) bool {
-	return e.checkpoint(ctx, e.db)
+func (s *Store) truncateWAL(ctx context.Context) bool {
+	return s.checkpoint(ctx, s.db)
 }
 
 // truncateWALNow is truncateWAL without waiting for a reader or a writer:
@@ -211,11 +207,11 @@ func (e *walEraser) truncateWAL(ctx context.Context) bool {
 // that a checkpoint held up fails at once, rather than hold back writers,
 // as a truncation that waits for readers does, for the busy timeout. A
 // connection whose busy timeout it can't set back isn't used again.
-func (e *walEraser) truncateWALNow(ctx context.Context) bool {
-	conn, err := e.db.Conn(ctx)
+func (s *Store) truncateWALNow(ctx context.Context) bool {
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
-			e.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
+			s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
 		}
 		return false
 	}
@@ -223,7 +219,7 @@ func (e *walEraser) truncateWALNow(ctx context.Context) bool {
 	var timeout int64
 	if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&timeout); err != nil {
 		if ctx.Err() == nil {
-			e.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
+			s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
 		}
 		return false
 	}
@@ -236,19 +232,19 @@ func (e *walEraser) truncateWALNow(ctx context.Context) bool {
 	}()
 	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout = 0"); err != nil {
 		if ctx.Err() == nil {
-			e.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
+			s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
 		}
 		return false
 	}
-	if e.checkpointing != nil {
-		e.checkpointing(conn)
+	if s.checkpointing != nil {
+		s.checkpointing(conn)
 	}
-	return e.checkpoint(ctx, conn)
+	return s.checkpoint(ctx, conn)
 }
 
 // checkpoint runs a truncating checkpoint of the write-ahead log on q, as
 // truncateWAL says.
-func (e *walEraser) checkpoint(ctx context.Context, q queryer) bool {
+func (s *Store) checkpoint(ctx context.Context, q queryer) bool {
 	var busy, logPages, checkpointed int64
 	err := q.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &checkpointed)
 	switch {
@@ -256,10 +252,10 @@ func (e *walEraser) checkpoint(ctx context.Context, q queryer) bool {
 		// The store is closing.
 		return false
 	case err != nil:
-		e.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
+		s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
 		return false
 	case busy != 0:
-		e.log.DebugContext(ctx, "store: a reader or a writer kept the write-ahead log from being checkpointed and truncated, which is tried again", "pages", logPages, "checkpointed", checkpointed)
+		s.log.DebugContext(ctx, "store: a reader or a writer kept the write-ahead log from being checkpointed and truncated, which is tried again", "pages", logPages, "checkpointed", checkpointed)
 		return false
 	}
 	return true
