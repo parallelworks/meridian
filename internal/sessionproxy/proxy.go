@@ -139,9 +139,21 @@ type Config struct {
 	// open, or opening, at once: DefaultMaxConns for 0.
 	MaxConns int
 	// Log hears of what the proxy can't do that no answer says, as a
-	// connection to the service that failed. Nil means none.
+	// connection to the service that failed, once a minute at most. Nil
+	// means none.
 	Log *slog.Logger
+	// Private is set for a session where what it is, or where it points,
+	// read a variable, a password or a secret: of a connection that
+	// failed, Log hears only its problem's code, since what an error says,
+	// as the service's address, can be what the session read. A session
+	// can be made private later, never public again (MarkPrivate).
+	Private bool
 }
+
+// logEvery is how often, at most, the proxy logs a connection to the
+// service that failed: a browser that retries one that doesn't answer
+// would log one each time.
+const logEvery = time.Minute
 
 // A Proxy serves one session (Serve).
 type Proxy struct {
@@ -153,6 +165,12 @@ type Proxy struct {
 	// and end ends it.
 	life context.Context
 	end  context.CancelFunc
+
+	// private is the session's privacy (Config.Private, MarkPrivate), and
+	// logged when it last logged a connection that failed, in Unix
+	// nanoseconds.
+	private atomic.Bool
+	logged  atomic.Int64
 
 	mu     sync.Mutex
 	secret []byte
@@ -220,22 +238,66 @@ func New(ctx context.Context, cfg Config) (*Proxy, error) {
 	if cfg.Log != nil {
 		errorLog = slog.NewLogLogger(cfg.Log.Handler(), slog.LevelWarn)
 	}
+	p.private.Store(cfg.Private)
 	p.target = p.newTarget(cfg.Dial)
 	p.reverse = &httputil.ReverseProxy{
-		Rewrite: p.rewrite, Transport: switching{p}, ModifyResponse: p.modify, ErrorLog: errorLog,
+		Rewrite: p.rewrite, Transport: switching{p}, ModifyResponse: p.modify, ErrorLog: log.New(privateLog{p, errorLog}, "", 0),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if errors.Is(err, errBusy) {
 				page(w, r, http.StatusServiceUnavailable, problems.SessionBusy, problems.Params{"name": cfg.Name, "limit": cfg.MaxConns})
 				return
 			}
-			if cfg.Log != nil && !errors.Is(err, context.Canceled) {
-				cfg.Log.Warn("sessionproxy: the session's service didn't answer", "session", cfg.Name, "err", err)
+			if !errors.Is(err, context.Canceled) {
+				p.logFailed(err)
 			}
 			page(w, r, http.StatusBadGateway, problems.SessionUnreachable, problems.Params{"name": cfg.Name})
 		},
 	}
 	p.server = &http.Server{Handler: p, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, ErrorLog: errorLog}
 	return p, nil
+}
+
+// MarkPrivate makes the session private from now on (Config.Private), as
+// a step that points it from a variable, a password or a secret does.
+func (p *Proxy) MarkPrivate() { p.private.Store(true) }
+
+// logFailed logs err, of a connection to the service that failed, unless
+// one was logged in the last logEvery: for a private session, only its
+// problem's code, masked as what the session read is, or that it isn't
+// one.
+func (p *Proxy) logFailed(err error) {
+	if p.cfg.Log == nil {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := p.logged.Load()
+	if last != 0 && now-last < int64(logEvery) || !p.logged.CompareAndSwap(last, now) {
+		return
+	}
+	if !p.private.Load() {
+		p.cfg.Log.Warn("sessionproxy: the session's service didn't answer", "session", p.cfg.Name, "err", err)
+		return
+	}
+	code := "an error that isn't a problem, left out as the session is private"
+	if prob, ok := errors.AsType[*problem.Problem](err); ok {
+		code = string(problems.MaskProblem(prob).Code)
+	}
+	p.cfg.Log.Warn("sessionproxy: the session's service didn't answer", "session", p.cfg.Name, "problem", code)
+}
+
+// privateLog writes the reverse proxy's own log, as of a body it couldn't
+// copy, to log, but for a private session, of which it writes nothing,
+// since what an error says can be what the session read.
+type privateLog struct {
+	p   *Proxy
+	log *log.Logger
+}
+
+func (l privateLog) Write(b []byte) (int, error) {
+	if !l.p.private.Load() {
+		l.log.Print(string(b))
+	}
+	return len(b), nil
 }
 
 // Path returns the path the proxy serves the session at, with a slash

@@ -157,7 +157,7 @@ func TestDialTCPAddress(t *testing.T) {
 		"localhost", "node-01", "c1.cluster.example", "login_2.hpc", "Node7", "127.0.0.1", "::1", "fe80::1", "::ffff:127.0.0.1",
 		strings.Repeat("a", 63) + "." + strings.Repeat("b", 63),
 	} {
-		if !tcpHost(host) {
+		if !TCPHost(host) {
 			t.Errorf("the host %q is refused", host)
 		}
 	}

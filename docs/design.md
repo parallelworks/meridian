@@ -5578,7 +5578,9 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   `remoteHost` says, as format 1 has it; a cluster of `clusters.yaml`, by
   its id, is reached over SSH through the cluster's host, as its jobs'
   workers are, where its host connects to `remoteHost`, `localhost` by
-  default (`session_target_unknown` for another). `localhost` is resolved
+  default (`session_target_unknown` for another), which must be an
+  address, or a name, that the cluster's host can be asked to connect to,
+  or the step fails (`ssh_tcp_address_invalid`). `localhost` is resolved
   as 127.0.0.1, where a service that listens on one loopback address alone
   listens, and never by a resolver, which can give `[::1]` first, where
   another user of the machine could listen at the same port and take the
@@ -5705,14 +5707,17 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
 - **Bounds.** A session has 16 connections to its service open, or
   opening, at once, at most, a quarter of what the ssh backend opens over
   its connection to a host. A request waits ten seconds at most for one,
-  and then is told the session has as many as it may
-  (`session_busy`, 503), or, where its dial took that long, that the
-  service doesn't answer (`session_unreachable`, 502); a dial it gave up
-  on goes on holding its place until it ends: so a browser that retries a
-  service that doesn't answer can't take what the host's other sessions
-  need. A page that keeps a connection open, as a WebSocket, holds one as
-  long as it is open. A browser has ten seconds to send a
-  request's headers, and a connection waits two minutes for its next.
+  and then is told the session has as many as it may (`session_busy`,
+  503), or, where its dial took that long, that the service doesn't answer
+  (`session_unreachable`, 502); a dial it gave up on goes on holding its
+  place until it ends: so a browser that retries a service that doesn't
+  answer can't take what the host's other sessions need. A page that keeps
+  a connection open, as a WebSocket, holds one as long as it is open. A
+  browser has ten seconds to send a request's headers, and a connection
+  waits two minutes for its next. A connection to the service that fails
+  is logged once a minute at most; of a private session, as the problem's
+  code alone, since what its error says, as the service's address, can be
+  what the session read.
 - **Pages.** What the port answers itself is a page of text, in the
   language the browser asks for, which no cache keeps; a request without
   the cookie is 401, with `WWW-Authenticate: Meridian-Link`, a scheme of

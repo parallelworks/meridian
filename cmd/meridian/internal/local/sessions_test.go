@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator"
+	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/sessionproxy"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -260,6 +262,12 @@ func TestSessionPoint(t *testing.T) {
 		{map[string]any{"remotePort": float64(1), "localPort": true}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": "-1"}, nil, problems.SessionPortInvalid},
 		{map[string]any{"remotePort": float64(1), "target": "nowhere"}, nil, problems.SessionTargetUnknown},
+		// What the cluster's host can't be asked to connect to fails the
+		// step, rather than each request.
+		{map[string]any{"remotePort": float64(1), "target": "hpc", "remoteHost": "node 1"}, nil, problems.SSHTCPAddressInvalid},
+		{map[string]any{"remotePort": float64(1), "target": "hpc", "remoteHost": "-oProxyCommand=x"}, nil, problems.SSHTCPAddressInvalid},
+		{map[string]any{"remotePort": float64(1), "target": "hpc", "remoteHost": "a..b"}, nil, problems.SSHTCPAddressInvalid},
+		{map[string]any{"remotePort": float64(1), "target": "hpc", "remoteHost": "[::1]"}, nil, problems.SSHTCPAddressInvalid},
 		{map[string]any{"type": "link", "url": "ftp://example.com/"}, nil, problems.SessionURLInvalid},
 		{map[string]any{"type": "link", "url": "/relative"}, nil, problems.SessionURLInvalid},
 		{map[string]any{"remotePort": float64(1), "targetInfo": map[string]any{"name": "pod"}}, nil, problems.SessionUpdateUnsupported},
@@ -766,3 +774,87 @@ func TestSessionDialerPinned(t *testing.T) {
 		t.Error("a service that answered at 127.0.0.1, and then refused, was asked at [::1]")
 	}
 }
+
+// TestSessionPrivateLog checks that a private session's address stays out
+// of the host's log, as the store keeps it out of sight: one a step
+// points from a variable, a password or a secret, first or again, one the
+// store says is private, and one taken over private, whose cluster's host
+// can't connect to where it points.
+func TestSessionPrivateLog(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []string{"pointed from a secret", "pointed again from a secret", "private in the store", "taken over"} {
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := LoadConfig(configDir(t, map[string]string{ClustersFile: "hpc:\n  host: farm\n"}), lookup(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			var mu sync.Mutex
+			logger := slog.New(slog.NewTextHandler(writerFunc(func(b []byte) (int, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				return out.Write(b)
+			}), nil))
+			dial := func(_ context.Context, clusterHost, host string, port int) (net.Conn, error) {
+				return nil, problems.SSHTCPConnectFailed.Problem(problems.Params{"host": clusterHost, "address": net.JoinHostPort(host, strconv.Itoa(port)), "reason": "connection refused"})
+			}
+			h, err := NewSessionHost(cfg, Login{Name: "alice"}, []byte(strings.Repeat("k", sessionproxy.KeyLen)), dial, logger)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			h.Attach("store", &testSessionStore{})
+			s := testSession(map[string]any{})
+			with := map[string]any{"remotePort": float64(8888), "target": "hpc", "remoteHost": "secret-node"}
+			point := func(read expr.Read) {
+				t.Helper()
+				sp, err := h.Point(t.Context(), s, compile.SessionUpdate{Name: s.Name, With: with, Read: read}, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.Point, s.Port = sp.Point, sp.Port
+			}
+			switch tc {
+			case "pointed from a secret":
+				point(expr.Read{Marked: true})
+			case "pointed again from a secret":
+				point(expr.Read{})
+				point(expr.Read{Private: true})
+			case "private in the store":
+				point(expr.Read{})
+				s.Private = true
+				h.Serve(t.Context(), []coordinator.Session{s})
+			case "taken over":
+				s.Point, s.Private = []byte(`{"type":"tunnel","cluster":"hpc","remoteHost":"secret-node","remotePort":8888}`), true
+				h.Serve(t.Context(), []coordinator.Session{s})
+				h.mu.Lock()
+				s.Port = h.served[s.ID].listener.Port()
+				h.mu.Unlock()
+			}
+			link, err := h.Link(t.Context(), s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := sessionClient(t)
+			if code, _ := get(t, client, link); code != http.StatusOK {
+				t.Fatalf("the link answers %d", code)
+			}
+			u, _ := url.Parse(link)
+			if code, _ := get(t, client, u.Scheme+"://"+u.Host+u.Path); code != http.StatusBadGateway {
+				t.Errorf("a service its cluster's host can't reach answers %d", code)
+			}
+			mu.Lock()
+			logged := out.String()
+			mu.Unlock()
+			if strings.Contains(logged, "secret-node") || !strings.Contains(logged, "ssh_tcp_connect_failed") {
+				t.Errorf("a private session's failure is logged as:\n%s", logged)
+			}
+		})
+	}
+}
+
+// writerFunc is a function as an io.Writer.
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
