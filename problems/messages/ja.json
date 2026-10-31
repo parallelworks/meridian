@@ -261,7 +261,7 @@
   "variable_env_unset": "変数 {variable} は環境変数 {env} から値を取りますが、その環境変数は設定されていません。",
   "variable_file_unreadable": "変数 {variable} はファイル {file} から値を取りますが、そのファイルを読み込めません: {reason}",
   "variable_file_home": "変数 {variable} は {file} から値を取りますが、その ~/ のための HOME が絶対パスに設定されていません。",
-  "cluster_name_invalid": "クラスター名「{cluster}」は無効です。名前には英字、数字、_、-、. を使い、英字か数字で始め、workspace と user-workspace 以外にします。",
+  "cluster_name_invalid": "クラスター名「{cluster}」は無効です。名前には英字、数字、_、-、. を使い、英字か数字で始め、workspace、user-workspace、localhost 以外にします。",
   "cluster_invalid": "クラスター「{cluster}」の {key} が {value} で、有効ではありません。",
   "key_file_invalid": "鍵ファイル {path} は {size} バイトで、鍵の 32 バイトではありません。",
   "key_file_missing": "鍵ファイル {path} が存在しないため、それがラップしたデータ鍵をアンラップできません。",

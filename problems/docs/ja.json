@@ -1853,7 +1853,7 @@
   },
   "cluster_name_invalid": {
     "title": "無効なクラスター名",
-    "why": "クラスターの名前は、compute-clusters 入力の値が指定するものです。workspace と user-workspace は、フォーマット 1 が workspace を指す名前と同じく、このマシンを指します。",
+    "why": "クラスターの名前は、compute-clusters 入力の値が指定するものです。workspace と user-workspace は、フォーマット 1 が workspace を指す名前と同じく、このマシンを指します。クラスターの名前はその id でもあり、セッションのターゲットが読み取ります。フォーマット 1 はターゲット localhost も workspace として読み取ります。",
     "fix": [
       "クラスターの名前を変えてください。"
     ]

@@ -261,7 +261,7 @@
   "variable_env_unset": "La variable {variable} toma su valor de la variable de entorno {env}, que no está definida.",
   "variable_file_unreadable": "La variable {variable} toma su valor del archivo {file}, que no se puede leer: {reason}.",
   "variable_file_home": "La variable {variable} toma su valor de {file}, y HOME no tiene una ruta absoluta para su ~/.",
-  "cluster_name_invalid": "El nombre de clúster “{cluster}” no es válido: un nombre tiene letras, dígitos, _, - y ., empieza por una letra o un dígito, y no es workspace ni user-workspace.",
+  "cluster_name_invalid": "El nombre de clúster “{cluster}” no es válido: un nombre tiene letras, dígitos, _, - y ., empieza por una letra o un dígito, y no es workspace, user-workspace ni localhost.",
   "cluster_invalid": "El clúster “{cluster}” tiene {key}: {value}, que no es válido.",
   "key_file_invalid": "El archivo de clave {path} tiene {size} bytes, no los 32 de una clave.",
   "key_file_missing": "El archivo de clave {path} no está, así que las claves de datos que envolvió no se pueden desenvolver.",

@@ -267,7 +267,7 @@
   "variable_env_unset": "The variable {variable} takes its value from the environment variable {env}, which isn't set.",
   "variable_file_unreadable": "The variable {variable} takes its value from the file {file}, which can't be read: {reason}.",
   "variable_file_home": "The variable {variable} takes its value from {file}, and HOME isn't set to an absolute path for its ~/.",
-  "cluster_name_invalid": "The cluster name \"{cluster}\" isn't valid: a name has letters, digits, _, - and ., starts with a letter or a digit, and isn't workspace or user-workspace.",
+  "cluster_name_invalid": "The cluster name \"{cluster}\" isn't valid: a name has letters, digits, _, - and ., starts with a letter or a digit, and isn't workspace, user-workspace or localhost.",
   "cluster_invalid": "The cluster \"{cluster}\" has {key}: {value}, which isn't valid.",
   "key_file_invalid": "The key file {path} has {size} bytes, not the 32 of a key.",
   "key_file_missing": "The key file {path} isn't there, so the data keys it wrapped can't be unwrapped.",
