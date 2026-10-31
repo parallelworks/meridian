@@ -127,13 +127,15 @@ func TestSessionCodes(t *testing.T) {
 				return err
 			}
 		}
-		later := time.Now().Add(time.Hour)
+		later := time.Hour
 		for _, code := range []string{"once", "other", "reset"} {
 			if err := tx.AddSessionCode("a", []byte(code), later); err != nil {
 				return err
 			}
 		}
-		if err := tx.AddSessionCode("a", []byte("expired"), time.Now().Add(-time.Minute)); err != nil {
+		// A code whose lifetime has passed, by the store's clock, as
+		// it is added.
+		if err := tx.AddSessionCode("a", []byte("expired"), -time.Minute); err != nil {
 			return err
 		}
 		if err := tx.AddSessionCode("nothing", []byte("x"), later); !errors.Is(err, ErrNotFound) {
@@ -181,8 +183,8 @@ func TestSessionCodes(t *testing.T) {
 }
 
 // TestSessionsEndWithRoot checks that a tree's sessions end as its root
-// ends, those its children made among them, and not before: their data is
-// erased, their codes deleted, the store no longer finds them by name or
+// ends, those its children made among them, and not before: their data and
+// their salts are erased, their codes deleted, the store no longer finds them by name or
 // among those live, a reset or a point of one is ErrState, and another
 // session may take the name.
 func TestSessionsEndWithRoot(t *testing.T) {
@@ -201,7 +203,7 @@ func TestSessionsEndWithRoot(t *testing.T) {
 		if err := tx.PointSession("a", nil, []byte("sealed"), 1, 9000, false); err != nil {
 			return err
 		}
-		return tx.AddSessionCode("a", []byte("code"), time.Now().Add(time.Hour))
+		return tx.AddSessionCode("a", []byte("code"), time.Hour)
 	})
 	inTx(t, s, func(tx *Tx) error { return tx.EndRun(child, plan.OutcomeSuccess, "") })
 	inTx(t, s, func(tx *Tx) error {
@@ -219,7 +221,7 @@ func TestSessionsEndWithRoot(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if got.EndedAt.IsZero() || got.Data != nil || got.Sealed != nil {
+			if got.EndedAt.IsZero() || got.Data != nil || got.Sealed != nil || len(got.Salt) != 0 {
 				t.Errorf("session %s once its root ended: %+v", id, got)
 			}
 		}
@@ -232,7 +234,7 @@ func TestSessionsEndWithRoot(t *testing.T) {
 		if err := tx.PointSession("a", []byte("{}"), nil, 0, 1, false); !errors.Is(err, ErrState) {
 			t.Errorf("pointing an ended session = %v, want ErrState", err)
 		}
-		if err := tx.AddSessionCode("a", []byte("x"), time.Now().Add(time.Hour)); !errors.Is(err, ErrState) {
+		if err := tx.AddSessionCode("a", []byte("x"), time.Hour); !errors.Is(err, ErrState) {
 			t.Errorf("a code of an ended session = %v, want ErrState", err)
 		}
 		var codes int

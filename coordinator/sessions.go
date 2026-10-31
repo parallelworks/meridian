@@ -252,6 +252,12 @@ func (p sessionProvider) Update(ctx context.Context, u compile.SessionUpdate) er
 // served, and then whenever they may have changed in this process, as a
 // step points one or a run ends, and every pollInterval, for what another
 // process changed. It needs a session host.
+//
+// First it resets each of them (ResetSession), which this process serves
+// anew: while no process served it, as after one that served it stopped,
+// another program could have listened at its port, and taken the cookie a
+// page of it that reconnected sent there. Its new secret makes such a
+// cookie worthless.
 func (c *Coordinator) ServeSessions(ctx context.Context) error {
 	if err := c.writable(); err != nil {
 		return err
@@ -259,6 +265,23 @@ func (c *Coordinator) ServeSessions(ctx context.Context) error {
 	host := c.opts.SessionHost
 	if host == nil {
 		return errors.New("coordinator: no session host to serve sessions")
+	}
+	if err := c.store.Tx(ctx, func(tx *store.Tx) error {
+		live, err := tx.LiveSessions()
+		if err != nil {
+			return err
+		}
+		for _, s := range live {
+			if err := tx.ResetSession(s.ID, newSalt()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
 	}
 	ticker := time.NewTicker(c.pollInterval)
 	defer ticker.Stop()
@@ -323,12 +346,12 @@ func (c *Coordinator) RunSessions(ctx context.Context, root string) ([]Session, 
 }
 
 // AddSessionCode keeps a one-time code of the session id, by its keyed
-// hash, mac, until expires, which a link to it holds.
-func (c *Coordinator) AddSessionCode(ctx context.Context, id string, mac []byte, expires time.Time) error {
+// hash, mac, for lifetime, by the store's clock, which a link to it holds.
+func (c *Coordinator) AddSessionCode(ctx context.Context, id string, mac []byte, lifetime time.Duration) error {
 	if err := c.writable(); err != nil {
 		return err
 	}
-	return c.store.Tx(ctx, func(tx *store.Tx) error { return tx.AddSessionCode(id, mac, expires) })
+	return c.store.Tx(ctx, func(tx *store.Tx) error { return tx.AddSessionCode(id, mac, lifetime) })
 }
 
 // RedeemSessionCode uses the one-time code of the session id whose keyed

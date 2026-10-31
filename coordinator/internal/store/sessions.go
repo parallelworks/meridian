@@ -165,10 +165,10 @@ func (tx *Tx) ResetSession(id string, salt []byte) error {
 }
 
 // AddSessionCode keeps a one-time code of the session id, by its keyed
-// hash, mac, until expires, and deletes the store's codes that have
-// expired: ErrNotFound for a session the store hasn't, and ErrState for one
-// that has ended.
-func (tx *Tx) AddSessionCode(id string, mac []byte, expires time.Time) error {
+// hash, mac, for lifetime, by the store's clock, which RedeemSessionCode
+// reads too, and deletes the store's codes that have expired: ErrNotFound
+// for a session the store hasn't, and ErrState for one that has ended.
+func (tx *Tx) AddSessionCode(id string, mac []byte, lifetime time.Duration) error {
 	s, err := tx.Session(id)
 	if err != nil {
 		return err
@@ -183,7 +183,7 @@ func (tx *Tx) AddSessionCode(id string, mac []byte, expires time.Time) error {
 	if _, err := tx.exec("DELETE FROM meridian_session_codes WHERE expires_at <= ?", now); err != nil {
 		return err
 	}
-	_, err = tx.exec("INSERT INTO meridian_session_codes (session_id, mac, expires_at) VALUES (?, ?, ?)", id, mac, expires.UnixMicro())
+	_, err = tx.exec("INSERT INTO meridian_session_codes (session_id, mac, expires_at) VALUES (?, ?, ?)", id, mac, now+lifetime.Microseconds())
 	return err
 }
 
@@ -205,7 +205,8 @@ func (tx *Tx) RedeemSessionCode(id string, mac []byte) (bool, error) {
 }
 
 // endSessions ends the sessions of the tree whose root is the run numbered
-// root, as it ends: their data is erased, and their codes deleted.
+// root, as it ends: their data and their salts are erased, and their codes
+// deleted.
 func (tx *Tx) endSessions(root int64) error {
 	now, err := tx.now()
 	if err != nil {
@@ -214,7 +215,7 @@ func (tx *Tx) endSessions(root int64) error {
 	if _, err := tx.exec("DELETE FROM meridian_session_codes WHERE session_id IN (SELECT id FROM meridian_sessions WHERE root_id = ?)", root); err != nil {
 		return err
 	}
-	_, err = tx.exec("UPDATE meridian_sessions SET data = NULL, data_sealed = NULL, ended_at = ?, updated_at = ? WHERE root_id = ? AND ended_at IS NULL",
+	_, err = tx.exec("UPDATE meridian_sessions SET data = NULL, data_sealed = NULL, salt = X'', ended_at = ?, updated_at = ? WHERE root_id = ? AND ended_at IS NULL",
 		now, now, root)
 	return err
 }

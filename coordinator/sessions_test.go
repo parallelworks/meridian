@@ -302,7 +302,7 @@ func TestSessionCodesAndReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := sessions[0]
-	later := time.Now().Add(time.Hour)
+	later := time.Hour
 	for _, mac := range []string{"one", "two"} {
 		if err := c.AddSessionCode(t.Context(), s.ID, []byte(mac), later); err != nil {
 			t.Fatal(err)
@@ -379,5 +379,56 @@ func TestServeSessionsNeedsHost(t *testing.T) {
 	ro := open(t, Options{Database: c.opts.Database, ReadOnly: true, SessionHost: &testHost{}})
 	if err := ro.ServeSessions(t.Context()); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("ServeSessions read only = %v", err)
+	}
+}
+
+// TestSessionsServedAnew checks that a session a process serves anew, as
+// at its start, or as it takes over from one that stopped, gets a new
+// salt, and so a new secret: a cookie that another program took while no
+// process served the session, as a page of it that reconnected sent to
+// whatever listened at its port, doesn't work once it is served again; and
+// its codes are gone with it.
+func TestSessionsServedAnew(t *testing.T) {
+	parallel(t)
+	h := &testHost{}
+	c := open(t, Options{SessionHost: h})
+	root, _ := create(t, c, plainWorkflow, nil, nil)
+	if err := c.opts.Sessions.Make(t.Context(), root, map[string]any{"desktop": map[string]any{}}, map[string]string{"desktop": "desktop-1"}, expr.Read{}); err != nil {
+		t.Fatal(err)
+	}
+	made, err := c.RunSessions(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	salts := [][]byte{made[0].Salt}
+	for range 2 {
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- c.ServeSessions(ctx) }()
+		prev := salts[len(salts)-1]
+		waitFor(t, func() bool { live := h.lastServed(); return len(live) == 1 && string(live[0].Salt) != string(prev) })
+		salts = append(salts, h.lastServed()[0].Salt)
+		if err := c.AddSessionCode(t.Context(), made[0].ID, []byte("code"), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if string(salts[0]) == string(salts[1]) || string(salts[1]) == string(salts[2]) {
+		t.Errorf("the session's salts, as made and as each process served it, are %x", salts)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- c.ServeSessions(ctx) }()
+	waitFor(t, func() bool { live := h.lastServed(); return len(live) == 1 && string(live[0].Salt) != string(salts[2]) })
+	if c.RedeemSessionCode(t.Context(), made[0].ID, []byte("code")) {
+		t.Error("a code made before the session was served anew was used")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
