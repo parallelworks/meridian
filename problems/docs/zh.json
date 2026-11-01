@@ -1666,7 +1666,7 @@
   },
   "cluster_unknown": {
     "title": "未知的集群",
-    "why": "compute-clusters 或 compute-resources 输入的值指定一个集群，运行看到的是该集群的详细信息，如其 ip 和 schedulerType。在运行工作流的机器上，名称是 workspace（即本机，写作 workspace 或 user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群，与输入的 include-workspace、provider 和 csp 无关，这些只决定表单列出什么。",
+    "why": "compute-clusters 或 compute-resources 输入的值按其 pw:// URI 指定一个集群，运行看到的是该集群的详细信息，如其 ip 和 schedulerType。在运行工作流的机器上，URI 指的是 workspace（即本机，写作 pw://user-workspace 或 pw://<login>/user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群（写作 pw://<login>/<name>），其中 <login> 是运行 meridian 的用户的登录名，与输入的 include-workspace、provider 和 csp 无关，这些只决定表单列出什么。其他用户的 URI 在这里不指向任何集群。",
     "fix": [
       "从消息列出的集群中选择一个，或选择 workspace。",
       "或者在 Meridian 配置目录的 clusters.yaml 中定义该集群，并给出能到达它的 SSH 主机。",
@@ -1675,15 +1675,30 @@
   },
   "clusters_none": {
     "title": "没有可选的集群",
-    "why": "compute-clusters 或 compute-resources 输入的值指定一个集群。在运行工作流的机器上，名称是 workspace（即本机，写作 workspace 或 user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群，而这里没有 clusters.yaml，或它未定义任何集群。",
+    "why": "compute-clusters 或 compute-resources 输入的值按其 pw:// URI 指定一个集群。在运行工作流的机器上，URI 指的是 workspace（即本机，写作 pw://user-workspace 或 pw://<login>/user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群（写作 pw://<login>/<name>），而这里没有 clusters.yaml，或它未定义任何集群。",
     "fix": [
       "在 Meridian 配置目录的 clusters.yaml 中定义该集群，并给出能到达它的 SSH 主机。",
       "或者在提供该输入的集群的平台上运行工作流：单独运行时，Meridian 只知道 clusters.yaml 中的集群和 workspace，因此在平台上 compute-resources 输入可以指定的 Kubernetes 集群在这里不可用。"
     ]
   },
+  "cluster_uri_required": {
+    "title": "不是集群的 pw:// URI 的值",
+    "why": "compute-clusters 或 compute-resources 输入按其 pw:// URI 指定集群。在运行工作流的机器上，Meridian 配置目录中 clusters.yaml 定义的集群写作 pw://、运行 meridian 的用户的登录名、斜杠和集群名称，如 pw://alice/hpc；workspace（即本机）也可以写作 workspace 或 user-workspace，单独写，或写在 pw:// 或 pw://alice/ 之后。只有名称不是 URI，而只有 pw:// 和名称则指平台上某个组织的集群，此处的运行没有这样的集群。运行自身的输入接受 URI，正如平台的表单给出的那样；只有步骤调用的工作流才会收到集群的详细信息（一个映射），由调用方按其所有的详细信息传入。",
+    "fix": [
+      "按消息给出的 URI 写出集群，使用 clusters.yaml 中的集群名称。",
+      "只在步骤的 with: 中把集群的详细信息传给该步骤调用的工作流，正如格式 1 传递它们那样。"
+    ]
+  },
+  "cluster_login_unknown": {
+    "title": "没有用于指定集群的登录名",
+    "why": "compute-clusters 或 compute-resources 输入按包含运行 Meridian 的用户的登录名的 URI 指定 clusters.yaml 中的集群或 workspace，如 pw://alice/hpc，工作流从 PW_USER 读取该名称。Meridian 从系统的用户数据库读取它，否则读取 $USER，但两者都没有找到，因此这里没有 URI 能指定集群。",
+    "fix": [
+      "以系统用户数据库中存在的用户身份运行 meridian，或将 USER 设为登录名。"
+    ]
+  },
   "bucket_uri_invalid": {
     "title": "不是存储桶的 pw:// URI 的值",
-    "why": "存储桶输入按其在保存它的平台上的 URI 指定存储桶：pw://、拥有它的用户、斜杠和存储桶的名称。平台会把只有存储桶名称，或只有 pw:// 和名称的值读作该用户自己的存储桶，这需要其平台用户名。此处的运行没有平台用户名，因此 URI 必须写明用户。",
+    "why": "存储桶输入按其在保存它的平台上的 URI 指定存储桶：pw://、拥有它的用户、斜杠和存储桶的名称。平台会把只有存储桶名称，或只有 pw:// 和名称的值读作该用户自己的存储桶，这需要其平台用户名。此处的运行没有平台用户名，因此 URI 必须写明用户。运行自身的输入接受 URI，正如平台的表单给出的那样；只有步骤调用的工作流才会收到存储桶的详细信息（一个映射），由调用方按其所有的详细信息传入。",
     "fix": [
       "将存储桶写成 pw://user/bucket，其中用户为存储桶所有者的平台用户名。"
     ]

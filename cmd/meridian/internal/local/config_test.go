@@ -29,13 +29,32 @@ func configDir(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// testLogin is the login name load's config names its clusters' URIs by,
+// in the place of the login name of the user who runs the test.
+const testLogin = "alice"
+
+// load loads the config of the files files, whose variables' environment
+// is vars, as the user testLogin.
 func load(t *testing.T, files map[string]string, vars map[string]string) *Config {
 	t.Helper()
 	c, err := LoadConfig(configDir(t, files), lookup(vars))
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.user = Login{Name: testLogin}
 	return c
+}
+
+// TestConfigLogin checks that a config names its clusters' URIs by the
+// login name of the user who runs meridian, as PW_USER does.
+func TestConfigLogin(t *testing.T) {
+	c, err := LoadConfig(configDir(t, nil), lookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := UserLogin(); c.user.Name != want.Name || (c.user.Err == nil) != (want.Err == nil) {
+		t.Errorf("the config's login is %+v, want %+v", c.user, want)
+	}
 }
 
 func TestBuiltInLocalGroup(t *testing.T) {
@@ -403,20 +422,20 @@ func TestPlatformGroupsNotFound(t *testing.T) {
 func TestResolveInput(t *testing.T) {
 	c := load(t, map[string]string{GroupsFile: "gpu:\n  members:\n    - {name: a, backend: ssh}\n"}, nil)
 	for _, name := range []string{"gpu", "local"} {
-		if v, err := c.ResolveInput(t.Context(), "execution-groups", nil, name); err != nil || v != name {
+		if v, err := c.ResolveInput(t.Context(), "execution-groups", nil, name, false); err != nil || v != name {
 			t.Errorf("ResolveInput(%s) = %v, %v", name, v, err)
 		}
 	}
-	_, err := c.ResolveInput(t.Context(), "execution-groups", nil, "cpu")
+	_, err := c.ResolveInput(t.Context(), "execution-groups", nil, "cpu", false)
 	p := kindtest.Want(t, err, problems.ExecutionGroupUnknown)
 	if p.Params["value"] != `"cpu"` || p.Params["groups"] != `"gpu", "local"` {
 		t.Errorf("ResolveInput of an unknown group: %v, want the groups listed", p.Params)
 	}
-	_, err = c.ResolveInput(t.Context(), "execution-groups", nil, 3)
+	_, err = c.ResolveInput(t.Context(), "execution-groups", nil, 3, false)
 	if p := kindtest.Want(t, err, problems.ExecutionGroupUnknown); p.Params["value"] != "3" {
 		t.Errorf("ResolveInput of a number: %v", p.Params)
 	}
-	if _, err := c.ResolveInput(t.Context(), "region", nil, "us-east-1"); !errors.Is(err, compile.ErrInputType) {
+	if _, err := c.ResolveInput(t.Context(), "region", nil, "us-east-1", false); !errors.Is(err, compile.ErrInputType) {
 		t.Errorf("ResolveInput of a type it doesn't provide: %v", err)
 	}
 }
@@ -426,7 +445,7 @@ func TestResolveInput(t *testing.T) {
 // organization group's, gives its value as it was given, as format 1
 // does: a name, "", or a mapping, as a run passes the value it has to a
 // workflow it calls; and refuses any other value as input_not_text, as
-// format 1 does.
+// the bug fix to format 1 does (docs/design.md, Bug fixes to format 1).
 func TestResolveInputPassesNamesThrough(t *testing.T) {
 	c := load(t, nil, nil)
 	mapping := map[string]any{"name": "debug"}
@@ -436,19 +455,25 @@ func TestResolveInputPassesNamesThrough(t *testing.T) {
 		"organization-groups",
 	} {
 		for _, v := range []any{"debug", "", "gpu,debug", mapping} {
-			if got, err := c.ResolveInput(t.Context(), typ, nil, v); err != nil || !reflect.DeepEqual(got, v) {
-				t.Errorf("ResolveInput(%s, %v) = %v, %v, want it as it is", typ, v, got, err)
+			for _, called := range []bool{false, true} {
+				if got, err := c.ResolveInput(t.Context(), typ, nil, v, called); err != nil || !reflect.DeepEqual(got, v) {
+					t.Errorf("ResolveInput(%s, %v), called %v = %v, %v, want it as it is", typ, v, called, got, err)
+				}
 			}
 		}
 		for v, shown := range map[any]string{int64(3): "3", true: "true"} {
-			_, err := c.ResolveInput(t.Context(), typ, nil, v)
+			_, err := c.ResolveInput(t.Context(), typ, nil, v, false)
 			if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != shown {
 				t.Errorf("ResolveInput(%s, %v): %v", typ, v, p.Params)
 			}
 		}
-		_, err := c.ResolveInput(t.Context(), typ, nil, []any{"debug"})
-		if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != `["debug"]` {
-			t.Errorf("ResolveInput(%s) of a list: %v", typ, p.Params)
+		// A list too, whatever multi says: multi is read for none of these
+		// types.
+		for _, def := range []map[string]any{nil, {"multi": true}} {
+			_, err := c.ResolveInput(t.Context(), typ, def, []any{"debug"}, false)
+			if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != `["debug"]` {
+				t.Errorf("ResolveInput(%s) of a list with %v: %v", typ, def, p.Params)
+			}
 		}
 	}
 }

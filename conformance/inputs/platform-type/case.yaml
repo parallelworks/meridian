@@ -2,7 +2,7 @@ description: An input of a type that names a platform's resources needs a platfo
 source: Meridian
 no-platform: true
 inputs:
-  cluster: my-cluster
+  cluster: pw://alice/my-cluster
 expect:
   diagnostics:
     - severity: error

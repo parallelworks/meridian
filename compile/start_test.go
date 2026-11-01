@@ -578,7 +578,7 @@ func TestStartChecksWhatItEvaluated(t *testing.T) {
 // rejecting is a platform that rejects every value.
 type rejecting struct{}
 
-func (rejecting) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
+func (rejecting) ResolveInput(context.Context, string, map[string]any, any, bool) (any, error) {
 	return nil, problems.InputRejected.InputProblem(problems.Params{"reason": "no such cluster"})
 }
 
@@ -999,7 +999,7 @@ func TestInputResolverUnanswered(t *testing.T) {
 // resolverFunc is an InputResolver that is a function.
 type resolverFunc func(ctx context.Context, typ string, def map[string]any, v any) (any, error)
 
-func (f resolverFunc) ResolveInput(ctx context.Context, typ string, def map[string]any, v any) (any, error) {
+func (f resolverFunc) ResolveInput(ctx context.Context, typ string, def map[string]any, v any, _ bool) (any, error) {
 	return f(ctx, typ, def, v)
 }
 

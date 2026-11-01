@@ -14,7 +14,7 @@ on:
         default:
           - name: ${{ inputs.region }}-1
       cluster:
-        type: compute-clusters
+        type: kubernetes-clusters
         default:
           name: ${{ inputs.region }}
 jobs:

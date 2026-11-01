@@ -96,7 +96,7 @@ func TestSSHStepRun(t *testing.T) {
 	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env)
-	logs := runSucceeds(t, env, h.setUp, sshStepRun, "--input", "cluster=hpc")
+	logs := runSucceeds(t, env, h.setUp, sshStepRun, "--input", "cluster="+clusterURI(t, "hpc"))
 	// The run's directory there, named for the run and the store.
 	dir := filepath.Join(runsOn(h), "1-")
 	if !strings.Contains(logs, "local step 1 › local step 1| remote job dir "+dir) || !strings.Contains(logs, "after step 0| remote "+dir) {
@@ -137,7 +137,7 @@ jobs:
       remoteHost: ${{ inputs.cluster.ip }}
     steps:
       - run: ./app/scripts/x
-`, "--input", "cluster=hpc")
+`, "--input", "cluster="+clusterURI(t, "hpc"))
 	if !strings.Contains(logs, "use step 0| ran in "+filepath.Join(runsOn(h), "1-")) {
 		t.Errorf("the job on the host didn't run the checkout's script:\n%s", logs)
 	}
@@ -244,7 +244,7 @@ func TestSSHStepRunStopped(t *testing.T) {
 			parallel(t)
 			env := runEnv(t)
 			h := newSSHHost(t, env)
-			running := startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", strings.Replace(sshWaiting, "STOP", tc.stop, 1)))
+			running := startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", strings.Replace(sshWaiting, "STOP", tc.stop, 1)))
 			if tc.stop == "" {
 				untilSaid(t, running, "| waiting")
 				if err := meridianProcess(t, env, "cancel", "1").cmd.Wait(); err != nil {
@@ -275,7 +275,7 @@ func TestSSHStepRunEarlyCancel(t *testing.T) {
 	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env)
-	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", `on:
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", `on:
   execute:
     inputs:
       cluster:
@@ -310,7 +310,7 @@ func TestSSHStepRunCleanup(t *testing.T) {
 	parallel(t)
 	env := runEnv(t)
 	h := newSSHHost(t, env)
-	running := startCommand(t, env, h.setUp, "run", "--input", "cluster=hpc", writeFile(t, "w.yaml", `on:
+	running := startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", `on:
   execute:
     inputs:
       cluster:

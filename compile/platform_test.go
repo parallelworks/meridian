@@ -16,7 +16,7 @@ import (
 // for its name, and a mapping with an id made from each part.
 type detailsOf struct{}
 
-func (detailsOf) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+func (detailsOf) ResolveInput(_ context.Context, _ string, _ map[string]any, v any, _ bool) (any, error) {
 	switch v := v.(type) {
 	case string:
 		return map[string]any{"name": v, "id": "id-" + v}, nil

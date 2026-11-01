@@ -17,7 +17,7 @@ import (
 // givenAsIs is a platform that takes each value it's given as it is.
 type givenAsIs struct{}
 
-func (givenAsIs) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+func (givenAsIs) ResolveInput(_ context.Context, _ string, _ map[string]any, v any, _ bool) (any, error) {
 	return v, nil
 }
 

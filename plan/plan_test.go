@@ -767,7 +767,7 @@ func hasKind(err error, k *problems.Kind) bool {
 // passThrough is a platform that takes every value it's given as it is.
 type passThrough struct{}
 
-func (passThrough) ResolveInput(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+func (passThrough) ResolveInput(_ context.Context, _ string, _ map[string]any, v any, _ bool) (any, error) {
 	return v, nil
 }
 
