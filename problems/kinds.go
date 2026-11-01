@@ -291,6 +291,13 @@ var (
 	// "true" or "false", as for port 0.
 	SessionLocalPortTaken   = define(Error, "session_local_port_taken", "Session's port in use", "port", "picked")
 	SessionLocalPortRefused = define(Error, "session_local_port_refused", "Session's port this machine won't listen on", "port", "picked")
+	// os is the system Meridian runs on, as Go names it, as linux, where
+	// it won't say which user listens at a port of this machine's, as in
+	// a sandbox that refuses NETLINK_SOCK_DIAG, or where Meridian can't
+	// read what it says: no session that points at a service on it is
+	// served, and a session's port answers a request for one with this
+	// too, 502.
+	SessionServiceUnchecked = define(Error, "session_service_unchecked", "Session's service whose user Meridian can't tell", "os")
 	// reason is why the system gives no login name: a session can't be
 	// named, nor a step point one, nor meridian session url link one.
 	LoginNameUnknown = define(Error, "login_name_unknown", "No login name for the user who runs meridian", "reason")
@@ -881,9 +888,10 @@ var (
 // session's name; run and key the run's ID and the session's key in its
 // sessions:, with which meridian session url makes a link to it; path
 // the path the port serves the session at, as /me/session/<user>/<name>/;
-// host the host the request asked for, as its Host header gives it; and
+// host the host the request asked for, as its Host header gives it;
 // limit how many connections to its service a session has open or
-// opening at once, at most.
+// opening at once, at most; and port the port of this machine's loopback
+// address that the session points at, as text.
 var (
 	SessionUnreachable  = defineCommand("session_unreachable", "Session's service not answering", "name")
 	SessionBusy         = defineCommand("session_busy", "Session with as many connections to its service as it may have", "name", "limit")
@@ -891,6 +899,16 @@ var (
 	SessionCrossOrigin  = defineCommand("session_cross_origin", "Request to a session from another page")
 	SessionNotHere      = defineCommand("session_not_here", "No session at this path", "path")
 	SessionHostRefused  = defineCommand("session_host_refused", "Session asked for at another host name", "host")
+	// SessionServiceForeign is a session that points at a port of this
+	// machine where another user listens, not the user who runs Meridian,
+	// nor, on Linux, root, which is answered 502, as one unreachable is.
+	SessionServiceForeign = defineCommand("session_service_foreign", "Session's service another user listens at", "name", "port")
+	// SessionServiceOwnerUnknown is a connection to a session's service
+	// on this machine whose other end's owner Meridian can't tell, as one
+	// the system doesn't list, of a port published from another network
+	// namespace by DNAT, or one it couldn't ask about, which is answered
+	// 502 too.
+	SessionServiceOwnerUnknown = defineCommand("session_service_owner_unknown", "Connection to a session's service whose user Meridian can't tell", "name", "port")
 	// What meridian session finds of a run's session: run is the run's
 	// ID, key the session's key, keys the keys of the run's sessions that
 	// haven't ended, as QuoteAll writes them, and listed whether there are

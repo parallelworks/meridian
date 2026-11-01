@@ -10,6 +10,8 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +28,7 @@ import (
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/login"
 	"github.com/parallelworks/meridian/internal/sessionproxy"
+	"github.com/parallelworks/meridian/internal/sockowner"
 	"github.com/parallelworks/meridian/problems"
 )
 
@@ -48,7 +51,8 @@ type SessionStore interface {
 // docs/design.md, Serving a session). A session that points at a cluster
 // of the clusters file is reached over SSH through the cluster's host, as
 // its jobs' workers are, and one that points at the workspace, this
-// machine, at its loopback address.
+// machine, at its loopback address, where each connection is passed on
+// only once the system says it is this user's (internal/sockowner).
 type SessionHost struct {
 	cfg  *Config
 	user Login
@@ -57,6 +61,14 @@ type SessionHost struct {
 	// the clusters file, clusterHost, over SSH.
 	dialCluster func(ctx context.Context, clusterHost, host string, port int) (net.Conn, error)
 	log         *slog.Logger
+	// owner says who owns the socket at the other end of a connection to
+	// a service of this machine's (sockowner.Owner), which a test
+	// replaces before the host serves anything; ownersChecked is set once
+	// it has said so of a connection of the host's own, and ownersFailed
+	// once the host has logged why it couldn't (checkOwners).
+	owner         func(context.Context, *net.TCPConn) (uint32, error)
+	ownersChecked atomic.Bool
+	ownersFailed  atomic.Bool
 
 	mu sync.Mutex
 	// storeID is the store's ID, and store what it keeps of its sessions,
@@ -130,7 +142,7 @@ func NewSessionHost(ctx context.Context, cfg *Config, user Login, key []byte, di
 		log = slog.New(slog.DiscardHandler)
 	}
 	h := &SessionHost{
-		cfg: cfg, user: user, keys: keys, dialCluster: dialCluster, log: log,
+		cfg: cfg, user: user, keys: keys, dialCluster: dialCluster, log: log, owner: sockowner.Owner,
 		served: map[string]*served{}, links: map[string]string{}, listen: sessionproxy.Listen,
 	}
 	// It lives until Close, whatever becomes of ctx.
@@ -322,7 +334,10 @@ func newSessionName(key string) string {
 // apiKey, is session_update_unsupported; a tunnel to the workspace whose
 // session's useTLS: is true, which meridian can't yet reach over TLS that
 // it checks, is session_tls_unsupported: a tunnel to a cluster ignores it,
-// as format 1 does. status, which format 1 ignores, it ignores too.
+// as format 1 does. A tunnel to the workspace where the system won't say
+// who listens at a port of this machine, which each of its connections
+// needs (checkOwners), is session_service_unchecked. status, which format
+// 1 ignores, it ignores too.
 func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compile.SessionUpdate, serve bool) (coordinator.SessionPoint, error) {
 	w := u.With
 	for _, field := range []string{"targetInfo", "openAI", "apiKey"} {
@@ -364,6 +379,9 @@ func (h *SessionHost) Point(ctx context.Context, s coordinator.Session, u compil
 		p.RemoteHost = "localhost"
 		if s.Def["useTLS"] == true {
 			return coordinator.SessionPoint{}, problems.SessionTLSUnsupported.Problem(problems.Params{"name": s.Name})
+		}
+		if err := h.checkOwners(ctx); err != nil {
+			return coordinator.SessionPoint{}, err
 		}
 	default:
 		if _, ok := h.cfg.ClusterHost(target); !ok {
@@ -449,7 +467,7 @@ func (h *SessionHost) serve(ctx context.Context, s coordinator.Session, p sessio
 		if s.Private {
 			sv.proxy.MarkPrivate()
 		}
-		sv.proxy.Repoint(h.dialer(p))
+		sv.proxy.Repoint(h.dialer(s.Name, p))
 		sv.point = point
 		return sv.listener.Port(), nil
 	}
@@ -463,7 +481,9 @@ func (h *SessionHost) serve(ctx context.Context, s coordinator.Session, p sessio
 }
 
 // start starts serving the session s, which points where p, encoded as
-// point, says, at port, or one the system picks for 0.
+// point, says, at port, or one the system picks for 0: at a service of
+// this machine's, only where the system says who listens at its ports
+// (checkOwners).
 func (h *SessionHost) start(ctx context.Context, s coordinator.Session, p sessionPoint, point string, port int) (*served, error) {
 	if h.store == nil {
 		return nil, errors.New("local: the session host serves no session before Attach")
@@ -471,13 +491,18 @@ func (h *SessionHost) start(ctx context.Context, s coordinator.Session, p sessio
 	if h.user.Err != nil {
 		return nil, problems.LoginNameUnknown.Problem(problems.Params{"reason": h.user.Err.Error()})
 	}
+	if p.Cluster == "" {
+		if err := h.checkOwners(ctx); err != nil {
+			return nil, err
+		}
+	}
 	secret, err := h.keys.Secret(h.storeID, s.ID, s.Salt)
 	if err != nil {
 		return nil, err
 	}
 	proxy, err := sessionproxy.New(h.life, sessionproxy.Config{
 		User: h.user.Name, Name: s.Name, Label: s.Label, Run: s.Run, Key: s.Key,
-		Session: s.ID, Secret: secret, Keyring: h.keys, Codes: redeemer{h.store}, Dial: h.dialer(p), Log: h.log,
+		Session: s.ID, Secret: secret, Keyring: h.keys, Codes: redeemer{h.store}, Dial: h.dialer(s.Name, p), Log: h.log,
 		Private: s.Private,
 	})
 	if err != nil {
@@ -515,8 +540,9 @@ func clusterAddress(remoteHost string) string {
 	return remoteHost
 }
 
-// dialer returns what connects to where p points: over SSH through a
-// cluster's host, or to this machine's loopback address.
+// dialer returns what connects to where p points, for the session name:
+// over SSH through a cluster's host, or to this machine's loopback
+// address.
 //
 // localhost, as a step names the machine its service runs on, is
 // 127.0.0.1, where a service that listens on one loopback address alone,
@@ -530,10 +556,16 @@ func clusterAddress(remoteHost string) string {
 // connections gives, sends nothing to [::1]. An answer at [::1] is never
 // kept: one from another program that listened there first, as while the
 // service started, would hold the session after the service came up.
-func (h *SessionHost) dialer(p sessionPoint) sessionproxy.DialFunc {
+//
+// Any user of this machine can listen at a port that no one listens at,
+// as before the service is up, or after it has stopped, at 127.0.0.1 as at
+// [::1]: so each connection, either, is passed on only once the system
+// says it is this user's (ownerChecked).
+func (h *SessionHost) dialer(name string, p sessionPoint) sessionproxy.DialFunc {
 	port := strconv.Itoa(p.RemotePort)
 	if p.Cluster == "" {
 		v4, v6 := net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("::1", port)
+		owner := h.owner
 		// answered is set once the service has answered at 127.0.0.1.
 		var answered atomic.Bool
 		return func(ctx context.Context) (net.Conn, error) {
@@ -541,18 +573,128 @@ func (h *SessionHost) dialer(p sessionPoint) sessionproxy.DialFunc {
 			conn, err := d.DialContext(ctx, "tcp4", v4)
 			switch {
 			case err == nil:
-				answered.Store(true)
-				return conn, nil
+				// A TCP dial's connection is a *net.TCPConn.
+				if conn, err = ownerChecked(ctx, owner, conn.(*net.TCPConn), name, p.RemotePort); err == nil {
+					answered.Store(true)
+				}
+				return conn, err
 			case answered.Load() || !errors.Is(err, syscall.ECONNREFUSED):
 				return nil, err
 			}
-			return d.DialContext(ctx, "tcp6", v6)
+			if conn, err = d.DialContext(ctx, "tcp6", v6); err != nil {
+				return nil, err
+			}
+			return ownerChecked(ctx, owner, conn.(*net.TCPConn), name, p.RemotePort)
 		}
 	}
 	clusterHost, _ := h.cfg.ClusterHost(p.Cluster)
 	host := clusterAddress(p.RemoteHost)
 	return func(ctx context.Context) (net.Conn, error) {
 		return h.dialCluster(ctx, clusterHost, host, p.RemotePort)
+	}
+}
+
+// ownerChecked returns conn, a connection to the service of the session
+// name at port of this machine, once owner says the socket at its other
+// end is one this user may trust as theirs (sockowner.Trusted), as the
+// system says who has it (sockowner.Owner), waiting until ctx is done at
+// most; or else closes it, before anything is sent on it, and returns
+// why: session_service_foreign where another user's is,
+// session_service_owner_unknown where Meridian can't tell whose it is,
+// session_service_unchecked where the system can't say at all, and,
+// where no process accepts it in time, or before ctx is done, of which
+// the system says no owner until one does, that the service doesn't
+// answer.
+func ownerChecked(ctx context.Context, owner func(context.Context, *net.TCPConn) (uint32, error), conn *net.TCPConn, name string, port int) (net.Conn, error) {
+	uid, err := owner(ctx, conn)
+	params := problems.Params{"name": name, "port": strconv.Itoa(port)}
+	switch {
+	case err == nil && sockowner.Trusted(uid):
+		return conn, nil
+	case err == nil:
+		err = fmt.Errorf("%w: user %d has it", problems.SessionServiceForeign.Problem(params), uid)
+	case errors.Is(err, sockowner.ErrNotYet):
+		err = fmt.Errorf("local: the session's service accepted no connection in time: %w", err)
+	case errors.Is(err, sockowner.ErrUnsupported):
+		err = fmt.Errorf("%w: %w", problems.SessionServiceUnchecked.Problem(problems.Params{"os": runtime.GOOS}), err)
+	default:
+		err = fmt.Errorf("%w: %w", problems.SessionServiceOwnerUnknown.Problem(params), err)
+	}
+	_ = conn.Close()
+	return nil, err
+}
+
+// checkOwners checks that the system says who owns a connection's other
+// end on this machine, as each connection to a service of this machine's
+// needs (ownerChecked): of one to a listener of the host's own, which it
+// accepts, and which must be this user's, root's being no answer for it.
+// Once it has, it checks no more. Where it can't, it is
+// session_service_unchecked, which the host logs why of once, rather than
+// each time it tries to serve a session again; but where ctx ended first,
+// which says nothing of the system, ctx's error.
+func (h *SessionHost) checkOwners(ctx context.Context) error {
+	if h.ownersChecked.Load() {
+		return nil
+	}
+	if err := h.ownOwner(ctx); err != nil {
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
+		}
+		if !h.ownersFailed.Swap(true) {
+			h.log.Warn("local: the system won't say who listens at a port of this machine, so no session of a service on it is served", "os", runtime.GOOS, "err", err)
+		}
+		return problems.SessionServiceUnchecked.Problem(problems.Params{"os": runtime.GOOS})
+	}
+	h.ownersChecked.Store(true)
+	return nil
+}
+
+// ownOwner returns why owner doesn't say that a connection to a listener
+// of the host's own, at 127.0.0.1, which the listener accepted, is this
+// user's, if it doesn't. Another program that connects to the listener
+// too, as any can, is closed on.
+func (h *SessionHost) ownOwner(ctx context.Context) error {
+	l, err := new(net.ListenConfig).Listen(ctx, "tcp4", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	defer l.Close()
+	if err := l.(*net.TCPListener).SetDeadline(time.Now().Add(ownWait)); err != nil {
+		return err
+	}
+	dialed, err := new(net.Dialer).DialContext(ctx, "tcp4", l.Addr().String())
+	if err != nil {
+		return err
+	}
+	conn := dialed.(*net.TCPConn)
+	defer conn.Close()
+	accepted, err := acceptFrom(l, conn.LocalAddr())
+	if err != nil {
+		return err
+	}
+	defer accepted.Close()
+	switch uid, err := h.owner(ctx, conn); {
+	case err != nil:
+		return err
+	case int(uid) != os.Getuid():
+		return fmt.Errorf("local: a connection to a listener of meridian's own is user %d's, not %d's", uid, os.Getuid())
+	}
+	return nil
+}
+
+// ownWait is how long ownOwner waits for its listener to accept its own
+// connection, which it has as soon as it connected.
+const ownWait = 5 * time.Second
+
+// acceptFrom returns the connection l accepts from from, closing any other
+// it accepts first.
+func acceptFrom(l net.Listener, from net.Addr) (net.Conn, error) {
+	for {
+		c, err := l.Accept()
+		if err != nil || c.RemoteAddr().String() == from.String() {
+			return c, err
+		}
+		_ = c.Close()
 	}
 }
 
@@ -604,7 +746,7 @@ func (h *SessionHost) Serve(ctx context.Context, live []coordinator.Session) {
 			sv.proxy.MarkPrivate()
 		}
 		if string(s.Point) != sv.point {
-			sv.proxy.Repoint(h.dialer(p))
+			sv.proxy.Repoint(h.dialer(s.Name, p))
 			sv.point = string(s.Point)
 		}
 	}

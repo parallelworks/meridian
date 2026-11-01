@@ -5032,7 +5032,10 @@ A job's time limit is its `timeout:`. There is no separate walltime:
 - **Other users on a shared host** can't reach Meridian's state: the state
   directory is readable only by its user, sockets live in it, a listening
   coordinator requires TLS and a token, and tokens never appear on command
-  lines.
+  lines. Nor can they take a session's requests by listening at its
+  service's port first: a request goes on only to a connection that the
+  system says is the user's, or, on Linux, root's
+  ([Serving a session](#serving-a-session)).
 - **The user's own processes can.** With the `local` backend, a workflow's
   steps run as the user who started it, so they can read what the user can:
   the state directory's key file, `secret-record.key`, and its database,
@@ -5687,6 +5690,72 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   `session_local_port_refused`, as where the system won't let it listen;
   which `meridian session url` says too, and tries again each time it
   looks.
+- **Who has the service's port.** Any user of this machine can listen at
+  a port of its loopback addresses that no one listens at, as while a
+  session's service starts, after a step points the session at it, while
+  it restarts, or after it exits, and would get the session's requests,
+  with the cookies and passwords of its app. So each connection to a
+  service on this machine, at 127.0.0.1 as at `[::1]`, is passed on only
+  once the system says who has its other end (`internal/sockowner`): not
+  the port's listener, which can change between a look at it and a dial,
+  but the connection's own socket there. Linux says so through
+  `NETLINK_SOCK_DIAG`, asked for that one socket, as `ss` asks; macOS and
+  FreeBSD in their lists of TCP sockets, the sysctls
+  `net.inet.tcp.pcblist_n` and `net.inet.tcp.pcblist`, as `netstat` reads
+  them, each of whose records' kind and length is checked against the
+  headers of macOS, and of FreeBSD 13 and 14, and a list with any other
+  refused. What the systems say differs, and so does whom it is trusted
+  as:
+  - **On Linux,** the kernel says who owns a socket only once a process
+    has accepted it, and then the user of the process that did; before,
+    it gives root, whoever listens, which isn't trusted, but waited for,
+    five seconds at most, after which the service doesn't answer
+    (`session_unreachable`). The user who runs Meridian is trusted, and
+    root, whose process could take any connection anyway: a rootful
+    `docker -p 127.0.0.1:P:P` publishes a port through root's
+    `docker-proxy`, and a user of the `docker` group, who could publish
+    another, is as good as root on that machine anyway.
+  - **On macOS and FreeBSD,** each connection a listener accepts has the
+    credential of whoever made the listener, not of whoever accepts on
+    it, and a listener root made may have been passed to any user's
+    program: so only the user who runs Meridian is trusted, and root's
+    listener is another user's there. A connection in FreeBSD's
+    syncache, whose socket the kernel makes as the handshake's last
+    packet comes, is waited for, as on Linux one no process has
+    accepted.
+
+  A connection whose socket the system doesn't list yet is looked for
+  again, for a second: the socket of a connection a listener answered
+  with a SYN cookie, as each of the three systems does once a listener's
+  queue is about full, comes only with the handshake's last packet,
+  which on the loopback address comes about as the end that connected
+  has finished it, and FreeBSD's list shows neither its syncache entry
+  nor its socket for the moment between; Linux answers for such a
+  connection with its listener. Another user's connection is closed
+  before a byte is sent on it, and the browser is answered that another
+  user listens there (`session_service_foreign`, 502); one whose owner
+  Meridian can't tell is refused too (`session_service_owner_unknown`,
+  502): one in another state than an open connection, as the service
+  closed; one the system still doesn't list after that second, as for a
+  port published from another network namespace by DNAT, as docker
+  publishes one with its userland proxy off, or rootful podman does, or
+  another user's that FreeBSD hides where `security.bsd.see_other_uids`
+  is 0; and one Meridian couldn't ask about, or read the answer of, as
+  where it has no file descriptor left, or the list has a record it
+  doesn't read, or two sockets at the connection's end. The host's log says each
+  once for each place a step points the session, with the user, or with
+  what the system said, and of a private session only by its code. A
+  dial that waits for an owner stops as the request it was made for
+  ends. Before a step points a session at a service on this machine, and
+  before a process serves one there, Meridian checks that the system says
+  of a connection to a listener of its own that it is its user's, and
+  where it doesn't, as in a sandbox that refuses `NETLINK_SOCK_DIAG`, the
+  step fails, and the session isn't served (`session_service_unchecked`):
+  nothing is ever passed on unchecked. A tunnel to a cluster isn't
+  checked so: the cluster's host connects to `remoteHost`, often another
+  machine, as a compute node, through sshd's `direct-tcpip`, where
+  Meridian can't see who listens, and Meridian trusts that host with the
+  connection, as with the jobs it runs there.
 
 - **The host name.** A browser sends a cookie to its host alone, whatever
   the port, and keeps a host's storage, and service workers, apart from
@@ -5775,9 +5844,10 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   its connection to a host. A request waits ten seconds at most for one,
   and then is told the session has as many as it may (`session_busy`,
   503), or, where its dial took that long, that the service doesn't answer
-  (`session_unreachable`, 502); a dial it gave up on goes on holding its
-  place until it ends: so a browser that retries a service that doesn't
-  answer can't take what the host's other sessions need. A page that keeps
+  (`session_unreachable`, 502); a dial it gave up on, or whose request
+  ended, is told so, and holds its place until it ends: so a browser that
+  retries a service that doesn't answer can't take what the host's other
+  sessions need. A page that keeps
   a connection open, as a WebSocket, holds one as long as it is open. A
   browser has ten seconds to send a request's headers, and a connection
   waits two minutes for its next. A connection to the service that fails
