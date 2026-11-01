@@ -484,8 +484,9 @@ the SHA-256 hash of its content: 218 files.
   these three types' input its default, when that is non-empty text and
   not an expression, only for `""` and null, where its fallback gave it
   for any value but text, a mapping among them; Meridian does the same
-  for their null, so a null whose default is an expression stays null on
-  both sides, and gives every type's `""` its default, whatever that is.
+  for their null, so outside a list's rows a null whose default is an
+  expression stays null on both sides, and gives every type's `""` its
+  default, whatever that is.
   Of the 218 known
   workflows' inputs of these types, 206 `compute-clusters`, 7
   `compute-resources`, 11 `bucket` and 315 of the others, none is

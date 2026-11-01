@@ -134,6 +134,16 @@ func TestNullTakesPlatformDefault(t *testing.T) {
       computed:
         type: compute-clusters
         default: ${{ 'pw://alice/lab' }}
+      many:
+        type: compute-clusters
+        multi: true
+        default: ${{ 'pw://alice/lab' }}
+      group:
+        type: group
+        items:
+          computed:
+            type: compute-clusters
+            default: ${{ 'pw://alice/lab' }}
       part:
         type: slurm-partitions
         resource: ${{ inputs.cluster }}
@@ -146,7 +156,7 @@ jobs:
 	details := resolverFunc(func(_ context.Context, typ string, _ map[string]any, v any) (any, error) {
 		return map[string]any{"type": typ, "name": v}, nil
 	})
-	nulls := map[string]any{"cluster": nil, "resources": nil, "bucket": nil, "blank": nil, "computed": nil, "part": nil}
+	nulls := map[string]any{"cluster": nil, "resources": nil, "bucket": nil, "blank": nil, "computed": nil, "many": nil, "group": map[string]any{"computed": nil}, "part": nil}
 	inputs, diags := resolveInputs(t, doc, nulls, compile.Options{Inputs: details})
 	if len(diags) != 0 {
 		t.Fatal(diags)
@@ -157,6 +167,8 @@ jobs:
 		"bucket":    map[string]any{"type": "bucket", "name": "pw://alice/data"},
 		"blank":     nil,
 		"computed":  nil,
+		"many":      nil,
+		"group":     map[string]any{"computed": nil},
 		"part":      nil,
 	}
 	if !reflect.DeepEqual(inputs.Values, want) {

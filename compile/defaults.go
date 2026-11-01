@@ -379,8 +379,8 @@ func (r *inputResolver) liveRows() []*field { return r.rows }
 // submitted for an input, or an input in a group, is its value, as
 // ACTIVATE keeps it: it takes no default, nor is it required; but for a
 // cluster's or a bucket's input of a run no step calls, whose default is
-// text but "", null is no value (nullDefaulted); and in a list's row, null
-// is no value, as ACTIVATE fills in a row's.
+// text but "" and not an expression, null is no value (nullDefaulted);
+// and in a list's row, null is no value, as ACTIVATE fills in a row's.
 func (r *inputResolver) missing(f *field) bool {
 	v, ok := jsonptr.Lookup(r.values, f.path)
 	if !ok {
