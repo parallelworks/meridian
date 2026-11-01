@@ -695,18 +695,18 @@ func TestSessionDialer(t *testing.T) {
 		_, body, _ := strings.Cut(string(resp), "\r\n\r\n")
 		return body
 	}
-	if got := read(h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})); got != "the service" {
+	if got := read(h.dialer("web-1", sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})); got != "the service" {
 		t.Errorf("a session of this machine's service reached %q", got)
 	}
 	free := listenOn(t, "tcp4", "127.0.0.1", 0)
 	alone := free.Addr().(*net.TCPAddr).Port
 	_ = free.Close()
 	serveText(t, listenOn(t, "tcp6", "::1", alone), "a service on [::1]")
-	if got := read(h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: alone})); got != "a service on [::1]" {
+	if got := read(h.dialer("web-1", sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: alone})); got != "a service on [::1]" {
 		t.Errorf("a session of a service on [::1] alone reached %q", got)
 	}
 	for _, remote := range []string{"localhost", "", "LocalHost", "node-1"} {
-		conn, err := h.dialer(sessionPoint{Type: "tunnel", Cluster: "hpc", RemoteHost: remote, RemotePort: port})(t.Context())
+		conn, err := h.dialer("web-1", sessionPoint{Type: "tunnel", Cluster: "hpc", RemoteHost: remote, RemotePort: port})(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -812,7 +812,7 @@ func TestSessionDialerPinned(t *testing.T) {
 	port := free.Addr().(*net.TCPAddr).Port
 	_ = free.Close()
 	serveText(t, listenOn(t, "tcp6", "::1", port), "another program")
-	dial := h.dialer(sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})
+	dial := h.dialer("web-1", sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})
 	for range 2 {
 		if got := answerOf(t, dial); got != "another program" {
 			t.Fatalf("before the service is up, a session reached %q", got)

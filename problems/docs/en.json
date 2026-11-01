@@ -728,6 +728,13 @@
       "Allow Meridian to listen on ports of 127.0.0.1 and [::1] that the system picks, and run meridian resume, or meridian session url, again."
     ]
   },
+  "session_service_unchecked": {
+    "why": "A session that points at a service on this machine is served by passing each request on to the port the workflow gave, at this machine's loopback address, where any user of the machine can listen while the service doesn't, as while it starts, or after it stops, and would get the session's requests, with your cookies and passwords for its app. So before Meridian sends a request, it asks the system who has the other end of its connection: Linux through NETLINK_SOCK_DIAG, macOS and FreeBSD in their lists of TCP sockets. Before it serves a session at a service here, Meridian checks that the system says so of a connection to a listener of its own. Here it didn't: the system wouldn't say, as in a sandbox that refuses NETLINK_SOCK_DIAG sockets, or said it in a form Meridian doesn't read, as a release of macOS or FreeBSD whose list it doesn't know might. So Meridian passes the session's requests to no one, rather than to a user it didn't check, and a step that points a session at a service here fails. A session that points at a cluster isn't checked so: its cluster's host connects to the service.",
+    "fix": [
+      "Run meridian where the system says who listens at a port: on Linux, outside a sandbox that refuses the NETLINK_SOCK_DIAG sockets that ss uses; or on macOS or FreeBSD.",
+      "Check meridian run's log, which says why the system wouldn't say."
+    ]
+  },
   "session_name_taken": {
     "why": "A session's name is its path, /me/session/<user>/<name>/, and what update-session names it by, so no two sessions that haven't ended have one name. The name is one the workflow chose, as prompt-for-name's default, which another session that hasn't ended has too: another of the workflow's sessions:, or one of another run, still running.",
     "fix": [
@@ -2190,6 +2197,20 @@
     "why": "Each session is served at a host name of its own, <label>.localhost, whose label is 128 random bits, which a browser resolves to this machine's loopback address. A browser sends a cookie to its host alone, whatever the port, so no request to another name, as 127.0.0.1, localhost or another session's, carries the session's cookie, and its pages' storage is the session's alone; and the session's port listens on both of this machine's loopback addresses, 127.0.0.1 and [::1], where it has IPv6, so no other program can answer at the session's name and port. Meridian answers only requests addressed to that name: one to 127.0.0.1, localhost, or a name made to resolve to 127.0.0.1 (DNS rebinding), it refuses. Chrome and Firefox resolve any name under localhost to this machine themselves, and so do curl and systemd's resolver; a browser that doesn't can't open the session, and Meridian doesn't serve it at 127.0.0.1 instead.",
     "fix": [
       "Open the session at the address meridian session url prints, in a browser that resolves names under localhost, as Chrome and Firefox do, or through ssh -L to it."
+    ]
+  },
+  "session_service_foreign": {
+    "why": "A session that points at a service on this machine is served by passing each request on to the port the workflow gave, at this machine's loopback address, where any user of the machine can listen while the service doesn't, as while it starts, or after it stops, and would get the session's requests, with your cookies and passwords for its app. So before Meridian sends a request, it asks the system who has the other end of its connection, and passes the request on only where you have it; or, on Linux, root, where the system says who accepted the connection, and a process of root's could take any connection anyway. macOS and FreeBSD say who made the listener, not who accepts on it, and a listener root made may have been passed to any user's program, so there root's listener is another user's too. Another user's listener had this connection, so Meridian closed it before sending anything, and said so once in the run's log, with the user.",
+    "fix": [
+      "Find the program that listens at the port, as ss -ltnp or lsof -nP -iTCP shows, and have it stopped.",
+      "Start the session's service again once the port is free, or point the session at a port no one else listens at."
+    ]
+  },
+  "session_service_owner_unknown": {
+    "why": "A session that points at a service on this machine is served by passing each request on to the port the workflow gave, at this machine's loopback address, where any user of the machine can listen while the service doesn't, as while it starts, or after it stops, and would get the session's requests, with your cookies and passwords for its app. So before Meridian sends a request, it asks the system who has the other end of its connection, and passes the request on only where you have it, or, on Linux, root. Of this connection, Meridian couldn't tell who has it: as where the system doesn't list the other end, even after a second, as for a port published from another network namespace by DNAT, as docker publishes one with its userland proxy off, or rootful podman does, which Meridian refuses, or, on FreeBSD, another user's socket, which security.bsd.see_other_uids hides; where it lists it in a state whose owner it doesn't say, as a connection the service closed as soon as it accepted it; or where Meridian couldn't ask, or read the answer, as where it has no file descriptor left, the answer doesn't come, or the list has what Meridian doesn't read, or two sockets at that end. Meridian closed the connection before sending anything; the run's log says, once, what the system said.",
+    "fix": [
+      "Have the service listen at this machine's loopback address in Meridian's own network namespace: publish a container's port through a proxy, as docker's userland proxy, or rootless podman's, rather than by DNAT.",
+      "Check meridian run's log, which says what the system said of the connection."
     ]
   },
   "session_key_unknown": {

@@ -106,6 +106,45 @@ test-openssh: ## Run the ssh backend's tests against OpenSSH's sshd, which SSHD 
 	echo "$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test $(TESTTAGS) -count=1 -run '$(OPENSSH_TESTS)' ./internal/opensshtest ./backend/ssh/... ./cmd/meridian" && \
 	$(FIPS) MERIDIAN_TEST_SSHD=$(SSHD) go test $(TESTTAGS) -count=1 -run '$(OPENSSH_TESTS)' ./internal/opensshtest ./backend/ssh/... ./cmd/meridian
 
+# test-sessions runs the tests of who has the port a session's service is
+# at, and of serving sessions, which CI runs on macOS too: elsewhere, the
+# parser of macOS's list of TCP sockets meets only fixtures, made from its
+# headers, and there it meets a real kernel's list.
+SESSION_TESTS := ^TestSession
+.PHONY: test-sessions
+test-sessions: ## Run the tests of serving sessions, and of who listens where one points
+	$(FIPS) go test $(TESTTAGS) -count=1 ./internal/sockowner/... ./internal/sessionproxy
+	$(FIPS) go test $(TESTTAGS) -count=1 -run '$(SESSION_TESTS)' ./cmd/meridian/internal/local
+
+# test-root runs the tests that need root, which start a listener as
+# another user, to check that the system says it is theirs, and that a
+# session isn't passed on to it (internal/sockownertest). Their binaries
+# are built as this user, with this user's caches, into a directory of
+# this user's that mktemp makes, which no other user can write to or name
+# first, and only they run as root, through sudo, from their packages'
+# directories, as go test runs them, so that root leaves nothing in the
+# caches. MERIDIAN_TEST_ROOT has them fail, rather than skip, where they
+# don't run as root after all; and each must say it passed, so that one
+# renamed, which -test.run would find nothing of, fails too.
+# ROOT_TESTS are each one's package's directory and its name.
+ROOT_TESTS := internal/sockowner:TestOwnerOfAnotherUser cmd/meridian/internal/local:TestSessionDialerRefusesAnotherUser
+.PHONY: test-root
+test-root: ## Run the tests that need root, through sudo, from binaries built as this user
+	@bin=$$(mktemp -d) && trap 'rm -rf "$$bin"' EXIT && \
+	for t in $(ROOT_TESTS); do \
+		echo "$(FIPS) go test $(TESTTAGS) -c -o $$bin/$${t#*:}.test ./$${t%:*}"; \
+		$(FIPS) go test $(TESTTAGS) -c -o "$$bin/$${t#*:}.test" "./$${t%:*}" || exit 1; \
+	done && \
+	for t in $(ROOT_TESTS); do \
+		dir=$${t%:*}; name=$${t#*:}; \
+		echo "cd $$dir && sudo env GODEBUG=$$GODEBUG MERIDIAN_TEST_ROOT=1 $$bin/$$name.test -test.run '^$$name\$$' -test.v"; \
+		out=$$(cd "$$dir" && sudo env GODEBUG="$$GODEBUG" MERIDIAN_TEST_ROOT=1 "$$bin/$$name.test" -test.run "^$$name\$$" -test.v 2>&1); status=$$?; \
+		printf '%s\n' "$$out"; \
+		if [ $$status -ne 0 ] || ! grep -qF -- "--- PASS: $$name (" <<<"$$out"; then \
+			echo "test-root: $$name didn't pass as root"; exit 1; \
+		fi; \
+	done
+
 .PHONY: bench
 bench: ## Run each benchmark once, to check that it still runs
 	$(FIPS) go test -run='^$$' -bench=. -benchtime=1x ./...

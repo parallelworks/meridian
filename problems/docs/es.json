@@ -847,6 +847,14 @@
       "Permite que Meridian escuche en los puertos de 127.0.0.1 y [::1] que elige el sistema, y vuelve a ejecutar meridian resume, o meridian session url."
     ]
   },
+  "session_service_unchecked": {
+    "title": "Servicio de la sesión cuyo usuario Meridian no puede saber",
+    "why": "Una sesión que apunta a un servicio de esta máquina se sirve pasando cada petición al puerto que dio el flujo de trabajo, en la dirección de bucle local de esta máquina, donde cualquier usuario de la máquina puede escuchar mientras el servicio no lo hace, como mientras empieza, o después de detenerse, y recibiría las peticiones de la sesión, con tus cookies y contraseñas de su aplicación. Así que, antes de enviar una petición, Meridian pregunta al sistema quién tiene el otro extremo de su conexión: Linux mediante NETLINK_SOCK_DIAG, y macOS y FreeBSD en sus listas de sockets TCP. Antes de servir una sesión en un servicio de aquí, Meridian comprueba que el sistema lo diga de una conexión a un oyente propio. Aquí no lo dijo: el sistema no quiso decirlo, como en un entorno aislado que rechace los sockets NETLINK_SOCK_DIAG, o lo dijo de una forma que Meridian no lee, como podría hacerlo una versión de macOS o FreeBSD cuya lista no conoce. Así que Meridian no pasa las peticiones de la sesión a nadie, en lugar de a un usuario que no comprobó, y un paso que apunta una sesión a un servicio de aquí falla. Una sesión que apunta a un clúster no se comprueba así: es el host de su clúster el que conecta con el servicio.",
+    "fix": [
+      "Ejecuta meridian donde el sistema diga quién escucha en un puerto: en Linux, fuera de un entorno aislado que rechace los sockets NETLINK_SOCK_DIAG que usa ss; o en macOS o FreeBSD.",
+      "Revisa el registro de meridian run, que dice por qué el sistema no quiso decirlo."
+    ]
+  },
   "session_name_taken": {
     "title": "Nombre de sesión que tiene otra sesión",
     "why": "El nombre de una sesión es su ruta, /me/session/<usuario>/<nombre>/, y aquello por lo que update-session la nombra, así que dos sesiones que no han terminado no tienen el mismo nombre. El nombre es uno que eligió el flujo de trabajo, como el valor por defecto de prompt-for-name, que también tiene otra sesión que no ha terminado: otra de las sessions: del flujo de trabajo, o una de otra ejecución, que sigue en marcha.",
@@ -2544,6 +2552,22 @@
     "why": "Cada sesión se sirve en un nombre de host propio, <etiqueta>.localhost, cuya etiqueta son 128 bits aleatorios, que un navegador resuelve a la dirección de bucle local de esta máquina. Un navegador envía una cookie solo a su host, sea cual sea el puerto, así que ninguna petición a otro nombre, como 127.0.0.1, localhost o el de otra sesión, lleva la cookie de la sesión, y el almacenamiento de sus páginas es solo de la sesión; y el puerto de la sesión escucha en las dos direcciones de bucle local de esta máquina, 127.0.0.1 y [::1], donde tiene IPv6, así que ningún otro programa puede responder en el nombre y el puerto de la sesión. Meridian solo responde a peticiones dirigidas a ese nombre: rechaza una a 127.0.0.1, a localhost, o a un nombre que se hizo resolver a 127.0.0.1 (DNS rebinding). Chrome y Firefox resuelven por sí mismos cualquier nombre bajo localhost a esta máquina, y también curl y el resolvedor de systemd; un navegador que no lo hace no puede abrir la sesión, y Meridian no la sirve en 127.0.0.1 en su lugar.",
     "fix": [
       "Abre la sesión en la dirección que muestra meridian session url, en un navegador que resuelva los nombres bajo localhost, como Chrome y Firefox, o a través de ssh -L hacia ella."
+    ]
+  },
+  "session_service_foreign": {
+    "title": "Servicio de la sesión en el que escucha otro usuario",
+    "why": "Una sesión que apunta a un servicio de esta máquina se sirve pasando cada petición al puerto que dio el flujo de trabajo, en la dirección de bucle local de esta máquina, donde cualquier usuario de la máquina puede escuchar mientras el servicio no lo hace, como mientras empieza, o después de detenerse, y recibiría las peticiones de la sesión, con tus cookies y contraseñas de su aplicación. Así que, antes de enviar una petición, Meridian pregunta al sistema quién tiene el otro extremo de su conexión, y solo pasa la petición si lo tienes tú; o, en Linux, root, donde el sistema dice quién aceptó la conexión, y un proceso de root podría tomar cualquier conexión de todos modos. macOS y FreeBSD dicen quién creó el oyente, no quién acepta en él, y un oyente que creó root puede haberse pasado al programa de cualquier usuario, así que allí el oyente de root es también de otro usuario. Un oyente de otro usuario tenía esta conexión, así que Meridian la cerró sin enviar nada, y lo dijo una vez en el registro de la ejecución, con el usuario.",
+    "fix": [
+      "Busca el programa que escucha en el puerto, como muestran ss -ltnp o lsof -nP -iTCP, y haz que lo detengan.",
+      "Vuelve a iniciar el servicio de la sesión cuando el puerto esté libre, o apunta la sesión a un puerto en el que nadie más escuche."
+    ]
+  },
+  "session_service_owner_unknown": {
+    "title": "Conexión al servicio de una sesión cuyo usuario Meridian no puede saber",
+    "why": "Una sesión que apunta a un servicio de esta máquina se sirve pasando cada petición al puerto que dio el flujo de trabajo, en la dirección de bucle local de esta máquina, donde cualquier usuario de la máquina puede escuchar mientras el servicio no lo hace, como mientras empieza, o después de detenerse, y recibiría las peticiones de la sesión, con tus cookies y contraseñas de su aplicación. Así que, antes de enviar una petición, Meridian pregunta al sistema quién tiene el otro extremo de su conexión, y solo pasa la petición si lo tienes tú, o, en Linux, root. De esta conexión, Meridian no pudo saber quién la tiene: como cuando el sistema no muestra el otro extremo, ni siquiera tras un segundo, como el de un puerto publicado desde otro espacio de nombres de red mediante DNAT, como lo publica docker sin su proxy de usuario, o podman con root, que Meridian rechaza, o, en FreeBSD, un socket de otro usuario, que security.bsd.see_other_uids oculta; cuando lo muestra en un estado cuyo dueño no dice, como una conexión que el servicio cerró en cuanto la aceptó; o cuando Meridian no pudo preguntar, o leer la respuesta, como cuando no le queda ningún descriptor de archivo, la respuesta no llega, o la lista tiene lo que Meridian no lee, o dos sockets en ese extremo. Meridian cerró la conexión sin enviar nada; el registro de la ejecución dice, una vez, lo que dijo el sistema.",
+    "fix": [
+      "Haz que el servicio escuche en la dirección de bucle local de esta máquina, en el propio espacio de nombres de red de Meridian: publica el puerto de un contenedor mediante un proxy, como el proxy de usuario de docker, o el de podman sin root, en lugar de mediante DNAT.",
+      "Revisa el registro de meridian run, que dice lo que dijo el sistema de la conexión."
     ]
   },
   "session_key_unknown": {

@@ -654,9 +654,10 @@ func TestPages(t *testing.T) {
 // TestLimits checks that a session has at most MaxConns connections to
 // its service open, or opening, at once: a request waits a bounded time,
 // not its own, for one, and then is answered that the service doesn't
-// answer; a dial it stops waiting for goes on, holding its place, until
-// it ends, so a browser that retries a service that doesn't answer can't
-// have more going on; and once they end, a request connects again.
+// answer; a dial it stops waiting for is told so, as its context ends,
+// and, where it goes on all the same, holds its place until it ends, so a
+// browser that retries a service that doesn't answer can't have more
+// going on; and once they end, a request connects again.
 func TestLimits(t *testing.T) {
 	leaktest.Check(t)
 	defer func(w time.Duration) { dialWait = w }(dialWait)
@@ -666,6 +667,7 @@ func TestLimits(t *testing.T) {
 		opening, at int
 		hold        = make(chan struct{})
 		holding     atomic.Bool
+		told        atomic.Int32
 	)
 	holding.Store(true)
 	var r *rig
@@ -682,9 +684,10 @@ func TestLimits(t *testing.T) {
 				mu.Unlock()
 			}()
 			if holding.Load() {
-				select {
-				case <-hold:
-				case <-ctx.Done():
+				// A dial that goes on whatever its context says.
+				<-hold
+				if ctx.Err() != nil {
+					told.Add(1)
 					return nil, ctx.Err()
 				}
 			}
@@ -726,6 +729,21 @@ func TestLimits(t *testing.T) {
 	holding.Store(false)
 	close(hold)
 	deadline := time.Now().Add(10 * time.Second)
+	for {
+		mu.Lock()
+		n := opening
+		mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d dials go on once they were let go", n)
+		}
+		time.Sleep(time.Millisecond) //nolint:forbidigo // the dials ending, which nothing signals
+	}
+	if n := told.Load(); n != 2 {
+		t.Errorf("%d of the 2 dials given up on were told so", n)
+	}
 	for {
 		resp, _ := r.do("GET", prefix+"/x", http.Header{"Cookie": {cookie}})
 		if resp.StatusCode == http.StatusOK {

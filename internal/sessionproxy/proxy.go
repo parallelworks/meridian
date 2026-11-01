@@ -24,9 +24,11 @@
 //     the session's own pages, as its Origin and Sec-Fetch-Site say.
 //
 // Nothing reaches the service, nor is any connection to it opened, until a
-// request has passed all three. Meridian's own cookies and code never
-// reach it, and the cookies it sets the browser are held to the session's
-// path, and can't be Meridian's.
+// request has passed all three; nor does anything go on a connection the
+// dial refused, as one to a port of this machine that another user
+// listens at (DialFunc). Meridian's own cookies and code never reach it,
+// and the cookies it sets the browser are held to the session's path, and
+// can't be Meridian's.
 package sessionproxy
 
 import (
@@ -59,7 +61,15 @@ import (
 
 // A DialFunc connects to a session's service, wherever the workflow
 // pointed it, and returns the connection, whose life ctx bounds, not only
-// its dial, as the ssh backend's DialTCP does.
+// its dial, as the ssh backend's DialTCP does: ctx is done once the proxy
+// closes, once the connection closes, or once the request it was dialed
+// for gives up on it. One that connected and then refused the
+// connection, closed before anything was sent on it, returns a problem
+// of problems.SessionServiceForeign, where another user of this machine
+// listens where the session points, problems.SessionServiceOwnerUnknown,
+// where the system says no owner of the connection's other end, or
+// problems.SessionServiceUnchecked, where the system can't say who
+// listens at all, which the browser is answered with, 502 Bad Gateway.
 type DialFunc func(ctx context.Context) (net.Conn, error)
 
 // Codes are the sessions' one-time codes, each kept as its keyed hash
@@ -195,10 +205,14 @@ type Proxy struct {
 type target struct {
 	transport *http.Transport
 	// dial connects to where the session points, which the transport's
-	// connections are dialed with, as it is when each is.
-	dial     atomic.Pointer[DialFunc]
-	inflight atomic.Int64
-	retired  atomic.Bool
+	// connections are dialed with, as it is when each is; and foreign and
+	// unknown are set once it has refused a connection there of another
+	// user's, or of an owner Meridian can't tell, each of which is logged
+	// once.
+	dial             atomic.Pointer[DialFunc]
+	foreign, unknown atomic.Bool
+	inflight         atomic.Int64
+	retired          atomic.Bool
 }
 
 // retireAfter is how long after the last request through a retired
@@ -250,6 +264,16 @@ func New(ctx context.Context, cfg Config) (*Proxy, error) {
 				page(w, r, http.StatusServiceUnavailable, problems.SessionBusy, problems.Params{"name": cfg.Name, "limit": cfg.MaxConns})
 				return
 			}
+			// A connection refused as another user's, or as one whose
+			// owner Meridian can't tell, is logged once for where the
+			// session points (target.dialFrom).
+			if k, params, ok := p.refused(err); ok {
+				if k == problems.SessionServiceUnchecked {
+					p.logFailed(err)
+				}
+				page(w, r, http.StatusBadGateway, k, params)
+				return
+			}
 			if !errors.Is(err, context.Canceled) {
 				p.logFailed(err)
 			}
@@ -277,15 +301,46 @@ func (p *Proxy) logFailed(err error) {
 	if last != 0 && now-last < int64(logEvery) || !p.logged.CompareAndSwap(last, now) {
 		return
 	}
+	p.warn("sessionproxy: the session's service didn't answer", err)
+}
+
+// warn logs msg, with err: for a private session, only its problem's code,
+// masked as what the session read is, or that it isn't one.
+func (p *Proxy) warn(msg string, err error) {
+	if p.cfg.Log == nil {
+		return
+	}
 	if !p.private.Load() {
-		p.cfg.Log.Warn("sessionproxy: the session's service didn't answer", "session", p.cfg.Name, "err", err)
+		p.cfg.Log.Warn(msg, "session", p.cfg.Name, "err", err)
 		return
 	}
 	code := "an error that isn't a problem, left out as the session is private"
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
 		code = string(problems.MaskProblem(prob).Code)
 	}
-	p.cfg.Log.Warn("sessionproxy: the session's service didn't answer", "session", p.cfg.Name, "problem", code)
+	p.cfg.Log.Warn(msg, "session", p.cfg.Name, "problem", code)
+}
+
+// refused returns the page that answers a request whose connection to the
+// service the dial refused, as err says (DialFunc), and whether it did:
+// the kind of the problem it refused it with, and its params, the port of
+// a private session masked, since where it points can be what it read.
+func (p *Proxy) refused(err error) (*problems.Kind, problems.Params, bool) {
+	prob, ok := errors.AsType[*problem.Problem](err)
+	switch {
+	case !ok:
+		return nil, nil, false
+	case prob.Code == problems.SessionServiceForeign.Code(), prob.Code == problems.SessionServiceOwnerUnknown.Code():
+		k, _ := problems.Lookup(prob.Code)
+		params := prob.Params
+		if p.private.Load() {
+			params = problems.MaskValues(params)
+		}
+		return k, params, true
+	case prob.Code == problems.SessionServiceUnchecked.Code():
+		return problems.SessionServiceUnchecked, prob.Params, true
+	}
+	return nil, nil, false
 }
 
 // privateLog writes the reverse proxy's and the server's own logs, as of a
@@ -387,11 +442,33 @@ func (p *Proxy) newTarget(dial DialFunc) *target {
 	t := &target{}
 	t.dial.Store(&dial)
 	t.transport = &http.Transport{
-		DialContext:        func(ctx context.Context, _, _ string) (net.Conn, error) { return p.dialService(ctx, *t.dial.Load()) },
+		DialContext:        t.dialFrom(p),
 		DisableCompression: true,
 		IdleConnTimeout:    idleTimeout,
 	}
 	return t
+}
+
+// dialFrom returns what dials t's connections for p: with its dial,
+// within p's bounds (dialService), logging, once, that another user
+// listens where it points, and, once, that Meridian can't tell who has
+// a connection there, as its dial refused one for, rather than for each
+// request, as a browser that retries would send.
+func (t *target) dialFrom(p *Proxy) func(ctx context.Context, _, _ string) (net.Conn, error) {
+	return func(ctx context.Context, _, _ string) (net.Conn, error) {
+		conn, err := p.dialService(ctx, *t.dial.Load())
+		switch k, _, _ := p.refused(err); k {
+		case problems.SessionServiceForeign:
+			if !t.foreign.Swap(true) {
+				p.warn("sessionproxy: another user listens where the session points, so none of its requests go there", err)
+			}
+		case problems.SessionServiceOwnerUnknown:
+			if !t.unknown.Swap(true) {
+				p.warn("sessionproxy: meridian can't tell who has a connection where the session points, so none of its requests went there", err)
+			}
+		}
+		return conn, err
+	}
 }
 
 // switching is the proxy's RoundTripper: each request goes through the
@@ -516,7 +593,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.unauthorized(w, r)
 		return
 	}
-	p.reverse.ServeHTTP(w, r)
+	// The connection's dial learns from it when the request ends
+	// (requestGone).
+	p.reverse.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestKey{}, r.Context())))
 }
 
 // redeem uses the one-time code code: a code that works gives the browser
@@ -583,25 +662,35 @@ func (p *Proxy) authorized(r *http.Request) bool {
 // has fewer than MaxConns connections to it open or opening, waiting
 // dialWait at most for both, or until ctx is done: errBusy where it waited
 // for a place in vain, and errNoAnswer for the dial. A dial it stops
-// waiting for goes on, with the place it took, until it ends, and closes
-// what it made: so a browser that retries a service that doesn't answer
-// has no more dials going on than MaxConns, which the host's other
-// sessions don't wait behind. A connection lives as long as the proxy, at
-// most, whatever request it was dialed for, as the transport keeps it for
-// the next.
+// waiting for is told so, as its context ends, and holds the place it
+// took until it ends, closing what it made: so a browser that retries a
+// service that doesn't answer has no more dials going on than MaxConns,
+// which the host's other sessions don't wait behind, and none goes on
+// waiting for what no request will use. A connection lives as long as
+// the proxy, at most, whatever request it was dialed for, as the
+// transport keeps it for the next, and its context with it.
 func (p *Proxy) dialService(ctx context.Context, dial DialFunc) (net.Conn, error) {
 	wait := time.NewTimer(dialWait)
 	defer wait.Stop()
+	gone := requestGone(ctx)
 	select {
 	case p.places <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-gone:
+		return nil, context.Canceled
 	case <-wait.C:
 		return nil, errBusy
 	case <-p.life.Done():
 		return nil, errClosed
 	}
-	release := sync.OnceFunc(func() { <-p.places })
+	// The dial's context ends with the proxy, with its connection, and
+	// once no request waits for it.
+	dialCtx, cancel := context.WithCancel(p.life)
+	release := sync.OnceFunc(func() {
+		cancel()
+		<-p.places
+	})
 	type dialed struct {
 		conn net.Conn
 		err  error
@@ -612,7 +701,7 @@ func (p *Proxy) dialService(ctx context.Context, dial DialFunc) (net.Conn, error
 	)
 	ch := make(chan dialed, 1)
 	go func() {
-		conn, err := dial(p.life)
+		conn, err := dial(dialCtx)
 		mu.Lock()
 		defer mu.Unlock()
 		if !abandoned {
@@ -635,6 +724,7 @@ func (p *Proxy) dialService(ctx context.Context, dial DialFunc) (net.Conn, error
 	case d := <-ch:
 		return answer(d)
 	case <-ctx.Done():
+	case <-gone:
 	case <-wait.C:
 	}
 	mu.Lock()
@@ -645,10 +735,31 @@ func (p *Proxy) dialService(ctx context.Context, dial DialFunc) (net.Conn, error
 	default:
 	}
 	abandoned = true
-	if ctx.Err() != nil {
+	cancel()
+	select {
+	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-gone:
+		return nil, context.Canceled
+	default:
 	}
 	return nil, errNoAnswer
+}
+
+// requestKey is the key of the context of the request a connection to
+// the service is dialed for, in its own values.
+type requestKey struct{}
+
+// requestGone returns what is done once the request that ctx, a dial's,
+// is for has ended, as its browser went away, or nil, for none: net/http
+// dials a request's connection with a context the request's ending
+// doesn't end, so that another request can use the connection, but which
+// holds the request's values (ServeHTTP).
+func requestGone(ctx context.Context) <-chan struct{} {
+	if rc, ok := ctx.Value(requestKey{}).(context.Context); ok {
+		return rc.Done()
+	}
+	return nil
 }
 
 var (
