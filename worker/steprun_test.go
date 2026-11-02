@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -54,13 +55,14 @@ func stepRunEnds(f *workerapitest.Fake, ends map[string]workerapi.StepRun) func(
 // try's ssh:, the job's state, of the outputs only those the step reads,
 // and what the worker masks, never a variable of its environment or a
 // path, and ends as it ended. What a step run's
-// step wrote to $OUTPUTS, once it succeeded, is appended to the file the
-// step would have written, read as any step's: the job's, for a step
-// without an id, of which the step's outputs are what it changed, or the
-// step's own; and one its step run says holds a secret is masked, and the
-// job's outputs that hold it are secrets. A try that failed gives none;
-// ignore-errors: lets the last succeed; and retry: tries again, with the
-// ssh: the next try gives, as a step that fails over to another host does.
+// step wrote to $OUTPUTS is appended to the file the step would have
+// written, read as any step's: the job's, for a step without an id, of
+// which the step's outputs are what it changed, or the step's own; and
+// one its step run says holds a secret is masked, and the job's outputs
+// that hold it are secrets. ignore-errors: lets the last try that failed
+// succeed; and retry: tries again, with the ssh: the next try gives, as a
+// step that fails over to another host does. TestStepRunCallerFailedTries
+// checks what a try that failed wrote.
 func TestStepRunCaller(t *testing.T) {
 	t.Parallel()
 	own := remote("")
@@ -154,9 +156,81 @@ func mustValue(t *testing.T, v any) plan.Value {
 	return out
 }
 
+// TestStepRunCallerFailedTries checks that what a step run's step wrote
+// to $OUTPUTS in a try that failed is its step's, as a command's try's
+// is, and is read as a command's: a step that runs elsewhere gives the
+// events, and its job the outputs, that one with the same tries here
+// gives. A retry:'s later try's lines come after an earlier try's, so a
+// name both wrote has the later value, and one only the earlier wrote
+// stays; ignore-errors: lets a last try that failed succeed, with what it
+// wrote; and a step that failed has its outputs read by a later step whose
+// if: is failure(), through steps.<id> and the job's file, and by the
+// job's outputs:. A step run that ended with nothing its worker reported,
+// as one whose worker was lost, gives none.
+func TestStepRunCallerFailedTries(t *testing.T) {
+	t.Parallel()
+	retried := command(`if [ "$PW_WORKFLOW_STEP_CURRENT_RETRY" = 0 ]; then printf 'a=1\nb=1\n' >> $OUTPUTS; exit 1; fi
+echo b=2 >> $OUTPUTS`)
+	retried.ID = "r"
+	retried.Retry = &plan.StepRetry{MaxRetries: number(1), Interval: plan.Literal("0s")}
+	ignored := command("echo c=3 >> $OUTPUTS; exit 2")
+	ignored.ID, ignored.IgnoreErrors = "i", plan.Literal(true)
+	failed := command("echo shared=5 >> $OUTPUTS; exit 4")
+	lost := command("true")
+	lost.ID, lost.If = "l", cond("failure()")
+	reads := plan.Step{If: cond("failure()"), Run: mustValue(t, `echo "seen=${{ steps.r.outputs.a }}${{ steps.r.outputs.b }}${{ steps.i.outputs.c }}${{ needs.build.outputs.shared }}" >> $OUTPUTS`)}
+	outputs := map[string]plan.Value{"a": cond("steps.r.outputs.a"), "b": cond("steps.r.outputs.b"), "c": cond("steps.i.outputs.c"), "l": cond("steps.l.outputs.x")}
+	run := func(t *testing.T, elsewhere bool) (*workerapitest.Fake, *workerapi.Complete) {
+		t.Helper()
+		steps := []plan.Step{retried, ignored, failed, lost, reads}
+		if elsewhere {
+			for i := range 4 {
+				steps[i].SSH = farm
+			}
+		}
+		job := newJob(steps...)
+		job.Outputs = outputs
+		f := workerapitest.NewFake(t, job)
+		f.StepRun = stepRunEnds(f, map[string]workerapi.StepRun{
+			"0.0": {Outcome: plan.OutcomeFailure, ExitCode: 1, Outputs: map[string]string{"a": "1", "b": "1"}},
+			"0.1": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"b": "2"}},
+			"1.0": {Outcome: plan.OutcomeFailure, ExitCode: 2, Outputs: map[string]string{"c": "3"}},
+			"2.0": {Outcome: plan.OutcomeFailure, ExitCode: 4, Outputs: map[string]string{"shared": "5"}},
+			// As the coordinator ends a step run whose worker was lost.
+			"3.0": {Outcome: plan.OutcomeFailure, ExitCode: -1},
+		})
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		return f, checkEnd(t, f, plan.OutcomeFailure, "")
+	}
+	here, hereEnd := run(t, false)
+	there, thereEnd := run(t, true)
+	checkEvents(t, there,
+		"started 0.0", "finished 0.0 failure 1", "started 0.1", "finished 0.1 success 0",
+		"started 1.0", "finished 1.0 success 2",
+		"started 2.0", "finished 2.0 failure 4",
+		"started 3.0", "finished 3.0 failure -1",
+		"started 4.0", "finished 4.0 success 0",
+	)
+	for _, try := range []struct{ step, try int }{{0, 0}, {0, 1}, {1, 0}, {2, 0}} {
+		if got, want := finishedEvent(t, there, try.step, try.try, false).Outputs, finishedEvent(t, here, try.step, try.try, false).Outputs; !maps.Equal(got, want) {
+			t.Errorf("step %d's try %d elsewhere wrote %q, and here %q", try.step, try.try, got, want)
+		}
+	}
+	if got := finishedEvent(t, there, 3, 0, false).Outputs; len(got) > 0 {
+		t.Errorf("the step whose step run's worker was lost wrote %q", got)
+	}
+	want := map[string]string{"a": "1", "b": "2", "c": "3", "l": "", "shared": "5", "seen": "1235"}
+	if !maps.Equal(thereEnd.Result.Outputs, want) || !maps.Equal(hereEnd.Result.Outputs, want) {
+		t.Errorf("the job's outputs are %q elsewhere, and %q here; want %q", thereEnd.Result.Outputs, hereEnd.Result.Outputs, want)
+	}
+}
+
 // TestStepRunCallerStopped checks that a stop of a try that waits for its
 // step run stops the step run, once, for the stop's reason, and ends the
-// try as that stop ends a command's.
+// try as that stop ends a command's, with what the step wrote to $OUTPUTS
+// before its step run's worker stopped it.
 func TestStepRunCallerStopped(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -196,14 +270,21 @@ func TestStepRunCallerStopped(t *testing.T) {
 				}
 				return nil
 			}
-			f.OnStepRunStop = func(workerapi.StepRunStop) plan.Outcome { return plan.OutcomeCancelled }
+			partial := map[string]string{"partial": "1"}
+			f.OnStepRunStop = func(stop workerapi.StepRunStop) plan.Outcome {
+				go f.EndStepRun(stop.Step, stop.Try, stop.Cleanup, workerapi.StepRun{Outcome: plan.OutcomeCancelled, Reason: stop.Reason, ExitCode: -1, Outputs: partial})
+				return ""
+			}
 			if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 				t.Fatal(err)
 			}
 			checkEvents(t, f, tc.events...)
-			checkEnd(t, f, tc.outcome, tc.reason)
+			end := checkEnd(t, f, tc.outcome, tc.reason)
 			if got := f.Stored().StepRunStops; !slices.Equal(got, tc.stops) {
 				t.Errorf("the step run's stops are %+v, want %+v", got, tc.stops)
+			}
+			if got := finishedEvent(t, f, 0, 0, false).Outputs; !maps.Equal(got, partial) || !maps.Equal(end.Result.Outputs, partial) {
+				t.Errorf("the stopped try's outputs are %q, and its job's %q", got, end.Result.Outputs)
 			}
 		})
 	}
@@ -405,6 +486,22 @@ cat $OUTPUTS`), Retry: &plan.StepRetry{}}
 	}
 }
 
+// TestStepRunWorkerFailed checks that the worker of a step run whose step
+// fails reports what the step wrote to $OUTPUTS, with its exit status, as
+// a try of a command here keeps what it wrote, for its caller to append.
+func TestStepRunWorkerFailed(t *testing.T) {
+	t.Parallel()
+	f := workerapitest.NewFake(t, stepRunJob(command("echo half=done >> $OUTPUTS; exit 3")))
+	f.Claim.StepRun = &workerapi.StepRunClaim{Step: 2, State: workerapi.StepRunState{Steps: []workerapi.StepRunResult{{Outcome: plan.OutcomeSuccess}, {Outcome: plan.OutcomeSuccess}}}}
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	checkEvents(t, f, "started 2.0", "finished 2.0 failure 3")
+	if end := checkEnd(t, f, plan.OutcomeFailure, ""); !maps.Equal(end.Result.Outputs, map[string]string{"half": "done"}) {
+		t.Errorf("the step run's outputs are %q", end.Result.Outputs)
+	}
+}
+
 // TestStepRunWorkerWaits checks that the worker of a step run doesn't start
 // its step until the coordinator has stored that it is starting, as a
 // job's first step waits (TestFirstStepWaits).
@@ -435,23 +532,27 @@ func TestStepRunWorkerWaits(t *testing.T) {
 // TestStepRunWorkerStopped checks that a step run told to stop runs no
 // step, whatever its step's if: says, and whatever its caller's state
 // says of it, a cleanup's too: one told before its step starts runs none,
-// and ends cancelled; and one told as it runs stops it.
+// and ends cancelled, with no outputs; and one told as it runs stops it,
+// and reports what its step wrote to $OUTPUTS before it stopped, as a
+// try of a command here keeps it.
 func TestStepRunWorkerStopped(t *testing.T) {
 	t.Parallel()
-	always := remote("sleep 60")
+	always := remote(`echo partial=1 >> $OUTPUTS; touch "$PW_JOB_DIR/wrote"; sleep 60`)
 	always.If = cond("always()")
 	tidy := command("true")
-	tidy.Cleanup = plan.Literal("sleep 60")
+	tidy.Cleanup = plan.Literal("echo partial=1 >> $OUTPUTS; sleep 60")
+	partial := map[string]string{"partial": "1"}
 	for _, tc := range []struct {
 		name    string
 		step    plan.Step
 		claim   workerapi.StepRunClaim
 		started bool
 		events  []string
+		outputs map[string]string
 	}{
-		{"always()", always, workerapi.StepRunClaim{Step: 2, State: workerapi.StepRunState{Steps: make([]workerapi.StepRunResult, 2), IfAlways: true}}, false, []string{"finished 2.0 cancelled -1"}},
-		{"a cleanup", tidy, workerapi.StepRunClaim{Step: 2, Cleanup: true, State: workerapi.StepRunState{Steps: make([]workerapi.StepRunResult, 3)}}, false, []string{"cleanup finished 2.0 cancelled -1"}},
-		{"as it runs", always, workerapi.StepRunClaim{Step: 2, State: workerapi.StepRunState{Steps: make([]workerapi.StepRunResult, 2)}}, true, []string{"started 2.0", "finished 2.0 cancelled -1"}},
+		{"always()", always, workerapi.StepRunClaim{Step: 2, State: workerapi.StepRunState{Steps: make([]workerapi.StepRunResult, 2), IfAlways: true}}, false, []string{"finished 2.0 cancelled -1"}, nil},
+		{"a cleanup", tidy, workerapi.StepRunClaim{Step: 2, Cleanup: true, State: workerapi.StepRunState{Steps: make([]workerapi.StepRunResult, 3)}}, false, []string{"cleanup finished 2.0 cancelled -1"}, nil},
+		{"as it runs", always, workerapi.StepRunClaim{Step: 2, State: workerapi.StepRunState{Steps: make([]workerapi.StepRunResult, 2)}}, true, []string{"started 2.0", "finished 2.0 cancelled -1"}, partial},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -462,9 +563,18 @@ func TestStepRunWorkerStopped(t *testing.T) {
 			f.Claim.StepRun = &tc.claim
 			stop := workerapi.Control{Cancel: true, Reason: plan.ReasonCancelled}
 			if tc.started {
+				// It stops once the step has written its output.
+				wrote := filepath.Join(f.Claim.RunDir, "wrote")
 				f.OnEvent = func(e workerapi.Event) {
 					if !e.Finished {
-						go f.SetControl(stop)
+						go func() {
+							for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) { //nolint:forbidigo // polling the step's file, which nothing signals
+								if _, err := os.Stat(wrote); err == nil {
+									break
+								}
+							}
+							f.SetControl(stop)
+						}()
 					}
 				}
 			} else {
@@ -474,7 +584,7 @@ func TestStepRunWorkerStopped(t *testing.T) {
 				t.Fatal(err)
 			}
 			checkEvents(t, f, tc.events...)
-			if end := f.End(); end == nil || end.Result.Outcome != plan.OutcomeCancelled {
+			if end := f.End(); end == nil || end.Result.Outcome != plan.OutcomeCancelled || !maps.Equal(end.Result.Outputs, tc.outputs) {
 				t.Errorf("the step run ended %+v", end)
 			}
 		})
@@ -524,15 +634,18 @@ func TestAppendOutputs(t *testing.T) {
 }
 
 // TestStepRunAnswered checks the answers of the step run paths that no
-// step run can be, which the worker can't read: an end with outputs but
-// for a success, or one whose name no line of $OUTPUTS can hold; one not
-// made that succeeded; and one that hasn't ended that is no run.
+// step run can be, which the worker can't read: outputs of one that hasn't
+// ended, or that wasn't made, or one whose name no line of $OUTPUTS can
+// hold; one not made that succeeded; and one that hasn't ended that is no
+// run. One that ended gives its outputs however it ended.
 func TestStepRunAnswered(t *testing.T) {
 	t.Parallel()
+	x := map[string]string{"x": "1"}
 	for name, sr := range map[string]workerapi.StepRun{
-		"outputs of a failure":  {Run: "r", Ended: true, Outcome: plan.OutcomeFailure, Outputs: map[string]string{"x": "1"}},
+		"outputs, not ended":    {Run: "r", Outputs: x},
+		"outputs, not made":     {Ended: true, Outcome: plan.OutcomeFailure, Outputs: x},
 		"a name with an =":      {Run: "r", Ended: true, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x=y": "1"}},
-		"a name with a newline": {Run: "r", Ended: true, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x\ny": "1"}},
+		"a name with a newline": {Run: "r", Ended: true, Outcome: plan.OutcomeFailure, Outputs: map[string]string{"x\ny": "1"}},
 		"not made, a success":   {Ended: true, Outcome: plan.OutcomeSuccess},
 		"no outcome a run has":  {Run: "r", Ended: true, Outcome: plan.OutcomeSkipped},
 		"not ended, and no run": {},
@@ -541,8 +654,10 @@ func TestStepRunAnswered(t *testing.T) {
 			t.Errorf("%s: no error", name)
 		}
 	}
-	if err := stepRunAnswered(workerapi.PathStepRun, &workerapi.StepRun{Run: "r", Ended: true, Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"x": "a\nb"}}); err != nil {
-		t.Errorf("a success with outputs: %v", err)
+	for _, outcome := range []plan.Outcome{plan.OutcomeSuccess, plan.OutcomeFailure, plan.OutcomeCancelled} {
+		if err := stepRunAnswered(workerapi.PathStepRun, &workerapi.StepRun{Run: "r", Ended: true, Outcome: outcome, Outputs: map[string]string{"x": "a\nb"}}); err != nil {
+			t.Errorf("a %s with outputs: %v", outcome, err)
+		}
 	}
 }
 
@@ -594,13 +709,14 @@ echo small=ok >> $OUTPUTS`)
 }
 
 // TestStepRunCallerUnread checks that an end of a step run the worker
-// can't read, as one with outputs of a try that failed, fails the step,
-// with step_run_request_failed, and none of what it says is the step's.
+// can't read, as one with an output whose name no line of $OUTPUTS can
+// hold, fails the step, with step_run_request_failed, and none of what it
+// says is the step's.
 func TestStepRunCallerUnread(t *testing.T) {
 	t.Parallel()
 	job := newJob(remote("true"))
 	f := workerapitest.NewFake(t, job)
-	f.StepRun = stepRunEnds(f, map[string]workerapi.StepRun{"0.0": {Outcome: plan.OutcomeFailure, Outputs: map[string]string{"leak": "x"}}})
+	f.StepRun = stepRunEnds(f, map[string]workerapi.StepRun{"0.0": {Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"leak": "x", "x=y": "1"}}})
 	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
 		t.Fatal(err)
 	}
@@ -615,8 +731,9 @@ func TestStepRunCallerUnread(t *testing.T) {
 }
 
 // TestStepRunCallerStoppedSucceeds checks that a step run that its try's
-// stop reached, but that ended a success all the same, gives the try none
-// of what its step wrote: the try ends as its stop does.
+// stop reached, but that ended a success all the same, ends the try as its
+// stop does, with what its step wrote, as a command's that its stop
+// reached as it exited 0.
 func TestStepRunCallerStoppedSucceeds(t *testing.T) {
 	t.Parallel()
 	f := workerapitest.NewFake(t, newJob(remote("true")))
@@ -633,7 +750,7 @@ func TestStepRunCallerStoppedSucceeds(t *testing.T) {
 	}
 	checkEvents(t, f, "started 0.0", "finished 0.0 cancelled 0")
 	end := checkEnd(t, f, plan.OutcomeCancelled, plan.ReasonCancelled)
-	if e := finishedEvent(t, f, 0, 0, false); len(e.Outputs) > 0 || len(end.Result.Outputs) > 0 {
+	if e := finishedEvent(t, f, 0, 0, false); e.Outputs["late"] != "1" || end.Result.Outputs["late"] != "1" {
 		t.Errorf("the stopped try's outputs are %v, and its job's %v", e.Outputs, end.Result.Outputs)
 	}
 }

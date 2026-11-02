@@ -22,9 +22,8 @@ import (
 
 // TestStepRunEnd checks how a step run's end is its step's try's: once it
 // has ended, its outcome, and what its step wrote to $OUTPUTS, as its job's
-// result holds it, with which are private and which secret, for one that
-// succeeded; and none for one that failed, as format 1 copies the file
-// back only from a try that succeeded.
+// result holds it, with which are private and which secret, whether it
+// succeeded or failed, as a step's try keeps what it wrote either way.
 func TestStepRunEnd(t *testing.T) {
 	// Its subtests hold the places, which it would hold one of otherwise
 	// as they wait (parallel).
@@ -50,10 +49,8 @@ func TestStepRunEnd(t *testing.T) {
 				t.Fatal(err)
 			case end.Outcome != outcome:
 				t.Errorf("the step run ended %s", end.Outcome)
-			case outcome == plan.OutcomeSuccess && (!maps.Equal(end.Outputs, written) || !slices.Equal(end.Private, []string{"TOKEN"}) || !slices.Equal(end.Secrets, []string{"KEY"})):
-				t.Errorf("the step run that succeeded gives the outputs %v, private %v, secret %v", end.Outputs, end.Private, end.Secrets)
-			case outcome != plan.OutcomeSuccess && end.Outputs != nil:
-				t.Errorf("the step run that failed gives the outputs %v", end.Outputs)
+			case !maps.Equal(end.Outputs, written) || !slices.Equal(end.Private, []string{"TOKEN"}) || !slices.Equal(end.Secrets, []string{"KEY"}):
+				t.Errorf("the step run gives the outputs %v, private %v, secret %v", end.Outputs, end.Private, end.Secrets)
 			}
 		})
 	}
@@ -186,6 +183,9 @@ func TestStepRunStoppedUnplaced(t *testing.T) {
 	if j := storedJob(t, r.c, id, "build"); j.Outcome != plan.OutcomeCancelled || j.Attempts != 0 {
 		t.Errorf("the step run's job is %+v", j)
 	}
+	if end, err := r.c.stepRunEnd(t.Context(), id); err != nil || end.Outcome != plan.OutcomeCancelled || end.Outputs != nil {
+		t.Errorf("the step run stopped before it was placed ended %+v, %v", end, err)
+	}
 }
 
 // TestStepRunCleanupOfTry checks that a step's cleanup has one step run,
@@ -242,7 +242,7 @@ func stopRunning(t *testing.T, c *Coordinator, id string) {
 // TestStepRunLost checks that a step run whose worker is lost ends failed,
 // worker_lost, rather than run again, though its caller's job's retry:
 // lists worker-lost: it is one try of its step, which its caller's step's
-// retry: tries again.
+// retry: tries again. It gives no outputs: its worker reported none.
 func TestStepRunLost(t *testing.T) {
 	parallel(t)
 	r := newStepRunRig(t)
@@ -262,6 +262,10 @@ func TestStepRunLost(t *testing.T) {
 	}
 	if j := storedJob(t, r.c, id, "failover"); j.Outcome != plan.OutcomeFailure || !slices.Equal(jobCodes(j), []string{"worker_lost"}) {
 		t.Errorf("the step run whose worker was lost: %+v", j)
+	}
+	waitEnded(t, r.c, id)
+	if end, err := r.c.stepRunEnd(t.Context(), id); err != nil || end.Outcome != plan.OutcomeFailure || end.Outputs != nil {
+		t.Errorf("the step run whose worker was lost ended %+v, %v", end, err)
 	}
 }
 
@@ -301,8 +305,9 @@ func TestStepRunExitCode(t *testing.T) {
 }
 
 // TestStepRunStoppedSucceeds checks that a step run that was stopped,
-// whose step succeeded all the same, gives no outputs: it ended
-// cancelled, as its run did, whatever its job did.
+// whose step succeeded all the same, ends cancelled, as its run did,
+// whatever its job did, with what its step wrote, as a step's try that its
+// stop reached keeps what it wrote.
 func TestStepRunStoppedSucceeds(t *testing.T) {
 	parallel(t)
 	release := make(chan struct{})
@@ -326,7 +331,7 @@ func TestStepRunStoppedSucceeds(t *testing.T) {
 	if j := storedJob(t, r.c, id, "build"); j.Outcome != plan.OutcomeSuccess {
 		t.Fatalf("the step run's job ended %s", j.Outcome)
 	}
-	if err != nil || end.Outcome != plan.OutcomeCancelled || end.Outputs != nil {
+	if err != nil || end.Outcome != plan.OutcomeCancelled || !maps.Equal(end.Outputs, map[string]string{"x": "1"}) {
 		t.Errorf("the stopped step run whose step succeeded ended %+v, %v", end, err)
 	}
 }

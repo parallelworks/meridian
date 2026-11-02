@@ -205,6 +205,64 @@ func TestSSHStepRunFailover(t *testing.T) {
 	}
 }
 
+// TestSSHStepRunFailedTries checks that what a step on a host wrote to
+// $OUTPUTS in a try that failed is its step's, as a try's where the run
+// started is: a retry:'s later try adds its lines to the first's,
+// ignore-errors: lets a last try that failed succeed with what it wrote,
+// and a step that fails its job has what it wrote read by a later step
+// whose if: is failure(), by its job's outputs:, and by a job that needs
+// it whose if: is always().
+func TestSSHStepRunFailedTries(t *testing.T) {
+	parallel(t)
+	env := runEnv(t)
+	h := newSSHHost(t, env)
+	r := endedWithin(t, startCommand(t, env, h.setUp, "run", "--input", "cluster="+clusterURI(t, "hpc"), writeFile(t, "w.yaml", `on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+jobs:
+  main:
+    outputs:
+      half: ${{ steps.half.outputs.half }}
+    steps:
+      - run: |
+          echo "try$PW_WORKFLOW_STEP_CURRENT_RETRY=$HOME" >> $OUTPUTS
+          [ "$PW_WORKFLOW_STEP_CURRENT_RETRY" = 1 ] || exit 3
+        retry: {max-retries: 1, interval: 1s}
+        ssh:
+          remoteHost: ${{ inputs.cluster.ip }}
+      - id: half
+        run: |
+          echo "half=$HOME" >> $OUTPUTS
+          exit 4
+        ignore-errors: true
+        ssh:
+          remoteHost: ${{ inputs.cluster.ip }}
+      - run: |
+          echo "failed=$HOME" >> $OUTPUTS
+          exit 5
+        ssh:
+          remoteHost: ${{ inputs.cluster.ip }}
+      - if: ${{ failure() }}
+        run: echo "seen ${{ needs.main.outputs.try0 }} ${{ needs.main.outputs.try1 }} ${{ steps.half.outputs.half }} ${{ needs.main.outputs.failed }}"
+  after:
+    needs: [main]
+    if: ${{ always() }}
+    steps:
+      - run: echo "after ${{ needs.main.outputs.try0 }} ${{ needs.main.outputs.half }} ${{ needs.main.outputs.failed }}"
+`)))
+	if r.code != exitInvalid || !strings.HasSuffix(r.stdout, "run 1 finished: failure\n") {
+		t.Fatalf("meridian run = %+v", r)
+	}
+	logs := commandTest(t, env, "logs", "1")
+	if logs.code != exitOK {
+		t.Fatalf("meridian logs 1 = %+v", logs)
+	}
+	home := h.home
+	hasLines(t, logs.stdout, "main step 3| seen "+strings.Repeat(home+" ", 3)+home, "after step 0| after "+strings.Repeat(home+" ", 2)+home)
+}
+
 // sshWaiting is a workflow of one job, main, where the run started, whose
 // step on the cluster its input names waits until a file in the host's
 // home, released, is there; its step after says it ran.
