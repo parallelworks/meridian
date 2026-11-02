@@ -1,0 +1,38 @@
+description: >-
+  needs.*, or any reference to needs whose job is *, would read every job
+  this one needs, which format 1 refuses: a job reads another only by its
+  name. It is an error wherever it is, as ACTIVATE refuses it, while a *
+  in place of a name in any other context reads each of its values.
+source: Meridian, and ACTIVATE's parser
+expect:
+  diagnostics:
+    - severity: error
+      code: needs_every_job
+      path: /jobs/test/if
+      line: 8
+      column: 13
+      params: {text: needs.*.result}
+    - severity: error
+      code: needs_every_job
+      path: /jobs/test/steps/0/run
+      line: 10
+      column: 23
+      params: {text: needs.*}
+    - severity: error
+      code: needs_every_job
+      path: /jobs/test/steps/0/run
+      line: 10
+      column: 38
+      params: {text: needs.*}
+    - severity: error
+      code: needs_every_job
+      path: /jobs/test/steps/1/run
+      line: 11
+      column: 28
+      params: {text: needs.*.outputs.binary}
+    - severity: error
+      code: needs_every_job
+      path: /jobs/test/outputs/all
+      line: 13
+      column: 23
+      params: {text: needs.*}

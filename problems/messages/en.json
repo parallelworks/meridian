@@ -76,6 +76,7 @@
   "needed_job_no_step": "The job \"{job}\" has no step with the id \"{id}\".",
   "needs_unknown_key": "There's no key \"{key}\" in needs.{job}, which has outputs, result and steps, so this reads as its own text, needs.{job}.{key}.",
   "needs_read_whole": "Format 1 reads a needed job only by its result or an output by name, as needs.{job}.outputs.<name>, so {text} reads as its own text.",
+  "needs_every_job": "Format 1 refuses {text}, which would read every job this one needs: read each by its name, as needs.<job>.outputs.<name>.",
   "step_not_earlier": "The step \"{id}\" doesn't run before this one, so its outputs aren't known here.",
   "undefined_step": "No earlier step of the job \"{job}\" has the id \"{id}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",
   "output_undefined_step": "The job \"{job}\" has no step with the id \"{id}\", so this output fails the job when its steps succeed, and is empty when one fails or is cancelled.{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",

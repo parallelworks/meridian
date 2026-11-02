@@ -135,7 +135,7 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   - `execution-group:` in `runs-on:`, beside format 1's `environment:`, the
     `execution-groups` input that chooses a group, and `resources:`, which
     says what a job needs from it;
-  - `needs.*` in `strategy:` and `runs-on:`, for jobs sized from what earlier
+  - `needs` in `strategy:` and `runs-on:`, for jobs sized from what earlier
     jobs found;
   - `needs.<job>.result`, a dependency's outcome, and the `job` context
     ([Contexts](#contexts));
@@ -283,7 +283,13 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     ([Steps on another host](#steps-on-another-host));
   - how a session is served, where, and at what name and link, what a
     step that points it may give, and when a browser that opened it is
-    signed out ([Serving a session](#serving-a-session)).
+    signed out ([Serving a session](#serving-a-session));
+  - a `*` in place of a step's id under `needs.<job>.steps`, as in
+    `needs.<job>.steps.*.outputs.<name>`, which Meridian's compiler refuses
+    as a step the job doesn't have (`needed_job_no_step`), where ACTIVATE
+    gives the reference's own text, or, in an expression it sets aside for
+    the host, what a step whose id is `*` gives
+    ([Bug fixes to format 1](#bug-fixes-to-format-1)).
 
 ### Conformance
 
@@ -534,22 +540,59 @@ the SHA-256 hash of its content: 218 files.
   run, so that whether it had started was a race at most, which no
   workflow can rely on. ACTIVATE takes the same fix by ending a job marked
   as cancelling as it would start it, or as it waits for its turn.
-- **`vars.*` and `org.*` read every variable of their context**, as
-  `inputs.*` reads every input's value: a list of the variables' values, in
-  the order of their names, with the rest of the path read from each, as in
-  `org.*.region`. ACTIVATE read a variable named `*`, which no variable's
-  name can be, and so gave `""` whatever the variables were. A secret
-  variable read so is one of the run's secrets, as one read by its name
-  is, and what an expression makes of it is masked
-  ([Variables and secrets](#variables-and-secrets)). ACTIVATE takes the
-  same fix by reading each variable for a `*`. It masks the text of every
-  secret variable the run has, however it was read, so one read so is
-  masked as one read by its name, and its form leaves `vars.*` to its
-  backend, which has the secret variables' values, when the user has one.
-  None of the 10,080 expressions of the 218 known workflows reads `vars.*`
-  or `org.*`, nor has a `*` in a reference to any context: 19, in 6
-  workflows, read an organization variable by its name, and none reads
-  `vars`.
+- **A `*` in place of a name reads each value of its context**, as
+  `inputs.*` reads every input's value: a list of the values, in the order
+  of their names, with the rest of the path read from each, as in
+  `org.*.region`, and those it leads nowhere from left out. So `vars.*` and
+  `org.*` read every variable, `env.*` every variable of `env`, `matrix.*`
+  each matrix value of the instance, `remote.*` and `sessions.*` theirs, and
+  `steps.*.outputs.<name>` that output of each step that has run
+  ([Contexts](#contexts)). So does a `*` in place of an output's name, as in
+  `steps.<id>.outputs.*`, `needs.<job>.outputs.*` and
+  `needs.<job>.steps.<id>.outputs.*`: a step that has had its turn, and a
+  job this one needs, have their outputs, none if they wrote none or were
+  skipped, while a needed job's step that wrote none isn't there, and reads
+  as a missing output does. A value of an `env:` that reads `env.*` reads
+  each of the others as it would read each by name, once it is evaluated,
+  and itself, and those that read it, as the values under the block, as
+  format 1 lays an `env:`. ACTIVATE looked a `*` up as a name: in `vars`,
+  `org`, `remote` and `sessions` it read a variable named `*`, which no
+  variable's name can be, and so gave `""` whatever the variables were, and
+  in `matrix` it gave null. It gave `env.*` and `steps.*.outputs.<name>`
+  their own text, as it gives a word it doesn't know, unless the expression
+  also read `env` or an output by name, which set it aside for the host:
+  there it gave `""` for `env.*`, and for `steps.*.outputs.<name>` what it
+  gives for a step whose id is `*`, `""` or a failed step. For a `*` in
+  place of an output's name it gave the reference's own text, or, in an
+  expression it set aside, what it gives for an output named `*`. `steps.*`,
+  and any other reference to `steps` that doesn't go on to an output's name,
+  reads as its own text, as `steps.<id>` does, in both, now with a warning
+  in Meridian (`steps_read_whole`, `steps_unknown_key`). `needs.*` is the
+  exception. A job reads another only by its name, so a reference to `needs`
+  whose job is `*`, as `needs.*` and `needs.*.outputs.path` are, which would
+  read every job it needs, is an error as the run is created
+  (`needs_every_job`). ACTIVATE refused it in an expression it set aside for
+  the host, as one that also read `env` or an output by name, and gave its
+  own text in any other, so whether a run read it depended on what else the
+  expression read. A secret read through a `*`, as a secret variable, a
+  value of `env` that holds one, or an output that holds one's text, is one
+  of the run's secrets, as one read by its name is, and what an expression
+  makes of it is masked ([Variables and secrets](#variables-and-secrets)).
+  ACTIVATE takes the same fix: it reads each value for a `*`, sets `env.*`,
+  `steps.*.outputs.<name>` and an output's `*` aside for the host as it sets
+  aside `env.HOME` and an output read by name, counts a step skipped before
+  it started among those that have had their turn, and refuses `needs.*` as
+  the run is created, wherever it is. It masks the text of every secret
+  variable the run has, however it was read, as written and as JSON
+  escapes it, so one read through a `*` is masked as one read by its name,
+  whether an expression writes it alone or in a list. Its form leaves
+  `vars.*` to its backend, which has the secret variables' values, when the
+  user has one. None of the 10,080 expressions of the 218 known workflows
+  has a `*` in a reference to any context, and the one `*` among them
+  multiplies: 19, in 6 workflows, read an organization variable by its name,
+  and none reads `vars`. A `*` in place of a step's id under
+  `needs.<job>.steps` isn't part of this fix, and still runs otherwise than
+  in ACTIVATE ([The workflow format](#the-workflow-format)).
 
 ## Phases
 
@@ -615,7 +658,11 @@ What an expression can read is its contexts, each a mapping:
 
 A name that a context doesn't have reads as `""` in `needs`, `steps`, `env`,
 `org`, `vars`, `remote` and `sessions`, whose values are strings, and as null
-in `inputs`, `matrix` and `job`.
+in `inputs`, `matrix` and `job`. A `*` in place of a name reads each of the
+context's values, in the order of their names, as `vars.*` does, and one in
+place of an output's name each output, as `needs.<job>.outputs.*` does, but
+in `steps`, where only `steps.*.outputs.<name>` does, and in `needs`, where
+it is an error ([Bug fixes to format 1](#bug-fixes-to-format-1)).
 
 Reading a context in a phase before it is known is an error when the run is
 created, such as `steps` in a job's `if:`, or `needs` in the workflow's
@@ -720,8 +767,10 @@ its resolvers into a plan, in order:
      the job, as ACTIVATE fails it (`output_not_written`). Any other
      reference to `steps`, such as
      `steps.build`, `steps.build.outputs` or `steps.build.result`, whatever
-     step it names, is a warning (`steps_read_whole`, `steps_unknown_key`),
-     and reads as its own text, as format 1 reads a word it doesn't know.
+     step it names, `steps.*` among them, is a warning (`steps_read_whole`,
+     `steps_unknown_key`), and reads as its own text, as format 1 reads a
+     word it doesn't know; `steps.*.outputs.<name>` reads that output of
+     each step that has run.
      No known workflow has one: of the 218 that
      [Bug fixes to format 1](#bug-fixes-to-format-1) counts, one reads
      `steps` other than through `needs.<job>.steps`, as
@@ -734,6 +783,8 @@ its resolvers into a plan, in order:
      `needs.build`, `needs.build.outputs`, `needs.build.steps.compile` or
      `needs.build.status`, whatever job it names, is a warning
      (`needs_read_whole`, `needs_unknown_key`), and reads as its own text.
+     One whose job is `*`, as `needs.*` and `needs.*.outputs.path` are, would
+     read every job this one needs, and is an error (`needs_every_job`).
      The known workflows have 839 references to a job's outputs by name and
      37 to its steps', and none of any other form. A plan holds an
      expression's tree, not its text, so a reference read as its own text

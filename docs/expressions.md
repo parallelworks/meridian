@@ -128,7 +128,12 @@ bare_key  = /* any other text */ .
 - `*` reads the rest of the path from each item of a list, or each value of a
   mapping in the order of its keys, and makes a list of what it reads. A
   further `*` flattens the lists: `inputs.people.*.tags.*`. It reads the
-  same way after a group or a call: `fromJSON(inputs.json).*.name`.
+  same way after a group or a call: `fromJSON(inputs.json).*.name`, and
+  after a context's name, as `vars.*` and `env.*` do, or an output's
+  `outputs`, as `needs.build.outputs.*` does, but for `needs.*`, which is
+  an error, and `steps.*`, which reads as its own text unless it goes on to
+  an output, as `steps.*.outputs.path` does
+  ([the design](design.md#contexts)).
 - A name or key with a `:` in it, such as `1:3`, `-2:` or `:2`, is a slice of
   a list or a string ([Values](#values)).
 

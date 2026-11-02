@@ -1,0 +1,28 @@
+jobs:
+  build:
+    steps:
+      - id: c
+        run: echo X=1 >> $OUTPUTS
+      - id: quiet
+        run: echo
+  skipped:
+    if: false
+    steps:
+      - run: echo
+  test:
+    needs: [build, skipped]
+    if: always()
+    steps:
+      - id: s
+        if: false
+        run: echo
+      - id: e
+        run: echo
+      - id: w
+        run: echo Z=z >> $OUTPUTS
+      - run: ${{ toJSON(steps.s.outputs.*) }} | ${{ toJSON(steps.e.outputs.*) }} | ${{ steps.w.outputs.* }} | ${{ steps.w.outputs.*.k }}
+      - run: ${{ needs.build.outputs.* }} | ${{ needs.build.outputs.*.k }} | ${{ toJSON(needs.skipped.outputs.*) }}
+      - run: ${{ needs.build.steps.c.outputs.* }} | [${{ needs.build.steps.quiet.outputs.* }}]
+        if: always
+    outputs:
+      w: ${{ steps.w.outputs.* }}

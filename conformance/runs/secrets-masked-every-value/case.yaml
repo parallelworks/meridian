@@ -1,0 +1,23 @@
+description: >-
+  A secret read through a * is masked wherever a step prints it, as one
+  read by its name is: what a step makes of vars.*, of env.* where env
+  holds a secret variable's value, of steps.*.outputs.<name> and
+  steps.<id>.outputs.* where a step's output holds a secret's text, and of
+  needs.<job>.outputs.* where a job's output holds one.
+source: Meridian
+contexts:
+  vars: {token: s3cret, region: eu}
+secret-variables: [token]
+expect:
+  run:
+    outcome: success
+    jobs:
+      main:
+        outcome: success
+        logs:
+          - {step: 0, text: "vars ***\nenv ***\n"}
+          - {step: 1, text: "keys ***\noutputs ***\n"}
+      use:
+        outcome: success
+        logs:
+          - {step: 0, text: "needs ***\n"}

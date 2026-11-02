@@ -220,6 +220,7 @@ var (
 	NeededJobNoStep            = define(Error, "needed_job_no_step", "No such step in a needed job", "job", "id")
 	NeedsUnknownKey            = define(Warning, "needs_unknown_key", "Unknown key of needs", "job", "key")
 	NeedsReadWhole             = define(Warning, "needs_read_whole", "Needed job read whole", "job", "text")
+	NeedsEveryJob              = define(Error, "needs_every_job", "Every needed job read", "text")
 	StepNotEarlier             = define(Error, "step_not_earlier", "Step doesn't run before this", "id")
 	UndefinedStep              = define(Error, "undefined_step", "No such earlier step", "job", "id", "suggested", "suggestion")
 	OutputUndefinedStep        = define(Warning, "output_undefined_step", "Output reads no such step", "job", "id", "suggested", "suggestion")

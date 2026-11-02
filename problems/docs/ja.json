@@ -521,6 +521,13 @@
       "各出力を名前で読み取ってください: needs.<job>.outputs.<name>。"
     ]
   },
+  "needs_every_job": {
+    "title": "必要なすべてのジョブの読み取り",
+    "why": "参照の中の * は、vars.* がすべての変数を読み取るように、その位置にある値をそれぞれ読み取りますが、形式 1 は needs でジョブの名前の代わりに使われた * を認めません。ジョブは別のジョブを needs.<job>.result、needs.<job>.outputs.<name>、needs.<job>.steps.<id>.outputs.<name> のように名前でしか読み取りません。そのため、needs.* と、needs.*.outputs.path のようにそこから続く参照はエラーになります。ACTIVATE でも同じです。",
+    "fix": [
+      "各ジョブを名前で読み取ってください: needs.<job>.outputs.<name>。"
+    ]
+  },
   "step_not_earlier": {
     "title": "このステップより前に実行されないステップ",
     "why": "ステップは前のステップの出力を読み取れますが、このステップは後にあります。",

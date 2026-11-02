@@ -1,0 +1,48 @@
+description: >-
+  A * in place of a name reads each value of a context, as vars.* reads
+  every variable: a list of the values, in the order of their names, with
+  the rest of the path read from each, and those it leads nowhere from
+  left out. env.* reads env's variables: the workflow's, the job's and the
+  step's. A value of an env: that reads env.* reads each of the others
+  once they are evaluated, and itself as it would by name: as the value
+  under it, as the job's B reads the workflow's, or not at all, as nothing
+  is under the step's S. Two that read env.*, as the step's S and K do,
+  read each other so. matrix.* reads the instance's matrix values,
+  remote.* and sessions.* theirs, and steps.*.outputs.<name> that output
+  of each step that has run and wrote it. Format 1 read env.*, remote.*
+  and sessions.* as "" or as their own text, steps.*.outputs.<name> as its
+  own text, and matrix.* as null, and takes this as a bug fix. steps.*,
+  and any other reference to steps that doesn't go on to an output, reads
+  as its own text, as steps.<id> does, with a warning.
+source: Meridian
+contexts:
+  remote: {repo: https://example.com/workflows, branch: main}
+  sessions: {desktop: desk-1}
+jobs:
+  build:
+    index: 0
+    matrix: {os: linux, cfg: {cores: 4}}
+    steps:
+      - {outcome: success, outputs: {A: "1"}}
+      - {outcome: success, outputs: {B: "2"}}
+      - {outcome: success}
+      - {outcome: success}
+      - {outcome: success}
+      - {outcome: success}
+expect:
+  diagnostics:
+    - severity: warning
+      code: steps_read_whole
+      path: /jobs/build/steps/5/run
+      params: {id: "*", text: steps.*}
+    - severity: warning
+      code: steps_read_whole
+      path: /jobs/build/steps/5/run
+      params: {id: "*", text: steps.*.outputs}
+  values:
+    /jobs/build/steps/2/run: '{"k": "one"} | {"k": "one"} + two + c | c'
+    /jobs/build/steps/2/env/K: one
+    /jobs/build/steps/3/run: '["one"] [{"cores":4},"linux"] [4]'
+    /jobs/build/steps/4/run: '["main","https://example.com/workflows"] ["desk-1"]'
+    /jobs/build/steps/5/run: '["1"] ["1","2"] steps.* steps.*.outputs'
+    /jobs/build/outputs/a: '["1"]'
