@@ -76,6 +76,14 @@ func diagAnswer(seq uint32, family, state uint8, e end, uid uint32) []byte {
 	return slices.Concat(hdr.b, msg.b, attrs)
 }
 
+// withInode returns answer, an answer of diagAnswer's, with the socket's
+// inode, idiag_inode, inode.
+func withInode(answer []byte, inode uint32) []byte {
+	answer = slices.Clone(answer)
+	binary.NativeEndian.PutUint32(answer[nlmsghdr.size+diagMsg.off("idiag_inode"):], inode)
+	return answer
+}
+
 // diagErrorAnswer returns the kernel's answer to request seq that it
 // can't: an NLMSG_ERROR of errno.
 func diagErrorAnswer(seq uint32, errno syscall.Errno) []byte {
@@ -96,8 +104,7 @@ func diagErrorAnswer(seq uint32, errno syscall.Errno) []byte {
 // answer to another request, an error the kernel answers with, and an
 // answer cut short.
 func TestDiagReply(t *testing.T) {
-	unaccepted := diagAnswer(1, afInet, tcpEstablished, end4, 0)
-	binary.NativeEndian.PutUint32(unaccepted[nlmsghdr.size+diagMsg.off("idiag_inode"):], 0)
+	unaccepted := withInode(diagAnswer(1, afInet, tcpEstablished, end4, 0), 0)
 	for _, tc := range []struct {
 		name   string
 		answer []byte
@@ -118,8 +125,12 @@ func TestDiagReply(t *testing.T) {
 		{"its listener, of IPv6 and IPv4", diagAnswer(1, afInet6, tcpListen, end{local: netip.AddrPortFrom(netip.IPv6Unspecified(), end4.local.Port()), remote: netip.AddrPortFrom(netip.IPv6Unspecified(), 0)}, 501), end4, 0, errUnlisted},
 		{"no socket", diagErrorAnswer(1, syscall.ENOENT), end4, 0, errUnlisted},
 	} {
-		if uid, err := diagReply(tc.answer, tc.e, 1); uid != tc.uid || !errors.Is(err, tc.err) || (tc.err == nil) != (err == nil) {
+		uid, inode, err := diagReply(tc.answer, tc.e, 1)
+		if uid != tc.uid || !errors.Is(err, tc.err) || (tc.err == nil) != (err == nil) {
 			t.Errorf("%s: user %d, %v; want %d, %v", tc.name, uid, err, tc.uid, tc.err)
+		}
+		if want := map[bool]uint32{true: 4242}[err == nil]; inode != want {
+			t.Errorf("%s: inode %d; want %d", tc.name, inode, want)
 		}
 	}
 	refused := map[string][]byte{
@@ -139,17 +150,78 @@ func TestDiagReply(t *testing.T) {
 		refused["of "+o.local.String()+" from "+o.remote.String()] = diagAnswer(1, afInet, tcpEstablished, o, 501)
 	}
 	for name, answer := range refused {
-		if uid, err := diagReply(answer, end4, 1); err == nil || errors.Is(err, ErrNotYet) || errors.Is(err, errUnlisted) || errors.Is(err, ErrUnsupported) {
+		if uid, _, err := diagReply(answer, end4, 1); err == nil || errors.Is(err, ErrNotYet) || errors.Is(err, errUnlisted) || errors.Is(err, ErrUnsupported) {
 			t.Errorf("%s: user %d, %v; want an error", name, uid, err)
 		}
 	}
-	if _, err := diagReply(diagErrorAnswer(1, syscall.ENOENT), end4, 1); !errors.Is(err, syscall.ENOENT) {
+	if _, _, err := diagReply(diagErrorAnswer(1, syscall.ENOENT), end4, 1); !errors.Is(err, syscall.ENOENT) {
 		t.Errorf("an NLMSG_ERROR of ENOENT is %v", err)
 	}
 	answer := diagAnswer(1, afInet, tcpEstablished, end4, 501)
 	for n := range nlmsgHdrLen + diagMsgLen {
-		if uid, err := diagReply(answer[:n], end4, 1); err == nil {
+		if uid, _, err := diagReply(answer[:n], end4, 1); err == nil {
 			t.Errorf("cut short at %d bytes: user %d", n, uid)
+		}
+	}
+}
+
+// TestDiagOwner checks that the owner of a socket that the kernel says a
+// process has accepted is taken from its second answer, of the same
+// socket, as the kernel reads the owner and the inode of the socket for
+// one answer apart, and the first can have an owner from before the
+// accept: of a socket accepted as the kernel answered, the owner it gives
+// next, and only of the inode it gave first; of one root accepted, root;
+// and of one it answers otherwise the second time, what that answer says.
+// It asks once of a socket of which it gives no owner yet, or none.
+func TestDiagOwner(t *testing.T) {
+	answer := func(state uint8, uid, inode uint32) []byte {
+		return withInode(diagAnswer(diagSeq, afInet, state, end4, uid), inode)
+	}
+	asked := errors.New("asked")
+	for _, tc := range []struct {
+		name    string
+		answers [][]byte
+		uid     uint32
+		err     error
+		// refused is set where the answers say nothing Owner can wait
+		// for, so that the owner is an error of no other kind.
+		refused bool
+	}{
+		{"accepted as it answered", [][]byte{answer(tcpEstablished, 0, 7), answer(tcpEstablished, 1000, 7)}, 1000, nil, false},
+		{"accepted as it answered, the listener's owner first", [][]byte{answer(tcpEstablished, 1000, 7), answer(tcpEstablished, 1001, 7)}, 1001, nil, false},
+		{"root's", [][]byte{answer(tcpEstablished, 0, 7), answer(tcpEstablished, 0, 7)}, 0, nil, false},
+		{"another socket by then", [][]byte{answer(tcpEstablished, 0, 7), answer(tcpEstablished, 1000, 8)}, 0, nil, true},
+		{"closed by then", [][]byte{answer(tcpEstablished, 0, 7), answer(5, 1000, 7)}, 0, nil, true},
+		{"closed and gone by then", [][]byte{answer(tcpEstablished, 0, 7), diagErrorAnswer(diagSeq, syscall.ENOENT)}, 0, errUnlisted, false},
+		{"no process's by then", [][]byte{answer(tcpEstablished, 0, 7), answer(tcpEstablished, 1000, 0)}, 0, ErrNotYet, false},
+		{"asked of in vain the second time", [][]byte{answer(tcpEstablished, 0, 7), nil}, 0, asked, false},
+		{"not accepted yet", [][]byte{answer(tcpEstablished, 0, 0)}, 0, ErrNotYet, false},
+		{"in the middle of its handshake", [][]byte{answer(tcpSynRecv, 0, 0)}, 0, ErrNotYet, false},
+		{"none", [][]byte{diagErrorAnswer(diagSeq, syscall.ENOENT)}, 0, errUnlisted, false},
+		{"asked of in vain", [][]byte{nil}, 0, asked, false},
+	} {
+		var n int
+		uid, err := diagOwner(end4, func(req []byte) ([]byte, error) {
+			if want := diagRequest(end4, diagSeq); !slices.Equal(req, want) {
+				t.Errorf("%s: request %d is\n%x\nwant\n%x", tc.name, n+1, req, want)
+			}
+			if n++; n > len(tc.answers) {
+				t.Fatalf("%s: asked %d times, more than %d", tc.name, n, len(tc.answers))
+			}
+			if tc.answers[n-1] == nil {
+				return nil, asked
+			}
+			return tc.answers[n-1], nil
+		})
+		switch {
+		case n != len(tc.answers):
+			t.Errorf("%s: asked %d times, want %d", tc.name, n, len(tc.answers))
+		case tc.refused:
+			if err == nil || errors.Is(err, ErrNotYet) || errors.Is(err, errUnlisted) {
+				t.Errorf("%s: user %d, %v; want an error", tc.name, uid, err)
+			}
+		case uid != tc.uid || !errors.Is(err, tc.err) || (tc.err == nil) != (err == nil):
+			t.Errorf("%s: user %d, %v; want %d, %v", tc.name, uid, err, tc.uid, tc.err)
 		}
 	}
 }

@@ -12,13 +12,18 @@
 //
 //   - Linux says who owns it only once a process has accepted it: the user
 //     of the process that did, which Owner waits for. It says so through
-//     NETLINK_SOCK_DIAG, asked for that socket alone, as ss asks.
+//     NETLINK_SOCK_DIAG, asked for that socket alone, as ss asks. Its
+//     answer reads the socket's owner and its inode apart, and so can give
+//     the inode of an accepted socket with the owner from before the
+//     accept, root's or the listener's: so Owner asks again, and takes
+//     the owner from the second answer (diagOwner).
 //   - macOS and FreeBSD give each connection a listener accepts the
 //     credential of whoever made the listener, from the start, whoever
 //     accepts it. They say so in their lists of TCP sockets, the sysctls
 //     net.inet.tcp.pcblist_n and net.inet.tcp.pcblist, as netstat reads
 //     them, of which Owner checks each record's kind and length, and
-//     refuses any it doesn't know.
+//     refuses any it doesn't know. A socket's record has the credential,
+//     which an accept doesn't change, so one read says it.
 //
 // So whom an owner may be trusted as differs too (Trusted). Meridian
 // coordinates nowhere else, so Owner returns ErrUnsupported on every other
@@ -48,8 +53,9 @@ func (errUnsupported) Is(target error) bool { return target == errors.ErrUnsuppo
 // says no owner of the socket at the connection's other end yet: its
 // handshake isn't finished, as for a listener whose queue of connections
 // to accept is full; or, on Linux, no process has accepted it, whose
-// kernel gives the owner of such a socket as root, whoever listens. A
-// service that doesn't accept a connection in time doesn't answer it.
+// kernel gives the owner of such a socket as root, or, since Linux 6.17,
+// as the listener's owner, whoever accepts it. A service that doesn't
+// accept a connection in time doesn't answer it.
 var ErrNotYet = errors.New("sockowner: the system says no owner of the connection's other end yet")
 
 // errUnlisted is a lookup's error where the system lists no socket at the

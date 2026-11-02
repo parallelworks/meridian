@@ -80,67 +80,110 @@ func putDiagAddr(b []byte, a netip.Addr) {
 	copy(b, a16[:])
 }
 
-// diagReply returns the owner of the socket whose end is e, from the
-// kernel's answer, b, to the request numbered seq that asked for it: a
-// struct nlmsghdr and a struct inet_diag_msg, whose idiag_uid is the
-// owner, for a socket of e's four addresses that a process has accepted
-// (TCP_ESTABLISHED, of an inode); ErrNotYet for a request socket, in the
-// middle of its handshake, or one no process has accepted yet;
-// errUnlisted where the kernel has no socket of e's, which it answers
-// with ENOENT, or with the listener at e's local address, as it looks a
-// packet's socket up, as for a connection answered with a SYN cookie,
-// whose socket comes with the handshake's last packet; and an error for a
-// socket in any other state, as a closed one, whose owner the kernel
-// gives as 0, and for any other socket, or another error the kernel
-// answered with.
-func diagReply(b []byte, e end, seq uint32) (uint32, error) {
+// diagSeq numbers each request, which goes on a socket of its own.
+const diagSeq = 1
+
+// diagOwner returns the owner of the socket whose end is e, as the kernel
+// answers the requests that ask sends it. Once an answer says that a
+// process has accepted the socket, it asks again, and returns the owner
+// that the second answer gives, of the same socket, by its inode; of any
+// other answer, it returns what diagReply says.
+//
+// The kernel reads a socket's owner, and then its inode, apart, as it
+// answers (inet_sk_diag_fill), and a process can accept the socket
+// between the two. The answer then has the inode of the accepting
+// process's socket, but the owner from before the accept: root's
+// (sock_i_uid, before Linux 6.17) or the listener's (sk_uid, since),
+// whoever accepted it. The second answer's owner is read after the first
+// answer's inode, so after the accept. Each socket is asked about twice,
+// rather than only one the first answer gives as root's, because the
+// listener's owner can be this user's, as for a listener this user made
+// and passed to another user's program.
+func diagOwner(e end, ask func(req []byte) ([]byte, error)) (uint32, error) {
+	answer := func() (uid, inode uint32, err error) {
+		b, err := ask(diagRequest(e, diagSeq))
+		if err != nil {
+			return 0, 0, err
+		}
+		return diagReply(b, e, diagSeq)
+	}
+	_, accepted, err := answer()
+	if err != nil {
+		return 0, err
+	}
+	uid, inode, err := answer()
+	switch {
+	case err != nil:
+		return 0, err
+	case inode != accepted:
+		return 0, fmt.Errorf("sockowner: the socket at the connection's other end was of inode %d, and then of %d", accepted, inode)
+	}
+	return uid, nil
+}
+
+// diagReply returns the owner of the socket whose end is e, and its
+// inode, from the kernel's answer, b, to the request numbered seq that
+// asked for it: a struct nlmsghdr and a struct inet_diag_msg, whose
+// idiag_uid is the owner, for a socket of e's four addresses that a
+// process has accepted (TCP_ESTABLISHED, of an inode), though it may be
+// the owner from before the accept (diagOwner); ErrNotYet for a request
+// socket, in the middle of its handshake, or one no process has accepted
+// yet; errUnlisted where the kernel has no socket of e's, which it
+// answers with ENOENT, or with the listener at e's local address, as it
+// looks a packet's socket up, as for a connection answered with a SYN
+// cookie, whose socket comes with the handshake's last packet; and an
+// error for a socket in any other state, as a closed one, whose owner the
+// kernel gives as 0, and for any other socket, or another error the
+// kernel answered with.
+func diagReply(b []byte, e end, seq uint32) (uid, inode uint32, err error) {
 	ne := binary.NativeEndian
 	if len(b) < nlmsgHdrLen {
-		return 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG answered with %d bytes, too few for a message", len(b))
+		return 0, 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG answered with %d bytes, too few for a message", len(b))
 	}
 	n, typ, got := ne.Uint32(b[0:]), ne.Uint16(b[4:]), ne.Uint32(b[8:])
 	switch {
 	case n < nlmsgHdrLen || uint64(n) > uint64(len(b)):
-		return 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG's answer of %d bytes says it has %d", len(b), n)
+		return 0, 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG's answer of %d bytes says it has %d", len(b), n)
 	case got != seq:
-		return 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG answered request %d, not %d", got, seq)
+		return 0, 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG answered request %d, not %d", got, seq)
 	}
 	body := b[nlmsgHdrLen:n]
 	switch typ {
 	case nlmsgError:
 		if len(body) < 4 {
-			return 0, errors.New("sockowner: NETLINK_SOCK_DIAG answered with an error too short to read")
+			return 0, 0, errors.New("sockowner: NETLINK_SOCK_DIAG answered with an error too short to read")
 		}
 		// struct nlmsgerr's error: an errno, negated, or 0 for none.
 		switch code := ne.Uint32(body); {
 		case -code == enoent:
-			return 0, fmt.Errorf("%w: NETLINK_SOCK_DIAG: %w", errUnlisted, syscall.Errno(-code))
+			return 0, 0, fmt.Errorf("%w: NETLINK_SOCK_DIAG: %w", errUnlisted, syscall.Errno(-code))
 		case code != 0:
-			return 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG: %w", syscall.Errno(-code))
+			return 0, 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG: %w", syscall.Errno(-code))
 		}
-		return 0, errors.New("sockowner: NETLINK_SOCK_DIAG answered with no socket")
+		return 0, 0, errors.New("sockowner: NETLINK_SOCK_DIAG answered with no socket")
 	case sockDiagByFamily:
 	default:
-		return 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG answered with a message of type %d", typ)
+		return 0, 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG answered with a message of type %d", typ)
 	}
 	if len(body) < diagMsgLen {
-		return 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG answered with %d bytes of a socket, too few", len(body))
+		return 0, 0, fmt.Errorf("sockowner: NETLINK_SOCK_DIAG answered with %d bytes of a socket, too few", len(body))
 	}
 	if body[1] == tcpListen && e.isDiagListener(body[0], body[4:52]) {
-		return 0, fmt.Errorf("%w: NETLINK_SOCK_DIAG answered with its listener", errUnlisted)
+		return 0, 0, fmt.Errorf("%w: NETLINK_SOCK_DIAG answered with its listener", errUnlisted)
 	}
 	if !e.isDiagID(body[0], body[4:52]) {
-		return 0, errors.New("sockowner: NETLINK_SOCK_DIAG answered with another socket than the connection's other end")
+		return 0, 0, errors.New("sockowner: NETLINK_SOCK_DIAG answered with another socket than the connection's other end")
 	}
 	// A socket no process has accepted has no inode, idiag_inode, and the
-	// kernel gives its owner as root, whoever listens.
-	switch state, inode := body[1], ne.Uint32(body[68:]); {
-	case state == tcpEstablished && inode != 0:
-		return ne.Uint32(body[64:]), nil
+	// kernel gives its owner as root, whoever listens, or, since Linux
+	// 6.17, as whoever made the listener.
+	switch state, ino := body[1], ne.Uint32(body[68:]); {
+	case state == tcpEstablished && ino != 0:
+		return ne.Uint32(body[64:]), ino, nil
 	case state == tcpEstablished, state == tcpSynRecv:
-		return 0, ErrNotYet
+		return 0, 0, ErrNotYet
 	default:
-		return 0, fmt.Errorf("sockowner: the socket at the connection's other end is in TCP state %d, whose owner Linux doesn't say", state)
+		return 0, 0, fmt.Errorf("sockowner: the socket at the connection's other end is in TCP state %d, whose owner Linux doesn't say", state)
 	}
 }
 
