@@ -460,6 +460,12 @@ var (
 	CancelJobsRunMissing  = define(Error, "cancel_jobs_run_missing", "Cancel of a workflow's run without its number")
 	ChildRequestFailed    = define(Error, "child_request_failed", "Request to the coordinator for a called workflow's run that failed", "uses", "reason")
 	ChildDirUnusable      = define(Error, "child_dir_unusable", "Called workflow's directory the worker couldn't make", "dir", "reason")
+	// RunDirShared is a directory of a run's tree, path, that the worker
+	// won't use since its group or other users can change it, as its mode
+	// shows; RunDirNotOwned one it won't use since it belongs to another
+	// user.
+	RunDirShared   = define(Error, "run_dir_shared", "Directory of a run's tree that other users can change", "path", "mode")
+	RunDirNotOwned = define(Error, "run_dir_not_owned", "Directory of a run's tree that belongs to another user", "path")
 	// StepRunRequestFailed is a request to the coordinator, of a step's
 	// try, or its cleanup's, that runs on another host, for its run there,
 	// that failed for good, for reason; StepRunOutputsUnwritten what such a

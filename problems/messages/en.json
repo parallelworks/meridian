@@ -200,6 +200,8 @@
   "cancel_jobs_run_missing": "The step's with: names a workflow whose run to cancel, but no run of it, which format 1 needs: a number that isn't negative.",
   "child_request_failed": "The step calls \"{uses}\", and the worker's request to the coordinator for its run failed: {reason}.",
   "child_dir_unusable": "The worker couldn't make the directory \"{dir}\" of the run this step calls: {reason}.",
+  "run_dir_shared": "The worker won't use the directory \"{path}\" of a run's directory tree, which other users can change: its mode is {mode}.",
+  "run_dir_not_owned": "The worker won't use the directory \"{path}\" of a run's directory tree, which belongs to another user.",
   "step_run_request_failed": "The step runs on another host, and the worker's request to the coordinator for its run there failed: {reason}.",
   "step_run_outputs_unwritten": "The worker couldn't add what the step wrote to $OUTPUTS on the other host to the file it would have written here: {reason}.",
   "step_run_output_line_too_long": "The step wrote the output \"{name}\" on the other host, whose line in $OUTPUTS here, escaped, would be longer than {limit} bytes, so none of its outputs were added.",

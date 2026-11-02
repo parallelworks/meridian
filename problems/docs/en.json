@@ -1154,6 +1154,20 @@
       "Check that the user the job runs as can make the directory, and write to it, on the host the job was placed on."
     ]
   },
+  "run_dir_shared": {
+    "why": "A run's steps run in its directory, PW_JOB_DIR, and those of a run that a step calls in a directory of its own in its root run's, such as subworkflows/<job>/step_<n>. What a step leaves there, the next reads, and may run. So the worker makes each directory of that tree that isn't there yet readable by you alone, and checks each that it finds there instead, as it opens it: a run's directory, and, for a run that a step calls, each directory from its root run's down to its own, as a job starts and as a step asks for a run it calls. One that its group or other users can change, as its mode shows, is one where they could have replaced what a step left with something of theirs, so the worker won't use it, whoever its group holds, since a group can hold other users: a job fails before its first step, and is placed again, on another member of its group if there is one, and a step that calls a workflow fails, and isn't tried again. Other users may read it, since a workflow may share what its runs make. A step can loosen a directory that is there: under a umask of 002, which some systems give their users, tar xzf of an archive with a ./ entry can make the directory it extracts into 0775, and cp -a src/. . and rsync -a src/ . give it the mode of src. Format 1 doesn't refuse such a directory.",
+    "fix": [
+      "Run chmod g-w,o-w on the directory the message names, once you're sure no one else changed what is in it.",
+      "Have the run's steps leave its directories so that only you can change them: run umask 022 before a step extracts or copies into one, extract with tar --no-overwrite-dir, and copy onto . with cp -r rather than cp -a. To share what a run makes, let others read it, as chmod go+rX does, but not change it."
+    ]
+  },
+  "run_dir_not_owned": {
+    "why": "A run's steps run in its directory, PW_JOB_DIR, and those of a run that a step calls in a directory of its own in its root run's, such as subworkflows/<job>/step_<n>. What a step leaves there, the next reads, and may run. So the worker makes each directory of that tree that isn't there yet as yours, and checks each that it finds there instead, as it opens it: a run's directory, and, for a run that a step calls, each directory from its root run's down to its own, as a job starts and as a step asks for a run it calls. One that belongs to another user, root among them, is one they can change, so the worker won't use it: a job fails before its first step, and is placed again, on another member of its group if there is one, and a step that calls a workflow fails, and isn't tried again. A step that runs a container as root, or as another user, with a volume in the run's directory, can leave such a directory there. Format 1 doesn't refuse such a directory.",
+    "fix": [
+      "Have the directory's owner, or root, remove it, or give it to you with chown, once you're sure no one else changed what is in it.",
+      "Have the step that made it make it as you, as a container run with --user $(id -u):$(id -g) does."
+    ]
+  },
   "step_run_request_failed": {
     "why": "A step whose ssh: names another host than its job's asks the coordinator, through the worker API, for a run of its own on that host, waits for that run's end, and stops it when the step is stopped. One of those requests failed for good: the coordinator refused it, or answered with what the worker can't read, which the reason names by its code. That is a bug in the worker or in the coordinator, or a worker and a coordinator of releases that don't agree on the worker API, and not the workflow's. The step fails, and isn't tried again. Its run on the other host may have been created, and may still be running: its own status says.",
     "fix": [
