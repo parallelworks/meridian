@@ -194,6 +194,8 @@
   "cancel_jobs_run_missing": "该步骤的 with: 指定了要取消其运行的工作流，但没有指定格式 1 所需的运行：一个非负的编号。",
   "child_request_failed": "该步骤调用了“{uses}”，而工作进程为其运行向协调器发出的请求失败了：{reason}",
   "child_dir_unusable": "工作进程无法创建该步骤调用的运行的目录“{dir}”：{reason}",
+  "run_dir_shared": "工作进程不会使用运行目录树中的目录“{path}”，因为其他用户可以更改它：其模式为 {mode}。",
+  "run_dir_not_owned": "工作进程不会使用运行目录树中的目录“{path}”，因为它属于其他用户。",
   "step_run_request_failed": "该步骤在另一台主机上运行，而工作进程为其在那里的运行向协调器发出的请求失败了：{reason}",
   "step_run_outputs_unwritten": "工作进程无法将该步骤在另一台主机上写入 $OUTPUTS 的内容添加到它本应在此写入的文件中：{reason}",
   "step_run_output_line_too_long": "该步骤在另一台主机上写入了输出“{name}”，其在此处 $OUTPUTS 中的行经转义后会超过 {limit} 字节，因此它的输出均未被添加。",

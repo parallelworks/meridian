@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -520,7 +523,11 @@ func TestMakeDirIn(t *testing.T) {
 // TestMakeDirInSwapped checks that makeDirIn opens the directory it
 // checked, not one that a symbolic link put in its place between its look
 // and its open, though the link points in its root: it is too many levels
-// of links, and nothing is made where the link points.
+// of links, and nothing is made where the link points. And that it checks
+// what the directory it opened says of itself, not what its look found:
+// one that others could change by the open is refused, though its look
+// found it its user's alone. Each hook is called by every makeDirIn of the
+// tests that run beside this one, so neither changes what it reads.
 func TestMakeDirInSwapped(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -549,6 +556,325 @@ func TestMakeDirInSwapped(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(other); err != nil || len(entries) > 0 {
 		t.Errorf("the worker made %v where the link points: %v", entries, err)
+	}
+
+	looseRoot := t.TempDir()
+	loose := filepath.Join(looseRoot, "a")
+	if err := os.Mkdir(loose, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	loosen := func(path string) {
+		if path != loose {
+			return
+		}
+		if err := os.Chmod(loose, 0o777); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+			t.Error(err)
+		}
+	}
+	beforeOpen.Store(&loosen)
+	checkRefused(t, makeDirIn(looseRoot, filepath.Join("a", "b"), false), problems.RunDirShared, loose, "0777")
+	if _, err := os.Stat(filepath.Join(loose, "b")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the worker made a directory in one others can change: %v", err)
+	}
+}
+
+// checkRefused checks that err is the problem of the kind k, of the
+// directory dir, with the mode mode, if k has one.
+func checkRefused(t *testing.T, err error, k *problems.Kind, dir, mode string) {
+	t.Helper()
+	p, ok := errors.AsType[*problem.Problem](err)
+	if !ok || p == nil || p.Code != k.Code() || p.Params["path"] != dir || k == problems.RunDirShared && p.Params["mode"] != mode {
+		t.Errorf("got %v, want %s of %s, mode %s", err, k.Code(), dir, mode)
+	}
+}
+
+// TestMakeDirInShared checks that makeDirIn refuses a directory of a run's
+// tree that its group or other users can change, wherever it is: its root,
+// one on the way, or the directory itself; and names it, with its mode.
+// One that others may only read passes, and so does one it cleans, which
+// it makes again.
+func TestMakeDirInShared(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rel := filepath.Join("a", "b", "c")
+	if err := makeDirIn(root, rel, false); err != nil {
+		t.Fatal(err)
+	}
+	chmod := func(dir string, perm fs.FileMode) {
+		t.Helper()
+		if err := os.Chmod(dir, perm); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{root, filepath.Join(root, "a"), filepath.Join(root, "a", "b"), filepath.Join(root, rel)} {
+		for _, perm := range []fs.FileMode{0o720, 0o702, 0o770, 0o777} {
+			for _, clean := range []bool{false, true} {
+				chmod(dir, perm)
+				err := makeDirIn(root, rel, clean)
+				if clean && dir == filepath.Join(root, rel) {
+					if err != nil {
+						t.Errorf("cleaning %s, whose mode was %04o: %v", dir, perm, err)
+					}
+					continue
+				}
+				checkRefused(t, err, problems.RunDirShared, dir, fmt.Sprintf("%04o", perm))
+			}
+		}
+		chmod(dir, 0o755)
+		if err := makeDirIn(root, rel, false); err != nil {
+			t.Errorf("making %s, with %s readable by others: %v", rel, dir, err)
+		}
+	}
+}
+
+// TestRunDirProblem checks the problem of a directory of a run's tree
+// that makeDirIn couldn't make, or use: one that names the directory that
+// failed its check, checkRunDir's or safepath's, as it is; and what the
+// operating system said, as the reason of the caller's kind, as safepath's
+// directory_unavailable says it too.
+func TestRunDirProblem(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		err    error
+		kind   *problems.Kind
+		params problems.Params
+	}{
+		{problems.RunDirShared.Problem(problems.Params{"path": "/r/a", "mode": "0777"}), problems.RunDirShared, problems.Params{"path": "/r/a", "mode": "0777"}},
+		{problems.RunDirNotOwned.Problem(problems.Params{"path": "/r/a"}), problems.RunDirNotOwned, problems.Params{"path": "/r/a"}},
+		{problems.OwnerUnknown.Problem(problems.Params{"path": "/r/a"}), problems.OwnerUnknown, problems.Params{"path": "/r/a"}},
+		{problems.PathUnsafe.Problem(problems.Params{"path": "/r/a", "dir": "/r"}), problems.PathUnsafe, problems.Params{"path": "/r/a", "dir": "/r"}},
+		{&fs.PathError{Op: "open", Path: "/r/a", Err: syscall.ELOOP}, problems.ChildDirUnusable, problems.Params{"dir": "/r", "reason": "open /r/a: " + syscall.ELOOP.Error()}},
+		{problems.DirectoryUnavailable.Problem(problems.Params{"path": "/r/a", "reason": "lstat /r/a: permission denied"}), problems.ChildDirUnusable, problems.Params{"dir": "/r", "reason": "lstat /r/a: permission denied"}},
+	} {
+		k, params := runDirProblem(tc.err, problems.ChildDirUnusable, problems.Params{"dir": "/r"})
+		if k != tc.kind || !maps.Equal(params, tc.params) {
+			t.Errorf("the problem of %v is %s with %v, want %s with %v", tc.err, k.Code(), params, tc.kind.Code(), tc.params)
+		}
+	}
+}
+
+// TestRunDirShared checks that a job whose run directory, which the
+// worker finds there, its group or other users can change, as a step of
+// the run could have let them, fails before its first step, with
+// run_dir_shared, which names it and its mode; and that one others may
+// only read, as a workflow may let them, runs the job's steps.
+func TestRunDirShared(t *testing.T) {
+	t.Parallel()
+	for _, perm := range []fs.FileMode{0o775, 0o757, 0o755} {
+		f := workerapitest.NewFake(t, newJob(command("touch $PW_JOB_DIR/ran")))
+		if err := os.Mkdir(f.Claim.RunDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(f.Claim.RunDir, perm); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+			t.Fatal(err)
+		}
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		_, ran := os.Stat(filepath.Join(f.Claim.RunDir, "ran"))
+		if perm == 0o755 {
+			checkEnd(t, f, plan.OutcomeSuccess, "")
+			if ran != nil {
+				t.Errorf("the step didn't run in a run directory others can read: %v", ran)
+			}
+			continue
+		}
+		end := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
+		checkRefused(t, end.Problem, problems.RunDirShared, f.Claim.RunDir, fmt.Sprintf("%04o", perm))
+		if ran == nil {
+			t.Errorf("the step ran in a run directory whose mode is %04o", perm)
+		}
+	}
+}
+
+// TestRunDirLinked checks that a job whose run directory a step replaced
+// with a symbolic link runs where it points, as the meridian command
+// follows one as it checks a run's directory before it takes the run up
+// again, but fails before its first step where the way there goes
+// through a directory other users can change, which that check refuses
+// too: path_unsafe, which names that directory. Where the link points to
+// nothing yet, the worker makes nothing there.
+func TestRunDirLinked(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	shared := filepath.Join(base, "shared")
+	if err := os.Mkdir(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o777); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+		t.Fatal(err)
+	}
+	for _, target := range []string{filepath.Join(base, "own"), filepath.Join(shared, "run"), filepath.Join(shared, "missing")} {
+		missing := filepath.Base(target) == "missing"
+		if !missing {
+			if err := os.Mkdir(target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f := workerapitest.NewFake(t, newJob(command("touch $PW_JOB_DIR/ran")))
+		if err := os.Symlink(target, f.Claim.RunDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		_, ran := os.Stat(filepath.Join(target, "ran"))
+		if filepath.Dir(target) != shared {
+			checkEnd(t, f, plan.OutcomeSuccess, "")
+			if ran != nil {
+				t.Errorf("the step didn't run where the run directory's link points: %v", ran)
+			}
+			continue
+		}
+		end := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
+		if p := end.Problem; p == nil || p.Code != problems.PathUnsafe.Code() || p.Params["dir"] != shared || p.Params["path"] != f.Claim.RunDir {
+			t.Errorf("the attempt whose run directory links through a directory others can change ended with %+v", p)
+		}
+		if ran == nil {
+			t.Error("the step ran where the run directory's link points, through a directory others can change")
+		}
+		if _, err := os.Stat(target); missing && !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the worker made the directory a link points to, through one others can change: %v", err)
+		}
+	}
+}
+
+// TestMakeDirInLinkedRoot checks that makeDirIn follows a symbolic link at
+// its root, a run's directory, and checks the way to where it points, as
+// the meridian command does as it checks a run's directory before it
+// takes the run up again: through a directory others can change, it is
+// path_unsafe, which names that directory, and nothing is made there.
+func TestMakeDirInLinkedRoot(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	shared := filepath.Join(base, "shared")
+	for _, dir := range []string{filepath.Join(base, "own"), shared, filepath.Join(shared, "run")} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(shared, 0o777); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+		t.Fatal(err)
+	}
+	for _, target := range []string{filepath.Join(base, "own"), filepath.Join(shared, "run")} {
+		link := filepath.Join(base, "link-"+filepath.Base(filepath.Dir(target)))
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		err := makeDirIn(link, "a", false)
+		_, made := os.Stat(filepath.Join(target, "a"))
+		if filepath.Dir(target) != shared {
+			if err != nil || made != nil {
+				t.Errorf("making a directory in a run directory linked to one of the user's: %v, %v", err, made)
+			}
+			continue
+		}
+		if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.PathUnsafe.Code() || p.Params["dir"] != shared {
+			t.Errorf("making a directory in a run directory linked through one others can change: %v", err)
+		}
+		if made == nil {
+			t.Error("the worker made a directory through one others can change")
+		}
+	}
+}
+
+// TestCallDirLinked checks that a step that calls a workflow fails,
+// without asking for its child, where an earlier step replaced the run's
+// directory with a symbolic link through a directory other users can
+// change, with path_unsafe, which names that directory. A child it asks
+// for wrongly ends at once, so that the test fails rather than wait for
+// it.
+func TestCallDirLinked(t *testing.T) {
+	t.Parallel()
+	shared := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o777); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+		t.Fatal(err)
+	}
+	target := filepath.Join(shared, "run")
+	f := workerapitest.NewFake(t, newJob(
+		command(`mkdir '`+target+`' && cd / && rm -r "$PW_JOB_DIR" && ln -s '`+target+`' "$PW_JOB_DIR"`),
+		calling(nil)))
+	f.Child = func(workerapi.ChildRequest) *workerapi.Child {
+		return &workerapi.Child{Run: "c", Ended: true, Outcome: plan.OutcomeSuccess}
+	}
+	if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+		t.Fatal(err)
+	}
+	e := finishedEvent(t, f, 1, 0, false)
+	if !slices.Equal(codes(e.Diagnostics), []string{"path_unsafe"}) || e.Diagnostics[0].Params["dir"] != shared || e.Diagnostics[0].Params["path"] != f.Claim.RunDir {
+		t.Errorf("the step whose run directory links through a directory others can change has the diagnostics %v", e.Diagnostics)
+	}
+	if len(f.ChildAsks()) > 0 {
+		t.Error("the worker asked for a child through a directory others can change")
+	}
+	if _, err := os.Stat(filepath.Join(target, "subworkflows")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the worker made the child's directory through a directory others can change: %v", err)
+	}
+}
+
+// TestCallDirShared checks that a step that calls a workflow fails,
+// without asking for its child, where a directory on the way to its
+// child's, or the child's own, which the worker finds there, its group or
+// other users can change, with run_dir_shared, which names it and its
+// mode. A child it asks for wrongly ends at once, so that the test fails
+// rather than wait for it.
+func TestCallDirShared(t *testing.T) {
+	t.Parallel()
+	for _, rel := range []string{"subworkflows", filepath.Join("subworkflows", "build"), filepath.Join("subworkflows", "build", "step_0")} {
+		f := workerapitest.NewFake(t, newJob(calling(nil)))
+		f.Child = func(workerapi.ChildRequest) *workerapi.Child {
+			return &workerapi.Child{Run: "c", Ended: true, Outcome: plan.OutcomeSuccess}
+		}
+		dir := filepath.Join(f.Claim.RunDir, rel)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o770); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+			t.Fatal(err)
+		}
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		checkEvents(t, f, "started 0.0", "finished 0.0 failure -1")
+		e := finishedEvent(t, f, 0, 0, false)
+		if !slices.Equal(codes(e.Diagnostics), []string{"run_dir_shared"}) || e.Diagnostics[0].Params["path"] != dir || e.Diagnostics[0].Params["mode"] != "0770" {
+			t.Errorf("the step whose child's directory %s others can change has the diagnostics %v", rel, e.Diagnostics)
+		}
+		if len(f.ChildAsks()) > 0 {
+			t.Errorf("the worker asked for a child whose directory %s others can change", rel)
+		}
+	}
+}
+
+// TestChildRunDirShared checks that a child run's job fails before its
+// first step where its root's directory, or one on the way from there to
+// its own, its group or other users can change, as a step of its tree
+// could have let them, with run_dir_shared, which names it and its mode.
+func TestChildRunDirShared(t *testing.T) {
+	t.Parallel()
+	for _, rel := range []string{".", "subworkflows"} {
+		f := workerapitest.NewFake(t, newJob(command("touch $PW_JOB_DIR/ran")))
+		root := filepath.Dir(f.Claim.RunDir)
+		f.Claim.Tree = &workerapi.Tree{JobID: "1", RootDir: root}
+		f.Claim.RunDir = filepath.Join(root, "subworkflows", "main", "step_0")
+		dir := filepath.Join(root, rel)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // a directory others can change, which the worker refuses
+			t.Fatal(err)
+		}
+		if err := runWorker(t, f, t.Context(), Config{}); err != nil {
+			t.Fatal(err)
+		}
+		end := checkEnd(t, f, plan.OutcomeFailure, plan.ReasonSetupFailed)
+		checkRefused(t, end.Problem, problems.RunDirShared, dir, "0777")
+		if _, err := os.Stat(f.Claim.RunDir); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the worker made the child's directory in %s, which others can change: %v", rel, err)
+		}
 	}
 }
 

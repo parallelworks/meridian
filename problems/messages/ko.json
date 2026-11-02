@@ -194,6 +194,8 @@
   "cancel_jobs_run_missing": "단계의 with:가 취소할 실행의 워크플로를 가리키지만, 형식 1이 필요로 하는 그 실행(음수가 아닌 번호)은 가리키지 않습니다.",
   "child_request_failed": "단계가 ‘{uses}’을(를) 호출하는데, 그 실행을 요청하는 워커의 코디네이터 요청이 실패했습니다: {reason}",
   "child_dir_unusable": "워커가 이 단계가 호출하는 실행의 디렉터리 ‘{dir}’을(를) 만들 수 없습니다: {reason}",
+  "run_dir_shared": "워커는 실행의 디렉터리 트리에 있는 디렉터리 ‘{path}’을(를) 사용하지 않습니다. 다른 사용자가 바꿀 수 있기 때문입니다. 모드는 {mode}입니다.",
+  "run_dir_not_owned": "워커는 실행의 디렉터리 트리에 있는 디렉터리 ‘{path}’을(를) 사용하지 않습니다. 다른 사용자의 것이기 때문입니다.",
   "step_run_request_failed": "단계가 다른 호스트에서 실행되는데, 그곳에서의 실행을 요청하는 워커의 코디네이터 요청이 실패했습니다: {reason}",
   "step_run_outputs_unwritten": "워커가 단계가 다른 호스트에서 $OUTPUTS에 쓴 내용을 여기서 썼을 파일에 추가할 수 없습니다: {reason}",
   "step_run_output_line_too_long": "단계가 다른 호스트에서 출력 ‘{name}’을(를) 썼는데, 여기서 $OUTPUTS에 쓸 그 줄은 이스케이프하면 {limit}바이트보다 길어지므로, 출력은 하나도 추가되지 않았습니다.",

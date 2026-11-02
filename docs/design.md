@@ -268,6 +268,10 @@ Format 1 is the format Parallel Works ACTIVATE runs.
   - how a job's `ssh:` reaches its host, where its run's directory is
     there, and what an outage or a cancel does to its steps
     ([The `ssh` backend](#the-ssh-backend));
+  - a directory of a run's tree that the worker finds there, rather than
+    makes, that belongs to another user, or that its group or other users
+    can change, which it refuses, a rule of isolation that none of the
+    known workflows meets ([Running steps](#running-steps));
   - a step whose `ssh:` puts it on another host than its job's, which runs
     there as a run of its own, with a placement for each try, an
     `OUTPUTS` of its own and its own log; one whose `ssh:` is null, or
@@ -2544,7 +2548,12 @@ runs as any other; none of the known calls has an `ssh:` of its own.
   root's run directory, and never follows a symbolic link on the way,
   which a step of the run could leave there to put the child elsewhere:
   the step fails instead (`child_dir_unusable`), and so does the child's
-  job, as its worker makes it again (`run_dir_unusable`).
+  job, as its worker makes it again (`run_dir_unusable`). Each directory
+  on the way that it finds there, the root's run directory among them,
+  and the child's own, it refuses where another user owns it
+  (`run_dir_not_owned`) or its group or other users can change it
+  (`run_dir_shared`), and so does the child's job's worker, where format
+  1 refuses neither ([Running steps](#running-steps)).
 - **Its variables** are its root's: the root's Start reads the variables
   every workflow in the tree reads (`Run.TreeVariables`, which the root's
   Create finds in each pinned workflow's expressions), once, into the
@@ -4348,6 +4357,58 @@ own runs.
   the same path, so a path one job writes is valid in the next. Jobs on
   members that share no filesystem see different directories, and Meridian
   doesn't copy files between them.
+- **Its tree is the user's alone to change.** The worker makes each
+  directory of a run's tree that isn't there yet readable by its user
+  alone, and refuses one that it finds there instead, as it opens it, that
+  belongs to another user (`run_dir_not_owned`), or that its group or
+  other users can change (`run_dir_shared`, which names it and its mode):
+  the run's directory, as its job starts, and, for a run that a step
+  calls, each directory from its root's run directory down to its own, as
+  the step asks for the run and as the run's job starts
+  ([Workflows a step calls](#workflows-a-step-calls)). Another user who
+  could change one could replace what a step left there, which the next
+  reads, or runs, with something of theirs. A group can hold other users,
+  so its write counts too. Others may read it (`safepath.Unchangeable`),
+  since a workflow may share what its runs make. The worker checks what
+  the directory it opened says of itself, not its path again, which a
+  step could have pointed elsewhere since, as it makes the next directory
+  in it; the steps use the directories by their paths afterwards, so a
+  step, of the job or of another, can still loosen one after the check,
+  and the next job, or the next call, finds it so. It follows a symbolic
+  link at a root run's directory, and checks the way to where it points,
+  as `meridian resume` does as it checks a run's directory: a way through
+  a directory that another user can change is `path_unsafe`, which names
+  that directory, as the job's problem or the step's. It refuses a link
+  on the way from there to a child's directory, or at it. A job whose run
+  directory it refuses fails before its first step, and a step whose
+  child's directory, or one on the way to it, it refuses fails. Format 1
+  refuses none of these. This is a rule of isolation, which is never
+  weaker anywhere on a run's path, rather than a change to what a
+  workflow means: none of the 218 known workflows
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)) loosens the
+  permissions of a directory on a run directory's path, and the 19 that
+  give a group or other users write elsewhere, to a container's volume, a
+  shared cache or an install directory, don't reach this check. The scan
+  read the workflow files, not the scripts of the apps they check out.
+  What could loosen one is a step that changes the mode of a directory
+  that is there: under a umask of 002, which some systems give their
+  users, `tar xzf` of an archive with a `./` entry can turn the directory it
+  extracts into, as the run's, from 0700 to 0775; and `cp -a src/. .`
+  gives it the mode of `src`, as `rsync -a src/ .` does too. A step
+  avoids it with `umask 022` first, with `tar --no-overwrite-dir`, or with
+  `cp -r` rather than `cp -a` onto `.`. A plain `mkdir` under that umask
+  puts no directory on the way in the known workflows: none of their 270
+  calls sets its own `working-directory:`, so the worker makes each
+  child's directory, `subworkflows/<job>/step_<n>`, as it makes every
+  directory, readable by its user alone. And none of their 15 `tar`
+  extractions, in 10 workflows, extracts into a run's directory; none
+  copies into one with `cp -a dir/.`, `rsync` or `git clone`; and each of
+  the 9 `umask`s they set is 077. A step's own
+  `working-directory:` that isn't a run's directory, nor on the way to
+  one, isn't checked: where a workflow runs its own steps is its choice,
+  as an absolute one elsewhere is, and the worker makes it, if it isn't
+  there, readable by its user alone, following a symbolic link on the way
+  to it.
 - **The environment.** Steps get the environment variables format 1 defines,
   such as `OUTPUTS`, `PW_JOB_DIR` and `PW_JOB_ID`. Variables that only a
   platform can fill, such as an API key, are set only when one supplies them,
@@ -5035,7 +5096,10 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   lines. Nor can they take a session's requests by listening at its
   service's port first: a request goes on only to a connection that the
   system says is the user's, or, on Linux, root's
-  ([Serving a session](#serving-a-session)).
+  ([Serving a session](#serving-a-session)). Nor can they change a run's
+  directories: the worker refuses one of a run's tree that another user
+  owns, or that its group or other users can change
+  ([Running steps](#running-steps)).
 - **The user's own processes can.** With the `local` backend, a workflow's
   steps run as the user who started it, so they can read what the user can:
   the state directory's key file, `secret-record.key`, and its database,

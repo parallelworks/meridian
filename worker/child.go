@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -12,6 +13,9 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/parallelworks/foundation/problem"
+
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -91,7 +95,8 @@ func (a *attempt) runChild(ctx context.Context, key logKey, rs *plan.ReadyStep, 
 		prepare: func() *problems.Diagnostic {
 			dir := plan.ChildDir(a.claim.RunDir, rs.WorkingDirectory, a.job.Key, key.step)
 			if err := a.makeChildDir(dir, clean); err != nil {
-				d := a.at(problems.ChildDirUnusable, path, problems.Params{"dir": dir, "reason": err.Error()})
+				k, params := runDirProblem(err, problems.ChildDirUnusable, problems.Params{"dir": dir})
+				d := a.at(k, path, params)
 				return &d
 			}
 			return nil
@@ -433,12 +438,30 @@ var beforeOpen atomic.Pointer[func(at string)]
 // is an error, too many levels of symbolic links, as a system that
 // doesn't follow links says, and one that isn't a directory is an error
 // too. Nothing it does reaches outside root, whatever links root holds.
+// root and each directory after it are directories of a run's tree, and
+// each is checked as it opened it, by what the open directory says of
+// itself, not by its path, which a step could have pointed elsewhere
+// since (checkRunDir): one it made passes, and one it found that another
+// user owns, or that its group or other users can change, is a problem.
+// That holds as it makes the next directory in it: the steps use them by
+// their paths afterwards, so one can still loosen a directory after this.
+// root, a run's directory, can be a symbolic link, as one a step put in
+// its place, which it follows, as the meridian command does as it checks
+// a run's directory before it takes the run up again, and so it checks
+// the way to it first as that does (safepath.Check): a directory on the
+// way that another user can change is problems.PathUnsafe.
 func makeDirIn(root, rel string, clean bool) error {
+	if err := safepath.Check(root, false); err != nil {
+		return err
+	}
 	r, err := os.OpenRoot(root)
 	if err != nil {
 		return err
 	}
 	defer func() { r.Close() }()
+	if err := checkOpenRunDir(root, r); err != nil {
+		return err
+	}
 	if rel == "." {
 		return nil
 	}
@@ -482,12 +505,74 @@ func makeDirIn(root, rel string, clean bool) error {
 		if err != nil {
 			return err
 		}
-		if opened, err := sub.Stat("."); err != nil || !os.SameFile(fi, opened) {
+		opened, err := sub.Stat(".")
+		if err != nil || !os.SameFile(fi, opened) {
 			sub.Close()
 			return &fs.PathError{Op: "open", Path: at, Err: syscall.ELOOP}
+		}
+		if err := checkRunDir(at, opened); err != nil {
+			sub.Close()
+			return err
 		}
 		r.Close()
 		r = sub
 	}
 	return nil
+}
+
+// checkOpenRunDir checks r, the directory of a run's tree at path, which
+// the worker has opened, as checkRunDir does, by what r says of itself.
+func checkOpenRunDir(path string, r *os.Root) error {
+	info, err := r.Stat(".")
+	if err != nil {
+		return err
+	}
+	return checkRunDir(path, info)
+}
+
+// checkRunDir checks info, of the directory of a run's tree at path, as
+// the worker opened it: one that belongs to another user is
+// problems.RunDirNotOwned, and one that its group or other users can
+// change problems.RunDirShared, since they could have replaced what a
+// step left in it, which the next reads, or runs, with something of
+// theirs. A group counts, since a group can hold other users. Others may
+// read it (safepath.Unchangeable): a workflow may share what its runs
+// make. One whose owner the system doesn't say is problems.OwnerUnknown:
+// what can't be told is refused.
+func checkRunDir(path string, info fs.FileInfo) error {
+	owner, ok := safepath.Owner(info)
+	switch {
+	case !ok:
+		return problems.OwnerUnknown.Problem(problems.Params{"path": path})
+	case owner != os.Getuid():
+		return problems.RunDirNotOwned.Problem(problems.Params{"path": path})
+	}
+	if perm := info.Mode().Perm(); perm&fs.FileMode(safepath.Unchangeable) != 0 {
+		return problems.RunDirShared.Problem(problems.Params{"path": path, "mode": fmt.Sprintf("%04o", perm)})
+	}
+	return nil
+}
+
+// runDirProblem returns the problem of a directory of a run's tree that
+// the worker couldn't make, or use, as err, makeDirIn's, says: a problem
+// that names the directory that failed its check, checkRunDir's, or
+// safepath.Check's of one on the way to a run's directory, as
+// path_unsafe, as it is, so that the user knows which to fix; or else a
+// problem of the kind k, with params and its reason, what the operating
+// system said, as safepath's directory_unavailable says it too.
+func runDirProblem(err error, k *problems.Kind, params problems.Params) (*problems.Kind, problems.Params) {
+	p, ok := errors.AsType[*problem.Problem](err)
+	if !ok {
+		params["reason"] = err.Error()
+		return k, params
+	}
+	if reason, ok := p.Params["reason"].(string); ok && p.Code == problems.DirectoryUnavailable.Code() {
+		params["reason"] = reason
+		return k, params
+	}
+	if kind, ok := problems.Lookup(p.Code); ok {
+		return kind, p.Params
+	}
+	params["reason"] = string(p.Code)
+	return k, params
 }

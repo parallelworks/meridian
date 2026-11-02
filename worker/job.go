@@ -18,6 +18,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -360,7 +361,7 @@ func (a *attempt) setUp() *problem.Problem {
 		return fail(problems.ContainerNotSupported, problems.Params{"runtime": c.Runtime, "image": c.Image})
 	}
 	if err := a.makeRunDir(); err != nil {
-		return fail(problems.RunDirUnusable, problems.Params{"path": a.claim.RunDir, "reason": err.Error()})
+		return fail(runDirProblem(err, problems.RunDirUnusable, problems.Params{"path": a.claim.RunDir}))
 	}
 	info("running the job's steps on the host", "dir", a.claim.RunDir)
 	return nil
@@ -369,15 +370,33 @@ func (a *attempt) setUp() *problem.Problem {
 // makeRunDir makes the run's directory, as the job's steps run in it: a
 // child run's, in its root's directory, where its caller's worker made it
 // (makeChildDir), as that worker makes it, never following a symbolic
-// link, which a step of its tree could have left in the way since; and any
-// other's as it is, as the meridian command makes a root's private.
+// link, which a step of its tree could have left in the way since, and
+// checking its root's directory and each directory from there down to its
+// own (makeDirIn); and any other's, readable by its user alone, if it
+// isn't there, as the meridian command makes a root's, and as the first
+// of a run's workers on a host makes it there, once it has checked the
+// way to it (safepath.Check), and then checks it, as makeDirIn checks
+// each directory of a run's tree, by what it says of itself as it opened
+// it, following a symbolic link there, and checking the way to where it
+// points, as the meridian command does as it checks a run's directory
+// before it takes the run up again. So a run's directory that a step of
+// the run has let other users change since is refused, on the
+// coordinator's machine and on a host alike, where a run's jobs share it
+// as they do here.
 func (a *attempt) makeRunDir() error {
 	if tree := a.claim.Tree; tree != nil {
 		if rel, ok := plan.InDir(tree.RootDir, a.claim.RunDir); ok {
 			return makeDirIn(tree.RootDir, rel, false)
 		}
 	}
-	return os.MkdirAll(a.claim.RunDir, 0o700)
+	// Nothing is made on a way another user can change.
+	if err := safepath.Check(a.claim.RunDir, false); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(a.claim.RunDir, 0o700); err != nil {
+		return err
+	}
+	return makeDirIn(a.claim.RunDir, ".", false)
 }
 
 // decodeFailure says why a job of plan version version didn't decode,
