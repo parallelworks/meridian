@@ -9,9 +9,11 @@ permissions:
   contents: read
 
 # A newer push to a PR supersedes the run before it. Runs on canary are never
-# canceled, so that every merged commit keeps its own result.
+# canceled, so that every merged commit keeps its own result: each commit has
+# a group of its own, since a group holds one pending run and cancels it when
+# another arrives, whatever cancel-in-progress says.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/canary' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/canary' }}
 
 # Naming the shell adds pipefail, which the default shell leaves off.
@@ -90,6 +92,14 @@ jobs:
           # the mode explicit so that a future edit cannot silently drop it.
           GODEBUG: fips140=only
         run: make test
+      # The tests that start a listener as another user, which only root
+      # can, to check that the kernel says it is theirs, and that a session
+      # isn't passed on to it: built as the runner's user, and run as root
+      # through sudo, which leaves nothing of root's in the caches.
+      - name: Test another user's listener, as root
+        env:
+          GODEBUG: fips140=only
+        run: make test-root
       # An int is 32 bits on 32-bit platforms, which x86-64 Linux runs
       # natively. With CI set, as Actions sets it, the target fails rather
       # than skip the tests if the runner can't run them.
@@ -139,6 +149,32 @@ jobs:
           GODEBUG: fips140=only
           SSHD: /usr/sbin/sshd
         run: make test-openssh
+
+  # The other jobs run on Linux, where the parser of macOS's list of TCP
+  # sockets, which tells who listens at the port a session's service is
+  # at, meets only fixtures made from macOS's headers (internal/sockowner):
+  # here it meets a real kernel's list, as the tests of serving sessions
+  # run on macOS, and, as root, a listener of another user's.
+  # FreeBSD's is vetted alone (vet-cross).
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "**/go.sum"
+      - name: Test serving sessions on macOS
+        env:
+          GODEBUG: fips140=only
+        run: make test-sessions
+      - name: Test another user's listener on macOS, as root
+        env:
+          GODEBUG: fips140=only
+        run: make test-root
 
   # The one place cgo is enabled: on Linux, the race detector links
   # ThreadSanitizer, a C++ runtime, against the C library. Nothing built here

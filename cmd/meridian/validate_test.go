@@ -469,12 +469,18 @@ jobs:
 		t.Errorf("meridian validate --start without the secret = %+v", r)
 	}
 	sessions := writeFile(t, "s.yaml", "sessions:\n  desktop:\n    useTLS: false\njobs:\n  main:\n    steps:\n      - run: echo\n")
-	// Creating the run refuses it already, without --start too.
-	if r := runCLI(t, env, "", "validate", sessions); r.code != exitInvalid || !strings.Contains(r.stdout, "(resolver_missing)") {
+	// Sessions this machine serves are checked and named as the run is
+	// created, and made by none as validate --start starts it.
+	if r := runCLI(t, env, "", "validate", sessions); r.code != exitOK || r.stdout != "" {
 		t.Errorf("meridian validate with sessions = %+v", r)
 	}
-	if r := runCLI(t, env, "", "validate", "--start", sessions); r.code != exitInvalid || !strings.Contains(r.stdout, "s.yaml:1:1: error:") || !strings.Contains(r.stdout, "(resolver_missing)") {
+	if r := runCLI(t, env, "", "validate", "--start", sessions); r.code != exitOK || r.stdout != "" {
 		t.Errorf("meridian validate --start with sessions = %+v", r)
+	}
+	// One meridian run can't serve, without --start too.
+	detached := writeFile(t, "d.yaml", "sessions:\n  desktop:\n    detach: true\njobs:\n  main:\n    steps:\n      - run: echo\n")
+	if r := runCLI(t, env, "", "validate", detached); r.code != exitInvalid || !strings.Contains(r.stdout, "(session_field_unsupported)") {
+		t.Errorf("meridian validate with a detached session = %+v", r)
 	}
 }
 
@@ -529,8 +535,73 @@ func TestValidateChecksConfig(t *testing.T) {
 	}
 }
 
-// flowsRepo makes a Git repository of files, by their paths in it, on its
-// branch main, which Git reaches for github.com's acme/flows, and for each
+// TestRunMappedWorkflow checks that meridian runs a step's call of a
+// workflow a platform stores that sources.yaml maps to a workflow in Git:
+// validate pins it, run runs it as a run of its own, under format 1's name
+// for it, its slug, and status shows that run's workflow by both names;
+// and that a workflow it doesn't map is refused as the run is created.
+func TestRunMappedWorkflow(t *testing.T) {
+	flowsRepo(t, map[string]string{"flows/tools.yaml": "jobs:\n  greet:\n    steps:\n      - run: echo \"hello from $PW_WORKFLOW_NAME\"\n"})
+	env := runEnv(t)
+	config := env[local.EnvConfigDir]
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mapping := "workflows:\n  marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: flows/tools.yaml}\n"
+	if err := os.WriteFile(filepath.Join(config, local.SourcesFile), []byte(mapping), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := writeFile(t, "w.yaml", "jobs:\n  main:\n    steps:\n      - uses: marketplace/tools@v1.2\n")
+	if r := runCLI(t, env, "", "validate", workflow); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate of a mapped call = %+v", r)
+	}
+	if r := runTest(t, env, nil, workflow); r.code != exitOK || !strings.Contains(r.stdout, "| hello from tools\n") {
+		t.Errorf("meridian run of a mapped call = %+v", r)
+	}
+	if r := commandTest(t, env, "status", "2"); r.code != exitOK ||
+		!strings.Contains(r.stdout, "workflow: marketplace/tools/v1.2 → github.com/acme/flows@main:flows/tools.yaml\n") {
+		t.Errorf("meridian status of the mapped call's run = %+v", r)
+	}
+	unmapped := writeFile(t, "u.yaml", "jobs:\n  main:\n    steps:\n      - uses: marketplace/other/v1\n")
+	if r := runCLI(t, env, "", "validate", unmapped); r.code != exitInvalid || !strings.Contains(r.stdout, "u.yaml:4:15: error:") || !strings.Contains(r.stdout, "(source_on_platform)") {
+		t.Errorf("meridian validate of a call that isn't mapped = %+v", r)
+	}
+}
+
+// TestStatusEscapesLocation checks that meridian status shows a run's
+// workflow with what a terminal would act on, or show otherwise, escaped,
+// in the list of runs, a run's own, and the runs its steps called: here a
+// workflow file whose name holds an escape, and a mapped workflow's file
+// whose name holds a bidirectional override, which a $yaml can.
+func TestStatusEscapesLocation(t *testing.T) {
+	flowsRepo(t, map[string]string{"flows/t\u202etools.yaml": "jobs:\n  greet:\n    steps:\n      - run: echo hello\n"})
+	env := runEnv(t)
+	config := env[local.EnvConfigDir]
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mapping := "workflows:\n  workflow/tools: {uses: github/acme/flows@main, yaml: \"flows/t\\u202etools.yaml\"}\n"
+	if err := os.WriteFile(filepath.Join(config, local.SourcesFile), []byte(mapping), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := writeFile(t, "w\x1b[31m.yaml", "jobs:\n  main:\n    steps:\n      - uses: workflow/tools\n")
+	if r := runTest(t, env, nil, workflow); r.code != exitOK {
+		t.Fatalf("meridian run = %+v", r)
+	}
+	for _, args := range [][]string{{"status", "-all"}, {"status", "1"}, {"status", "2"}} {
+		r := commandTest(t, env, args...)
+		if r.code != exitOK || strings.ContainsAny(r.stdout, "\x1b\u202e") {
+			t.Errorf("meridian %s = %+v, which holds what a terminal acts on", strings.Join(args, " "), r)
+		}
+	}
+	if r := commandTest(t, env, "status", "1"); !strings.Contains(r.stdout, "workflow: w\\x1b[31m.yaml\n") ||
+		!strings.Contains(r.stdout, "workflow/tools → github.com/acme/flows@main:flows/t\\u202etools.yaml\n") {
+		t.Errorf("meridian status 1 shows the workflows otherwise than escaped: %+v", r)
+	}
+}
+
+// flowsRepo makes a Git repository of files, by their paths in it, a
+// script among them executable, on its branch main, which Git reaches for github.com's acme/flows, and for each
 // of hosts' as acme/flows there: a workflow that uses: names, which
 // meridian fetches and pins. The user's own configuration may allow the
 // file transport, as this one does, which Meridian allows only https and
@@ -569,7 +640,12 @@ func flowsRepo(t *testing.T, files map[string]string, hosts ...string) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		// A script, which starts #!, is executable, as Git keeps it.
+		mode := os.FileMode(0o600)
+		if strings.HasPrefix(text, "#!") {
+			mode = 0o700
+		}
+		if err := os.WriteFile(path, []byte(text), mode); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -607,16 +683,20 @@ jobs:
 }
 
 // TestValidateClusters checks that a compute-clusters input names one of
-// the clusters of the config's clusters.yaml, and that without the file a
-// name is refused, saying there are none.
+// the clusters of the config's clusters.yaml by its URI, and so does a
+// compute-resources one, as format 1 gives a cluster either names the same
+// details; that without the file a URI is refused, saying there are none;
+// and that a cluster's name alone is refused, with the URI to name it by.
 func TestValidateClusters(t *testing.T) {
 	parallel(t)
-	env := emptyEnv(t)
-	workflow := writeFile(t, "w.yaml", `on:
+	hpc, cpu := clusterURI(t, "hpc"), clusterURI(t, "cpu")
+	for _, typ := range []string{"compute-clusters", "compute-resources"} {
+		env := emptyEnv(t)
+		workflow := writeFile(t, typ+".yaml", `on:
   execute:
     inputs:
       cluster:
-        type: compute-clusters
+        type: `+typ+`
 jobs:
   main:
     ssh:
@@ -624,9 +704,39 @@ jobs:
     steps:
       - run: echo
 `)
-	if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitInvalid || !strings.Contains(r.stdout, "(clusters_none)") {
-		t.Errorf("meridian validate without clusters.yaml = %+v", r)
+		if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster="+hpc, workflow); r.code != exitInvalid || !strings.Contains(r.stdout, "(clusters_none)") {
+			t.Errorf("%s: meridian validate without clusters.yaml = %+v", typ, r)
+		}
+		config := env[local.EnvConfigDir]
+		if err := os.MkdirAll(config, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(config, local.ClustersFile), []byte("hpc:\n  host: hpc-login\n  scheduler: slurm\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster="+hpc, workflow); r.code != exitOK || r.stdout != "" {
+			t.Errorf("%s: meridian validate with cluster %s = %+v", typ, hpc, r)
+		}
+		r := runCLI(t, env, "", "validate", "--start", "--input", "cluster="+cpu, workflow)
+		if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_unknown)") || !strings.Contains(r.stdout, `"`+hpc+`"`) {
+			t.Errorf("%s: meridian validate with cluster %s = %+v", typ, cpu, r)
+		}
+		r = runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow)
+		if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_uri_required)") || !strings.Contains(r.stdout, hpc) {
+			t.Errorf("%s: meridian validate with the name hpc alone = %+v", typ, r)
+		}
 	}
+}
+
+// TestValidatePlatformNames checks that the inputs whose value is a name,
+// a scheduler's, a Kubernetes cluster's or an organization group's, take
+// the name given, as format 1 does: that an account and a QoS a workflow
+// requires for an existing cluster, as one of clusters.yaml is, are
+// required here too; that, given, the run starts; and that a value that
+// isn't text is refused.
+func TestValidatePlatformNames(t *testing.T) {
+	parallel(t)
+	env := emptyEnv(t)
 	config := env[local.EnvConfigDir]
 	if err := os.MkdirAll(config, 0o700); err != nil {
 		t.Fatal(err)
@@ -634,12 +744,107 @@ jobs:
 	if err := os.WriteFile(filepath.Join(config, local.ClustersFile), []byte("hpc:\n  host: hpc-login\n  scheduler: slurm\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=hpc", workflow); r.code != exitOK || r.stdout != "" {
-		t.Errorf("meridian validate with cluster hpc = %+v", r)
+	workflow := writeFile(t, "w.yaml", `on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+      slurm:
+        type: group
+        items:
+          account:
+            type: slurm-accounts
+            resource: ${{ inputs.cluster }}
+            ignore: ${{ 'existing' != inputs.cluster.provider }}
+          qos:
+            type: slurm-qos
+            resource: ${{ inputs.cluster }}
+            ignore: ${{ 'existing' != inputs.cluster.provider }}
+          partition:
+            type: slurm-partitions
+            resource: ${{ inputs.cluster }}
+            optional: true
+      queue:
+        type: pbs-queues
+        resource: ${{ inputs.cluster }}
+        optional: true
+      k8s:
+        type: group
+        items:
+          cluster:
+            type: kubernetes-clusters
+          namespace:
+            type: kubernetes-namespaces
+            clusterName: ${{ inputs.k8s.cluster }}
+          pvc:
+            type: kubernetes-pvc
+            clusterName: ${{ inputs.k8s.cluster }}
+            namespace: ${{ inputs.k8s.namespace }}
+            optional: true
+      allocation:
+        type: organization-groups
+jobs:
+  main:
+    ssh:
+      remoteHost: ${{ inputs.cluster.ip }}
+    steps:
+      - run: echo "#SBATCH --account=${{ inputs.slurm.account }} --qos=${{ inputs.slurm.qos }} --partition=${{ inputs.slurm.partition }}" ${{ inputs.k8s.namespace }} ${{ inputs.allocation }}
+`)
+	named := []string{"--input", "cluster=" + clusterURI(t, "hpc"), "--input", "k8s.cluster=lab", "--input", "k8s.namespace=team", "--input", "allocation=research"}
+	args := append([]string{"validate", "--start"}, named...)
+	r := runCLI(t, env, "", append(args, workflow)...)
+	if r.code != exitInvalid || strings.Count(r.stdout, "(input_required)") != 2 || !strings.Contains(r.stdout, "slurm.account") || !strings.Contains(r.stdout, "slurm.qos") {
+		t.Errorf("meridian validate without the account and the QoS an existing cluster requires = %+v", r)
 	}
-	r := runCLI(t, env, "", "validate", "--start", "--input", "cluster=cpu", workflow)
-	if r.code != exitInvalid || !strings.Contains(r.stdout, "(cluster_unknown)") || !strings.Contains(r.stdout, `"hpc"`) {
-		t.Errorf("meridian validate with cluster cpu = %+v", r)
+	args = append(args, "--input", "slurm.account=physics", "--input", "slurm.qos=normal", "--input", "slurm.partition=debug", "--input", "queue=workq", "--input", "k8s.pvc=data")
+	if r := runCLI(t, env, "", append(args, workflow)...); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate with every name given = %+v", r)
+	}
+	inputs := writeFile(t, "inputs.json", `{"cluster": "`+clusterURI(t, "hpc")+`", "slurm": {"account": 7, "qos": "normal"}, "k8s": {"cluster": "lab", "namespace": "team"}, "allocation": "research"}`)
+	r = runCLI(t, env, "", "validate", "--start", "--inputs", inputs, workflow)
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "(input_not_text)") || !strings.Contains(r.stdout, "slurm.account") {
+		t.Errorf("meridian validate with an account that isn't text = %+v", r)
+	}
+}
+
+// TestValidateBucket checks that a bucket input takes a bucket's
+// pw://user/name URI, whose uri a workflow reads, and refuses a name
+// alone, which a run here has no platform user to read as theirs, and an
+// input that asks for the bucket's credentials.
+func TestValidateBucket(t *testing.T) {
+	parallel(t)
+	env := emptyEnv(t)
+	workflow := writeFile(t, "w.yaml", `on:
+  execute:
+    inputs:
+      data:
+        type: bucket
+jobs:
+  main:
+    steps:
+      - run: pw buckets cp "${{ inputs.data.uri }}/input.tgz" .
+`)
+	if r := runCLI(t, env, "", "validate", "--start", "--input", "data=pw://alice/data", workflow); r.code != exitOK || r.stdout != "" {
+		t.Errorf("meridian validate with a bucket's URI = %+v", r)
+	}
+	r := runCLI(t, env, "", "validate", "--start", "--input", "data=data", workflow)
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "(bucket_uri_invalid)") || !strings.Contains(r.stdout, "pw://user/bucket") {
+		t.Errorf("meridian validate with a bucket's name alone = %+v", r)
+	}
+	credentials := writeFile(t, "c.yaml", `on:
+  execute:
+    inputs:
+      data:
+        type: bucket
+        generateCredentials: true
+jobs:
+  main:
+    steps:
+      - run: echo ${{ inputs.data.uri }}
+`)
+	r = runCLI(t, env, "", "validate", "--start", "--input", "data=pw://alice/data", credentials)
+	if r.code != exitInvalid || !strings.Contains(r.stdout, "(bucket_credentials_need_platform)") {
+		t.Errorf("meridian validate of a bucket with generateCredentials = %+v", r)
 	}
 }
 

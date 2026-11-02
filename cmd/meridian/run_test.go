@@ -9,8 +9,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/kindtest"
+	"github.com/parallelworks/meridian/internal/login"
 	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/internal/testtiming"
 	"github.com/parallelworks/meridian/plan"
@@ -35,7 +38,8 @@ const helloWorkflow = "jobs:\n  main:\n    steps:\n      - run: echo hello\n"
 // TestMain runs the test binary as meridian worker when the local backend
 // starts it so, as it starts the binary that placed a job, for a job of a
 // run that a test's meridian run coordinates; and as meridian, with its
-// arguments, when a test starts it so (envMain). Run with
+// arguments, when a test starts it so (envMain); and as a session's
+// service, as a test's step starts it (envSessionService). Run with
 // testtiming.EnvScale, it shortens the timing of the coordinators it opens
 // (testtiming.Scale), as only a test does.
 func TestMain(m *testing.M) {
@@ -46,6 +50,9 @@ func TestMain(m *testing.M) {
 			os.Exit(exitError)
 		}
 		testtiming.Scale = s
+	}
+	if file := os.Getenv(envSessionService); file != "" {
+		os.Exit(sessionService(file))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "worker" && os.Getenv(hostStubEnv) != "" {
 		os.Exit(hostStub())
@@ -184,16 +191,108 @@ func waitingWorkflow(t *testing.T) (workflow string, release func()) {
 	return workflow, release
 }
 
-// waitUntil waits until ok, which it asks every so often, for as long as a
-// run on a loaded runner can take to get there.
-func waitUntil(t *testing.T, what string, ok func() bool) {
+// clusterURI returns the URI of the cluster named name of clusters.yaml,
+// as a compute-clusters input takes it: of the login name of the user who
+// runs the test, as meridian names the clusters (login.Name).
+func clusterURI(t testing.TB, name string) string {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
+	user, err := login.Name()
+	if err != nil {
+		t.Skipf("no login name to name a cluster by: %v", err)
+	}
+	return "pw://" + user + "/" + name
+}
+
+// waitLimit is how long waitUntil waits: as long as a run on a loaded
+// runner can take to get somewhere, a session's service started among it.
+const waitLimit = 3 * time.Minute
+
+// waitUntil waits until ok, which it asks every so often, for as long as
+// waitLimit; and fails the test then, with what detail gives, if it is
+// given, as what a command has said so far.
+func waitUntil(t testing.TB, what string, ok func() bool, detail ...func() string) {
+	t.Helper()
+	deadline := time.Now().Add(waitLimit)
 	for !ok() {
 		if time.Now().After(deadline) {
-			t.Fatalf("waited a minute for %s", what)
+			var more strings.Builder
+			for _, d := range detail {
+				more.WriteString("\n" + d())
+			}
+			t.Fatalf("waited %v for %s%s", waitLimit, what, more.String())
 		}
 		<-time.After(20 * time.Millisecond)
+	}
+}
+
+// untilSaid waits until cmd's output says said, as waitUntil does, and
+// fails the test if cmd ends first, or doesn't say it in time, with what
+// it said. Whoever waits for cmd's end after it is given its result all
+// the same.
+func untilSaid(t testing.TB, cmd *commandRun, said string) {
+	t.Helper()
+	waitUntil(t, fmt.Sprintf("the command to say %q", said), func() bool {
+		if strings.Contains(cmd.stdout.String(), said) {
+			return true
+		}
+		select {
+		case r := <-cmd.done:
+			cmd.done <- r
+			if !strings.Contains(r.stdout, said) {
+				t.Fatalf("the command ended before it said %q: %+v", said, r)
+			}
+			return true
+		default:
+			return false
+		}
+	}, func() string { return cmd.stdout.String() + cmd.stderr.String() })
+}
+
+// A fatalTB is a test whose Fatalf, which ends the goroutine that calls
+// it, it keeps the message of, rather than fail.
+type fatalTB struct {
+	testing.TB
+	fatal string
+}
+
+func (f *fatalTB) Helper() {}
+
+func (f *fatalTB) Fatalf(format string, args ...any) {
+	f.fatal = fmt.Sprintf(format, args...)
+	runtime.Goexit()
+}
+
+// TestUntilSaid checks untilSaid with commands that have ended: one that
+// said it last, after untilSaid looked at what it had said, whose result
+// untilSaid puts back for whoever waits for its end; and one that didn't
+// say it, which fails at once, with its result.
+func TestUntilSaid(t *testing.T) {
+	ended := func(stdout string) *commandRun {
+		cmd := &commandRun{done: make(chan result, 1)}
+		cmd.done <- result{stdout: stdout, code: exitOK}
+		return cmd
+	}
+	cmd := ended("ready\n")
+	untilSaid(t, cmd, "ready")
+	select {
+	case r := <-cmd.done:
+		if r.stdout != "ready\n" {
+			t.Errorf("the command's result is %+v", r)
+		}
+	default:
+		t.Error("untilSaid kept the command's result")
+	}
+
+	f := &fatalTB{TB: t}
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		untilSaid(f, ended("other\n"), "ready")
+	}()
+	<-done
+	if !strings.Contains(f.fatal, `the command ended before it said "ready"`) || !strings.Contains(f.fatal, "other") || time.Since(start) > 5*time.Second {
+		t.Errorf("untilSaid of a command that ended without saying it failed with %q, after %v", f.fatal, time.Since(start))
 	}
 }
 
@@ -324,6 +423,33 @@ func TestRunEnds(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(state, local.SocketFile)); err == nil {
 		t.Error("the coordinator's socket is there once meridian run has exited")
+	}
+}
+
+// TestRunPWUser checks that a step sees PW_USER, format 1's name of the
+// person who runs the workflow, as the login name of the user who runs
+// meridian, in its environment and in the env context, over a PW_USER the
+// workflow gives, as format 1 sets it over the workflow's.
+func TestRunPWUser(t *testing.T) {
+	parallel(t)
+	u, err := user.Current()
+	if err != nil || u.Username == "" {
+		t.Skipf("no login name to give: %v", err)
+	}
+	env := runEnv(t)
+	workflow := writeFile(t, "w.yaml", `
+env:
+  PW_USER: from-the-workflow
+jobs:
+  main:
+    steps:
+      - run: echo "process=$PW_USER context=${{ env.PW_USER }}"
+`)
+	if r := runTest(t, env, nil, workflow); r.code != exitOK {
+		t.Fatalf("meridian run = %+v", r)
+	}
+	if got, want := stepLog(t, env, "1"), "process="+u.Username+" context="+u.Username+"\n"; got != want {
+		t.Errorf("the step's log is %q, want %q", got, want)
 	}
 }
 

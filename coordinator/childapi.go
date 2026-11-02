@@ -111,7 +111,7 @@ func (c *Coordinator) stopReason(ctx context.Context, run *store.Run, err error)
 // retry:, where the plan writes that out (plan.Step.LastTry), so that a
 // worker can't make a child for each number.
 func (k childAPI) stepOf(run *store.Run, a *store.Attempt, index, try int) (*plan.Plan, *plan.Step, error) {
-	p, step, err := k.c.planStep(run, a, index)
+	p, _, step, err := k.c.planStep(run, a, index)
 	switch {
 	case err != nil:
 		return nil, nil, err

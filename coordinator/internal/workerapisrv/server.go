@@ -213,9 +213,10 @@ type Server struct {
 	bodyTime       time.Duration
 	childRecheck   time.Duration
 	// beforeEnd, if it is set, is called as an end is stored, between its
-	// checks and its transaction; and beforeClaim as a claim is, between
-	// its refusals and its transaction.
-	beforeEnd, beforeClaim func()
+	// checks and its transaction; beforeClaim as a claim is, between its
+	// refusals and its transaction; and afterEndRead as a poll for a child
+	// run's end has read the run (readEnd).
+	beforeEnd, beforeClaim, afterEndRead func()
 }
 
 // New returns a Server that serves from opts.

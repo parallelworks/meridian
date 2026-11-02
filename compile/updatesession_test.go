@@ -108,3 +108,70 @@ func TestUpdateSession(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateSessionFoldsKeys checks that the provider gets update-session's
+// with: as format 1 reads it, decoding it as encoding/json does once
+// json.Marshal has ordered its keys: a key of it but for case is that key,
+// and of keys that differ only in case, the last in byte order counts;
+// targetInfo's keys are read so too, and other keys are kept as they are.
+// The step's with: itself is left as it was.
+func TestUpdateSessionFoldsKeys(t *testing.T) {
+	s := &testSessions{}
+	with := map[string]any{
+		"Name": "desktop-checked", "REMOTEPORT": float64(8080), "LocalPort": float64(2), "localport": float64(1),
+		"TargetInfo": map[string]any{"NAME": "k8s", "resourcetype": "pods"}, "local_port": float64(3),
+	}
+	diags, err := compile.UpdateSession(t.Context(), s, compile.SessionUpdate{Run: "r1", Root: "r1"}, "/jobs/main/steps/0", with)
+	if err != nil || len(diags) != 0 {
+		t.Fatal(err, diags)
+	}
+	want := `r1 r1  desktop-checked {"localPort":1,"local_port":3,"remotePort":8080,"targetInfo":{"name":"k8s","resourceType":"pods"}}`
+	if len(s.updated) != 1 || s.updated[0] != want {
+		t.Errorf("updated %q, want %q", s.updated, want)
+	}
+	if _, ok := with["Name"]; !ok || len(with) != 6 {
+		t.Errorf("the step's with: changed: %v", with)
+	}
+}
+
+// TestUpdateSessionLoginUnknown checks that a provider that can't serve a
+// session for want of a login name fails the step, which no try again
+// would change, rather than having its worker ask again for ever.
+func TestUpdateSessionLoginUnknown(t *testing.T) {
+	t.Parallel()
+	s := &testSessions{updateErr: problems.LoginNameUnknown.Problem(problems.Params{"reason": "no such user"})}
+	diags, err := compile.UpdateSession(t.Context(), s, compile.SessionUpdate{Run: "r1", Root: "r1"}, "/jobs/main/steps/0", map[string]any{"name": "desktop-1", "remotePort": float64(1)})
+	if err != nil || len(diags) != 1 || diags[0].Code != problems.LoginNameUnknown.Code() || !diags.HasErrors() {
+		t.Errorf("UpdateSession without a login name = %v, %v", diags, err)
+	}
+}
+
+// TestSessionKeyNamed checks how format 1 tells a step that names one of
+// its workflow's sessions by its key: a with: whose name, under that key
+// exactly, is ${{ sessions.<key> }} and nothing else, spaces in the braces
+// aside.
+func TestSessionKeyNamed(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[any]string{
+		"${{ sessions.desktop }}":      "desktop",
+		"${{sessions.web-ui_2}}":       "web-ui_2",
+		"${{  sessions.x  }}":          "x",
+		"${{ sessions.desktop }}-2":    "",
+		"a ${{ sessions.desktop }}":    "",
+		"${{ inputs.desktop }}":        "",
+		"${{ sessions['desktop'] }}":   "",
+		"${{ sessions.desktop.name }}": "",
+		"desktop-1":                    "",
+		7:                              "",
+	} {
+		if got := compile.SessionKeyNamed(map[string]any{"name": name}); got != want {
+			t.Errorf("SessionKeyNamed(%v) = %q, want %q", name, got, want)
+		}
+	}
+	if got := compile.SessionKeyNamed(map[string]any{"Name": "${{ sessions.desktop }}"}); got != "" {
+		t.Errorf("a name under another key = %q", got)
+	}
+	if got := compile.SessionKeyNamed(nil); got != "" {
+		t.Errorf("no with: = %q", got)
+	}
+}

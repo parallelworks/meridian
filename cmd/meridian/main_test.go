@@ -90,7 +90,7 @@ func TestCommandsAreTheDesigns(t *testing.T) {
 	for _, cmd := range commands {
 		names = append(names, cmd.name)
 	}
-	want := []string{"init", "run", "validate", "migrate", "status", "logs", "cancel", "resume", "rerun", "serve", "worker", "host", "relay", "version"}
+	want := []string{"init", "run", "validate", "migrate", "status", "logs", "cancel", "resume", "session", "rerun", "serve", "worker", "host", "relay", "version"}
 	if !slices.Equal(names, want) {
 		t.Errorf("the commands are %q, want %q", names, want)
 	}

@@ -41,6 +41,15 @@ const (
 // a member between one job and the next keeps it.
 const forwardIdle = 5 * time.Minute
 
+// forwardIdleForget is how long ServeMembers remembers a member it let go
+// of as idle, which takes its lease again as idle, starting no grace
+// (store.HoldIdleEndpoint); past it, the member is forgotten (releaseIdle),
+// and takes its lease as one this process never held does, starting a
+// grace, once, as it comes back: long enough that a member used every
+// day keeps it, and short enough that a process that serves for long
+// remembers only the members of its last day.
+const forwardIdleForget = 24 * time.Hour
+
 // A forwarding is what ServeMembers serves members' listeners with while
 // it runs: its context, and the worker API's server.
 type forwarding struct {
@@ -49,14 +58,14 @@ type forwarding struct {
 	// holders are the members whose listeners this process holds, or
 	// waits to, by their keys; and idle the keys of those it let go of
 	// as no attempt needed them (releaseIdle), and hasn't held again,
-	// whose leases it takes again as idle (store.HoldIdleEndpoint). The
-	// coordinator's mu guards both. A key leaves idle only as its member
-	// is held again, never as the member leaves its group: idle holds one
-	// key for each member ServeMembers ever let go of, as a meridian run
-	// serves one tree's few, and needs pruning before a coordinator that
-	// serves for long, as meridian serve would.
+	// whose leases it takes again as idle (store.HoldIdleEndpoint), with
+	// when it let each go. The coordinator's mu guards both. A key leaves
+	// idle as its member is held again, or once forwardIdleForget has
+	// passed since it was let go: most members are an ssh: of a job or a
+	// step, which is in no group that could say it left, so idle is
+	// bounded by time alone, to the members let go of in that while.
 	holders map[string]*holder
-	idle    map[string]bool
+	idle    map[string]time.Time
 	// lookups are when to look again for the members of the attempts
 	// whose members forwardAll couldn't find, which only ServeMembers
 	// touches.
@@ -181,7 +190,7 @@ func (c *Coordinator) ServeMembers(ctx context.Context, logs Logs) error {
 		return err
 	}
 	defer release()
-	f := &forwarding{ctx: ctx, srv: srv, holders: map[string]*holder{}, idle: map[string]bool{}, lookups: lookups{}}
+	f := &forwarding{ctx: ctx, srv: srv, holders: map[string]*holder{}, idle: map[string]time.Time{}, lookups: lookups{}}
 	c.mu.Lock()
 	if c.forwarding != nil {
 		c.mu.Unlock()
@@ -290,7 +299,8 @@ func (c *Coordinator) forwardAll(ctx context.Context, l lookups, now time.Time) 
 // the member's can wait to reach it meanwhile, so the store's grace, in
 // which no lapsed lease of any member's counts, doesn't start again,
 // however often members come and go. A member between one job and the
-// next keeps it.
+// next keeps it. It forgets each member it let go of forwardIdleForget
+// before now, which takes its lease again as any does.
 func (c *Coordinator) releaseIdle(needed map[string]bool, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -308,9 +318,10 @@ func (c *Coordinator) releaseIdle(needed map[string]bool, now time.Time) {
 			// the lease.
 			h.cancel()
 			delete(f.holders, key)
-			f.idle[key] = true
+			f.idle[key] = now
 		}
 	}
+	maps.DeleteFunc(f.idle, func(_ string, at time.Time) bool { return now.Sub(at) >= forwardIdleForget })
 }
 
 // holding reports whether this process holds the listener of the member
@@ -365,7 +376,7 @@ func (c *Coordinator) hold(fw backend.Forwarder, m *backend.Member, key string, 
 	} else {
 		ctx, cancel := context.WithCancel(f.ctx)
 		h = &holder{ready: make(chan struct{}), cancel: cancel, needed: time.Now()}
-		idle := f.idle[key]
+		_, idle := f.idle[key]
 		delete(f.idle, key)
 		f.holders[key] = h
 		f.wg.Go(func() {

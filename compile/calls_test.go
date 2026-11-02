@@ -133,6 +133,45 @@ func TestCreatePinsTheTree(t *testing.T) {
 	}
 }
 
+// Create pins a workflow a platform stores once, however its steps write
+// it, as ACTIVATE reads them (plan.SourceRef.Normal): a marketplace
+// workflow's version after a slash or an @, the latest when there is none,
+// and with a $yaml, which ACTIVATE ignores; and asks Sources for it by the
+// first step's reference, as written. Each step keeps its own.
+func TestCreatePinsAPlatformWorkflowOnce(t *testing.T) {
+	const called = "jobs:\n  j:\n    steps:\n      - run: echo\n"
+	s := treeSources(map[string]string{"marketplace/m@v1": called, "marketplace/m": called, "workflow/w": called})
+	workflow := `jobs:
+  j:
+    steps:
+      - uses: marketplace/m@v1
+      - uses: marketplace/m/v1
+        with: {$yaml: other.yaml}
+      - uses: marketplace/m
+      - uses: marketplace/m/latest
+      - uses: workflow/w
+      - uses: workflow/w
+        with: {$yaml: other.yaml}
+`
+	c, diags, err := compile.Create(t.Context(), "workflow.yaml", []byte(workflow), nil, compile.Options{Sources: s})
+	if err != nil || c == nil || diags.HasErrors() {
+		t.Fatal(diags, err)
+	}
+	var asked []string
+	for _, r := range s.Asked() {
+		asked = append(asked, r.Uses)
+	}
+	if want := []string{"marketplace/m@v1", "marketplace/m", "workflow/w"}; !slices.Equal(asked, want) {
+		t.Errorf("asked for %q, want %q", asked, want)
+	}
+	steps := c.Plan.Jobs[0].Steps
+	for i, want := range []string{"marketplace/m@v1", "marketplace/m/v1", "marketplace/m", "marketplace/m/latest", "workflow/w", "workflow/w"} {
+		if src := steps[i].Source; src == nil || src.Ref.Uses != want || src.Location != steps[[]int{0, 0, 2, 2, 4, 4}[i]].Source.Location {
+			t.Errorf("step %d is pinned to %+v, want by %q, as the step it names the same workflow as", i, src, want)
+		}
+	}
+}
+
 // Create refuses a tree it can't run, as format 1 does: a workflow more
 // than 4 levels below the run, or already on its own path of calls, which
 // either path finds; more calls, counted on every path, or more distinct

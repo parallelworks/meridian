@@ -24,14 +24,20 @@ var ErrInputType = errors.New("compile: no such input type")
 type InputResolver interface {
 	// ResolveInput checks the value given for an input of a platform type
 	// and returns what the run sees for it, such as a cluster's details for
-	// its name. It is asked as soon as the value is known, and what reads
+	// its URI. It is asked as soon as the value is known, and what reads
 	// the input, the other inputs' definitions and the workflow's env: among
 	// them, reads what it returns; a field of a list's rows is asked for
 	// too, and so is an input that turns out to be ignored, whose error
-	// fails the run all the same. A resolver that runs format 1 as ACTIVATE
-	// does gives a compute-clusters or a bucket input's details, and every
-	// other type's value as it is. It returns ErrInputType for a type it
-	// doesn't provide. It refuses a value with an error that is, or wraps, a
+	// fails the run all the same. called is set for the input of a
+	// workflow a step calls (Options.Parent), whose value is what its
+	// caller's with: gives, or its default, and unset for a run's own,
+	// submitted or a default: a run's own cluster or bucket takes the
+	// resource's pw:// URI, and a called workflow's also takes its details,
+	// a mapping, as a caller passes those it has. A resolver that runs
+	// format 1 as ACTIVATE does gives a compute-clusters or a bucket input's
+	// details, and every other type's value as it is. It returns
+	// ErrInputType for a type it doesn't provide. It refuses a value with an
+	// error that is, or wraps, a
 	// *problem.Problem: one of the problems package's kinds of error,
 	// foundation's shared rules among them, but not the command's, is
 	// reported as that kind, with its params and the input's name as input,
@@ -46,7 +52,7 @@ type InputResolver interface {
 	// names the input, and has the resolver's error's text only where the
 	// value can't be private; all the same, an error that says it couldn't
 	// answer never quotes the value, as a URL it couldn't reach can.
-	ResolveInput(ctx context.Context, typ string, definition map[string]any, value any) (any, error)
+	ResolveInput(ctx context.Context, typ string, definition map[string]any, value any, called bool) (any, error)
 }
 
 // ErrUnanswered is what the error Create, Start and ResolveInputs return

@@ -818,6 +818,120 @@
       "删除 disconnect-timeout，或按格式 1 能读取的方式书写，例如对从不放弃其主机的步骤写 -1。"
     ]
   },
+  "session_redirect_twice": {
+    "title": "有多个要把用户带去的会话",
+    "why": "设置了 redirect: true 的会话，是运行工作流的人在它就绪后被带去的会话，而一次运行只能把他们带到一个会话。因此格式 1 在创建运行时拒绝有多个会话设置了它的工作流。由表达式给出的 redirect: 会在运行开始、其值已知时检查。",
+    "fix": [
+      "只在一个会话上保留 redirect: true，在其他会话上删除它或设为 false。"
+    ]
+  },
+  "session_user_unsupported": {
+    "title": "会话路径无法容纳的登录名",
+    "why": "Meridian 像格式 1 的平台那样，在本机的 /me/session/<user>/<name>/ 上提供会话，而工作流根据 PW_USER（运行 Meridian 的用户的登录名）构造该路径，以给应用设置基础路径或打印其地址。因此路径按字节原样包含登录名：转义之后就不再是交给应用的路径。由字母、数字、.、_、-、@ 和 ~ 组成的名称（如 user@domain）无需转义，但路径的点段会去掉的 . 和 .. 除外；其他名称无法提供会话。",
+    "fix": [
+      "以登录名只含字母、数字、.、_、-、@ 和 ~ 的用户运行工作流。"
+    ]
+  },
+  "session_local_port_taken": {
+    "title": "会话的端口已被占用",
+    "why": "Meridian 在本机回环地址 127.0.0.1 和 [::1] 上由系统选择、两者相同的各自端口提供每个会话。接管会话的进程（例如在提供它的 meridian run 结束之后）会在它之前所用的端口上提供它，如果该端口现在被其他程序占用，则改用另一个端口。若端口由系统选择，则 Meridian 请求了多少次，系统选择的每个端口在 [::1] 上都属于其他程序，因此 Meridian 无法在任何端口上提供该会话。",
+    "fix": [
+      "对于会话之前所用的端口：无需处理，Meridian 会在另一个端口上提供该会话，meridian session url 会给出它。",
+      "对于系统选择的端口：找出在 [::1] 上占用端口的程序（例如用 ss -ltn 查看），停止它，然后再次运行 meridian resume。"
+    ]
+  },
+  "session_local_port_refused": {
+    "title": "本机不允许监听的会话端口",
+    "why": "Meridian 在本机回环地址 127.0.0.1 上由系统选择的各自端口提供每个会话；对于进程接管的会话，则使用它之前所用的端口。系统拒绝让 Meridian 在那里监听，例如有策略限制程序可以监听的端口。",
+    "fix": [
+      "允许 Meridian 在系统选择的 127.0.0.1 和 [::1] 端口上监听，然后再次运行 meridian resume 或 meridian session url。"
+    ]
+  },
+  "session_service_unchecked": {
+    "title": "Meridian 无法判断其用户的会话服务",
+    "why": "指向本机服务的会话，是通过把每个请求转到工作流给出的端口（在本机的回环地址上）来提供的。在服务没有监听时，例如它启动期间或停止之后，本机的任何用户都可以在那里监听，并收到会话的请求，连同你在其应用中的 cookie 和密码。因此 Meridian 在发送请求之前，会询问系统这个连接的另一端属于谁：Linux 上通过 NETLINK_SOCK_DIAG，macOS 和 FreeBSD 上通过它们的 TCP 套接字列表。在本机的服务上提供会话之前，Meridian 会先确认系统能就一个连向它自己监听者的连接回答这一点。这里系统没有回答：可能是系统不肯回答，例如在拒绝 NETLINK_SOCK_DIAG 套接字的沙箱中；也可能是以 Meridian 无法读取的形式回答，例如其列表 Meridian 尚不认识的某个 macOS 或 FreeBSD 版本。因此 Meridian 宁可不把会话的请求交给任何人，也不交给一个未经核实的用户，把会话指向本机服务的步骤也会失败。指向集群的会话不这样检查：连接服务的是其集群的主机。",
+    "fix": [
+      "在系统会告知谁在端口上监听的地方运行 meridian：在 Linux 上，于拒绝 ss 所用的 NETLINK_SOCK_DIAG 套接字的沙箱之外运行；或在 macOS、FreeBSD 上运行。",
+      "查看 meridian run 的日志，其中写明了系统为何不肯回答。"
+    ]
+  },
+  "session_name_taken": {
+    "title": "另一个会话已有的会话名",
+    "why": "会话的名称就是它的路径 /me/session/<user>/<name>/，也是 update-session 指代它所用的名称，因此两个尚未结束的会话不能同名。这个名称是工作流选择的，例如 prompt-for-name 的默认值，而另一个尚未结束的会话也有这个名称：工作流 sessions: 中的另一个会话，或另一个仍在进行的运行的会话。",
+    "fix": [
+      "给工作流的每个会话取不同的名称，或用 meridian cancel 结束另一个运行。"
+    ]
+  },
+  "session_name_empty": {
+    "title": "没有会话名称的 update-session",
+    "why": "使用 parallelworks/update-session 的步骤会指向其 with: 的 name 所指定的会话，${{ sessions.<key> }} 会给出运行自己的会话名称。它的 name 为空或缺失，例如读取了一个没有值的输入或输出。",
+    "fix": [
+      "给 name 一个会话名称，例如 ${{ sessions.<key> }}，其中 key 是工作流 sessions: 中的一个键。"
+    ]
+  },
+  "session_unknown": {
+    "title": "没有这样的会话",
+    "why": "使用 parallelworks/update-session 的步骤会指向其运行的树通过 sessions: 创建的会话，会话在树的根结束时结束。这样的会话不存在：该名称不是任何会话的，或者创建它的运行已经结束。",
+    "fix": [
+      "指定运行自己的会话，即 ${{ sessions.<key> }} 给出的名称。"
+    ]
+  },
+  "session_not_permitted": {
+    "title": "运行不能指向的会话",
+    "why": "按照格式 1 的平台的规则，运行可以指向它自己的树创建的会话，它调用的工作流也可以；工作流的 permissions: 含有 '*' 的运行以运行它的人的身份行事，可以指向此人的任何会话。这个会话属于另一个运行，而此运行的树没有要求 '*'。",
+    "fix": [
+      "指向运行自己的树创建的会话，即 ${{ sessions.<key> }} 给出的名称；或者，如果树顶端的工作流应以你的身份行事，就给它 permissions: ['*']。"
+    ]
+  },
+  "session_field_unsupported": {
+    "title": "meridian run 无法提供的会话",
+    "why": "meridian run 在其运行期间于本机的一个专用端口上提供会话。detach: true 要求会话比其运行更长久，这需要一个比命令更长久的协调器，即将来的 meridian serve。openAI: true 要求平台把会话注册为模型的端点，这里没有平台。useCustomDomain: true 会被忽略，就像格式 1 在平台没有会话域名时那样：这里每个会话都有自己的主机名。",
+    "fix": [
+      "要用 meridian run 运行工作流，请去掉该字段或将其设为 false。"
+    ]
+  },
+  "session_name_needed": {
+    "title": "要求提供名称的会话",
+    "why": "对于 prompt-for-name 没有给出默认值的会话，格式 1 的表单会向运行工作流的人询问其名称。meridian run 不询问任何人：它用默认值给会话命名，该默认值必须是能原样放入 URL 路径的名称（会话路径就包含它），且不能是表达式，因为表达式要在会话命名之后才求值。",
+    "fix": [
+      "给 prompt-for-name 一个固定的默认值，例如 {default: my-session}。"
+    ]
+  },
+  "session_update_unsupported": {
+    "title": "meridian run 无法执行的 update-session",
+    "why": "targetInfo 让会话指向一个 Kubernetes 资源，平台用它自己的凭据访问该资源；openAI 和 apiKey 把会话注册为模型的端点：meridian run 都不具备。",
+    "fix": [
+      "从 update-session 的 with: 中去掉该字段。"
+    ]
+  },
+  "session_url_invalid": {
+    "title": "不是 http 或 https URL 的链接",
+    "why": "type: link 的 update-session 让会话指向一个 URL，meridian 会打印该 URL 供运行工作流的人打开，并不为它提供任何服务。它必须是绝对的 http 或 https URL。",
+    "fix": [
+      "给 url 一个页面地址，例如 https://example.com/。"
+    ]
+  },
+  "session_port_invalid": {
+    "title": "update-session 无法读取的端口",
+    "why": "remotePort（服务的端口）按格式 1 的读法，是 1 到 65535 之间的整数或其文本，隧道需要它；格式 1 接受更多形式，如 -1 或 +80，Meridian 会拒绝。localPort 被格式 1 忽略，Meridian 也忽略它，并在系统选择的端口上提供会话；但格式 1 仍会让 localPort 既不是数字也不是整数文本的步骤失败，Meridian 也是如此。",
+    "fix": [
+      "以 1 到 65535 之间的数字给出 remotePort，例如 remotePort: 8888，并去掉 localPort。"
+    ]
+  },
+  "session_target_unknown": {
+    "title": "没有指向任何集群的会话目标",
+    "why": "隧道的 target 是从哪里访问其服务：无、\"\"、localhost 或 user-workspace 表示 workspace，即本机；否则按 id 指定一个集群，clusters.yaml 中集群的 id 就是它的名称，由 ${{ inputs.<cluster>.id }} 给出。Meridian 通过集群的主机经 SSH 访问服务。",
+    "fix": [
+      "让 target 指向某个 compute-clusters 输入的 ${{ inputs.<cluster>.id }}，或把该集群加入 clusters.yaml。"
+    ]
+  },
+  "session_tls_unsupported": {
+    "title": "meridian run 尚无法访问的 TLS 会话",
+    "why": "会话的 useTLS 为 true、指向本机的隧道以 HTTPS 连接其服务。meridian run 目前还无法检查本机服务的证书，也不会改用普通 HTTP 访问它。指向集群的隧道会像格式 1 那样忽略 useTLS。",
+    "fix": [
+      "在本机的回环地址上以 HTTP 提供应用，并从会话中去掉 useTLS。"
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on 不是运行位置",
     "why": "作业的 runs-on: 用于选择作业的运行位置，但其中的表达式得到的值没有指定任何位置。runs-on 接受执行组的名称（如 execution-groups 输入给出的值）、带有 execution-group: 的映射、带有 environment: 及其集群和名称的映射，或计算目标（如 compute-target 输入给出的值）。",
@@ -1251,6 +1365,20 @@
       "让该步骤写入更短的值，或者其中换行符、制表符和回车符更少的值，或者把值写入运行目录中的文件，并把该文件的路径写入 $OUTPUTS。"
     ]
   },
+  "masks_too_many": {
+    "title": "步骤的独立运行要遮盖的字符串过多",
+    "why": "调用工作流的步骤，或其 ssh: 将其置于与其作业不同主机上的步骤，会作为一次独立运行来运行，该运行的工作进程会遮盖其作业的工作进程所遮盖的内容：其运行的机密、平台的机密变量、作业由机密生成的值，以及调用该作业所在运行的步骤（如果有）所遮盖的内容。工作进程在请求该运行时把这些全部交给协调器，协调器将其保存在该运行的机密记录中。协调器最多接受消息作为上限给出的字符串个数。这使记录以及在运行的工作进程记录的每一行中遮盖每个字符串的工作保持有界。该作业遮盖的更多，因此该步骤失败，并且不会重试：工作进程从不以更少的字符串请求该运行，因为那会让运行的日志显示其余部分。",
+    "fix": [
+      "让作业读取更少的机密，或由其生成更少的值，例如把读取其中一部分机密的步骤移到单独的作业中。"
+    ]
+  },
+  "masks_too_large": {
+    "title": "步骤的独立运行要遮盖的字符串过大",
+    "why": "调用工作流的步骤，或其 ssh: 将其置于与其作业不同主机上的步骤，会作为一次独立运行来运行，该运行的工作进程会遮盖其作业的工作进程所遮盖的内容：其运行的机密、平台的机密变量、作业由机密生成的值，以及调用该作业所在运行的步骤（如果有）所遮盖的内容。工作进程在请求该运行时把这些全部交给协调器，协调器将其保存在该运行的机密记录中。协调器最多接受消息作为上限给出的字节数（合计）。这使记录以及在运行的工作进程记录的每一行中遮盖每个字符串的工作保持有界。该作业遮盖的更多，因此该步骤失败，并且不会重试：工作进程从不以更少的字符串请求该运行，因为那会让运行的日志显示其余部分。",
+    "fix": [
+      "让作业读取更少的机密，或由其生成更少的值，例如把读取其中一部分机密的步骤移到单独的作业中。"
+    ]
+  },
   "cancel_jobs_job_unknown": {
     "title": "步骤无法取消的作业",
     "why": "parallelworks/cancel-jobs 步骤的 jobs: 指定要取消的、其运行中的作业。此名称不属于该运行的任何作业，或者属于矩阵作业，而格式 1 以其他名称识别矩阵作业的实例，因此不会取消其中任何一个。与格式 1 一样，该步骤对此名称不做任何事，并且成功。",
@@ -1546,18 +1674,49 @@
   },
   "cluster_unknown": {
     "title": "未知的集群",
-    "why": "compute-clusters 输入的值指定一个集群，运行看到的是该集群的详细信息，如其 ip 和 schedulerType。在运行工作流的机器上，名称是 workspace（即本机，写作 workspace 或 user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群，与输入的 include-workspace、provider 和 csp 无关，这些只决定表单列出什么。",
+    "why": "compute-clusters 或 compute-resources 输入的值按其 pw:// URI 指定一个集群，运行看到的是该集群的详细信息，如其 ip 和 schedulerType。在运行工作流的机器上，URI 指的是 workspace（即本机，写作 pw://user-workspace 或 pw://<login>/user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群（写作 pw://<login>/<name>），其中 <login> 是运行 meridian 的用户的登录名，与输入的 include-workspace、provider 和 csp 无关，这些只决定表单列出什么。其他用户的 URI 在这里不指向任何集群。",
     "fix": [
       "从消息列出的集群中选择一个，或选择 workspace。",
-      "或者在 Meridian 配置目录的 clusters.yaml 中定义该集群，并给出能到达它的 SSH 主机。"
+      "或者在 Meridian 配置目录的 clusters.yaml 中定义该集群，并给出能到达它的 SSH 主机。",
+      "在平台上 compute-resources 输入可以指定的 Kubernetes 集群在这里无法选择：单独运行时，Meridian 只知道 clusters.yaml 中的集群和 workspace。请在提供该 Kubernetes 集群的平台上运行这样的工作流。"
     ]
   },
   "clusters_none": {
     "title": "没有可选的集群",
-    "why": "compute-clusters 输入的值指定一个集群。在运行工作流的机器上，名称是 workspace（即本机，写作 workspace 或 user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群，而这里没有 clusters.yaml，或它未定义任何集群。",
+    "why": "compute-clusters 或 compute-resources 输入的值按其 pw:// URI 指定一个集群。在运行工作流的机器上，URI 指的是 workspace（即本机，写作 pw://user-workspace 或 pw://<login>/user-workspace），或 Meridian 配置目录中 clusters.yaml 定义的某个集群（写作 pw://<login>/<name>），而这里没有 clusters.yaml，或它未定义任何集群。",
     "fix": [
       "在 Meridian 配置目录的 clusters.yaml 中定义该集群，并给出能到达它的 SSH 主机。",
-      "或者在提供该输入的集群的平台上运行工作流。"
+      "或者在提供该输入的集群的平台上运行工作流：单独运行时，Meridian 只知道 clusters.yaml 中的集群和 workspace，因此在平台上 compute-resources 输入可以指定的 Kubernetes 集群在这里不可用。"
+    ]
+  },
+  "cluster_uri_required": {
+    "title": "不是集群的 pw:// URI 的值",
+    "why": "compute-clusters 或 compute-resources 输入按其 pw:// URI 指定集群。在运行工作流的机器上，Meridian 配置目录中 clusters.yaml 定义的集群写作 pw://、运行 meridian 的用户的登录名、斜杠和集群名称，如 pw://alice/hpc；workspace（即本机）也可以写作 workspace 或 user-workspace，单独写，或写在 pw:// 或 pw://alice/ 之后。只有名称不是 URI，而只有 pw:// 和名称则指平台上某个组织的集群，此处的运行没有这样的集群。运行自身的输入接受 URI，正如平台的表单给出的那样；只有步骤调用的工作流才会收到集群的详细信息（一个映射），由调用方按其所有的详细信息传入。",
+    "fix": [
+      "按消息给出的 URI 写出集群，使用 clusters.yaml 中的集群名称。",
+      "只在步骤的 with: 中把集群的详细信息传给该步骤调用的工作流，正如格式 1 传递它们那样。"
+    ]
+  },
+  "cluster_login_unknown": {
+    "title": "没有用于指定集群的登录名",
+    "why": "compute-clusters 或 compute-resources 输入按包含运行 Meridian 的用户的登录名的 URI 指定 clusters.yaml 中的集群或 workspace，如 pw://alice/hpc，工作流从 PW_USER 读取该名称。Meridian 从系统的用户数据库读取它，否则读取 $USER，但两者都没有找到，因此这里没有 URI 能指定集群。",
+    "fix": [
+      "以系统用户数据库中存在的用户身份运行 meridian，或将 USER 设为登录名。"
+    ]
+  },
+  "bucket_uri_invalid": {
+    "title": "不是存储桶的 pw:// URI 的值",
+    "why": "存储桶输入按其在保存它的平台上的 URI 指定存储桶：pw://、拥有它的用户、斜杠和存储桶的名称。平台会把只有存储桶名称，或只有 pw:// 和名称的值读作该用户自己的存储桶，这需要其平台用户名。此处的运行没有平台用户名，因此 URI 必须写明用户。运行自身的输入接受 URI，正如平台的表单给出的那样；只有步骤调用的工作流才会收到存储桶的详细信息（一个映射），由调用方按其所有的详细信息传入。",
+    "fix": [
+      "将存储桶写成 pw://user/bucket，其中用户为存储桶所有者的平台用户名。"
+    ]
+  },
+  "bucket_credentials_need_platform": {
+    "title": "存储桶凭据需要平台",
+    "why": "带有 generateCredentials 的存储桶输入会给运行提供限定于该存储桶的访问密钥，这些密钥由保存该存储桶的平台在创建运行时生成。此处的运行没有可以生成它们的平台，Meridian 不会在缺少工作流所读取的密钥时启动运行。",
+    "fix": [
+      "在保存该存储桶的平台上运行该工作流。",
+      "或者，如果工作流可以通过其他方式访问存储桶，例如平台自己的 CLI，请去掉 generateCredentials。"
     ]
   },
   "source_ref_invalid": {
@@ -1569,10 +1728,26 @@
   },
   "source_on_platform": {
     "title": "平台存储的工作流",
-    "why": "以 marketplace/ 或 workflow/ 开头的 uses: 指定的是由 ACTIVATE 等平台保存的工作流。Meridian 本身从 Git 仓库读取工作流。",
+    "why": "以 marketplace/ 或 workflow/ 开头的 uses: 指定的是由 ACTIVATE 等平台保存的工作流。Meridian 本身从 Git 仓库读取工作流，只有通过你的映射才会读取平台存储的工作流：sources.yaml 的 workflows 把这样的 uses: 映射到 Git 仓库中的工作流，然后像 github/ 或 gitlab/ 的 uses: 一样读取并固定它。",
     "fix": [
-      "在存储所用工作流的平台上运行该工作流。",
-      "或者通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>@<修订>，并在 with: $yaml 中指定其文件。"
+      "在 sources.yaml 的 workflows 中，以 uses: 为键，把该工作流映射到 Git 中的工作流，例如 marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}。",
+      "或者在 uses: 本身中通过 Git 仓库指定工作流，例如 github/<所有者>/<仓库>@<修订>，并在 with: $yaml 中指定其文件。"
+    ]
+  },
+  "source_version_invalid": {
+    "title": "映射无法使用的市场工作流版本",
+    "why": "在 sources.yaml 的 workflows 中，键 marketplace/<slug>/{version} 映射市场工作流某个 slug 的每个版本：其 yaml 中以及其 uses 的 @ 之后的 {version} 代表 uses: 所指定的版本。版本是工作流自身的文本，因此在 Git 读取任何内容之前，它只能由字母、数字、.、_、+ 和 - 组成，不能以 . 或 - 开头，最多 255 字节，而且由它得出的修订和文件必须是 uses: 能指定的，这样它既不能指向仓库外的文件，也不会被当作选项读取。",
+    "fix": [
+      "指定映射能使用的版本，例如 v1.2。",
+      "或者在 sources.yaml 的 workflows 中用该版本自己的键 marketplace/<slug>/<版本> 映射它。"
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "未映射的市场工作流最新版本",
+    "why": "marketplace/<slug> 或 marketplace/<slug>/latest 形式的 uses: 指定的是该项目的最新版本，由其平台决定。sources.yaml 中某个 slug 的映射 marketplace/<slug>/{version} 无法知道它是哪个版本，因此 Meridian 只通过最新版本自己的键 marketplace/<slug>/latest 来映射它：这是你选择的工作流，而不是该项目的最高版本。",
+    "fix": [
+      "把消息中指出的键 marketplace/<slug>/latest 添加到 sources.yaml 的 workflows 中，映射到你认为是最新的工作流。",
+      "或者在 uses: 中指定版本，例如 marketplace/<slug>/<版本>。"
     ]
   },
   "source_revision_not_found": {
@@ -1853,7 +2028,7 @@
   },
   "cluster_name_invalid": {
     "title": "无效的集群名",
-    "why": "集群的名称是 compute-clusters 输入的值所指定的。workspace 和 user-workspace 指本机，与格式 1 指代 workspace 的方式相同。",
+    "why": "集群的名称是 compute-clusters 输入的值所指定的。workspace 和 user-workspace 指本机，与格式 1 指代 workspace 的方式相同。集群的名称也是它的 id，会话的目标会读取它，而格式 1 也把目标 localhost 读作 workspace。",
     "fix": [
       "重命名该集群。"
     ]
@@ -1864,6 +2039,27 @@
     "fix": [
       "按其键的要求更正该值。",
       "对需要更多设置的主机，如端口、登录用户、跳板主机或 IPv6 地址，请指定你的 ssh_config 中定义的别名。"
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "映射的不是平台存储的工作流",
+    "why": "sources.yaml 的 workflows 中的每个键都是一个指定平台存储的工作流的 uses:：marketplace/<slug>/<版本> 指定市场工作流的一个版本；marketplace/<slug>/{version} 指定其 slug 中没有自己的键映射的每个版本；workflow/<名称> 指定已保存的工作流。版本模板是整个版本，键的其他部分不能含有花括号。",
+    "fix": [
+      "按 uses: 的写法写键，例如 marketplace/tools/v1.2、marketplace/tools/{version} 或 workflow/nightly。"
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "同一工作流的两个映射",
+    "why": "按格式 1 读取 uses: 的方式，sources.yaml 的 workflows 中有两个键指定同一个工作流：marketplace/<slug>@<版本> 与 marketplace/<slug>/<版本> 是同一个，marketplace/<slug> 与 marketplace/<slug>/latest 也是同一个。运行会读取其中哪个映射并不明确。",
+    "fix": [
+      "只保留其中一个。"
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "映射到的不是 Git 中的工作流",
+    "why": "sources.yaml 的 workflows 中的每个映射都像步骤的 uses: 那样指定 Git 仓库中的工作流：uses 写作 github/<所有者>/<仓库>[@<修订>] 或 gitlab/<组>/<项目>[@<修订>]；yaml 是其文件，未指定其他文件时为 workflow.yaml；host 是 GitLab 项目的服务器，必须在 gitlab-servers 中注册。Git 像对待任何 uses: 一样用你的凭据访问它，因此它不能指定平台存储的另一个工作流，也不能是 URL。只有 slug 的键 marketplace/<slug>/{version} 才能在映射中以 {version} 写出版本，写在其 yaml 中和其 uses 的 @ 之后。",
+    "fix": [
+      "按步骤指定 Git 中工作流的方式写映射，例如 {uses: github/acme/flows@main, yaml: flows/tools.yaml}。"
     ]
   },
   "key_file_invalid": {
@@ -2314,6 +2510,94 @@
       "在其主机运行 Linux、macOS 或 FreeBSD 的成员上运行该作业。"
     ]
   },
+  "session_unreachable": {
+    "title": "会话的服务没有响应",
+    "why": "Meridian 通过把每个请求转到工作流为会话指定的地址来提供会话：经 SSH 通过其集群的主机，或在本机上。该地址没有响应：服务尚未启动、已经停止、在另一个地址上监听，或主机不肯连接它。",
+    "fix": [
+      "等服务启动后重新加载页面。",
+      "用 meridian status 和 meridian logs 检查运行。"
+    ]
+  },
+  "session_busy": {
+    "title": "到其服务的连接已达上限的会话",
+    "why": "会话同时打开或正在打开的到其服务的连接数有上限，为 Meridian 在到服务主机的连接上所开连接数的四分之一，以免一个会话的页面，或不断重试一个无响应服务的浏览器，占用主机上其他会话所需的连接。请求最多等待十秒来获得连接。会话中保持连接打开的每个页面（例如 WebSocket）在打开期间都占用一个连接。",
+    "fix": [
+      "关闭你不用的会话页面，然后重新加载页面。",
+      "用 meridian status 和 meridian logs 确认会话的服务是否响应：到无响应服务的连接会一直占用名额，直到放弃。"
+    ]
+  },
+  "session_unauthorized": {
+    "title": "没有 Meridian 的链接就请求的会话",
+    "why": "本机上的任何人都能连接它的回环地址，因此 Meridian 只向打开了它为你生成的链接的浏览器提供会话。链接中含有一个只能在十分钟内使用一次的代码，它会给浏览器一个该会话的 Cookie，该 Cookie 在运行结束或执行 meridian session reset 之前有效。此浏览器没有这样的 Cookie：它的链接已被使用或已过期，或者它没有打开任何链接。",
+    "fix": [
+      "用消息给出的运行和会话键运行 meridian session url，并在你使用该会话的浏览器中打开它打印的链接。"
+    ]
+  },
+  "session_cross_origin": {
+    "title": "来自其他页面的会话请求",
+    "why": "对浏览器来说，127.0.0.1 的所有端口都是同一个站点，因此本机上其他程序提供的页面本可以向此会话的应用发送带有你该会话 Cookie 的请求，而 WebSocket 连接也不受页面自身来源的限制。因此，对于 WebSocket 连接，以及 GET、HEAD、OPTIONS 以外的请求，Meridian 通过 Origin 和 Sec-Fetch-Site 请求头检查它是否来自会话自己的页面，并拒绝其他请求。",
+    "fix": [
+      "请从会话自己的页面使用应用。"
+    ]
+  },
+  "session_not_here": {
+    "title": "此路径上没有会话",
+    "why": "Meridian 在 127.0.0.1 的各自端口上、路径 /me/session/<user>/<name>/ 之下提供每个会话，就像格式 1 的平台在该路径下提供会话，而工作流把该路径作为应用的基础路径。端口上的其他内容都不属于该会话。",
+    "fix": [
+      "打开 meridian session url 打印的会话链接。"
+    ]
+  },
+  "session_host_refused": {
+    "title": "以其他主机名请求的会话",
+    "why": "每个会话都在它自己的主机名 <label>.localhost 上提供，其中标签是 128 位随机数，浏览器会把它解析到本机的回环地址。浏览器只把 Cookie 发给它所属的主机，不论端口，因此发往其他名称（如 127.0.0.1、localhost 或其他会话的名称）的请求不会带上此会话的 Cookie，其页面的存储也只属于此会话；而且在有 IPv6 的机器上，会话的端口同时在本机的两个回环地址 127.0.0.1 和 [::1] 上监听，因此其他程序无法在会话的名称和端口上应答。Meridian 只回应发往该名称的请求：发往 127.0.0.1、localhost，或被设法解析到 127.0.0.1 的名称的请求（DNS 重绑定），它都会拒绝。Chrome 和 Firefox 会自行把 localhost 下的任何名称解析到本机，curl 和 systemd 的解析器也是如此；不这样做的浏览器无法打开会话，而 Meridian 也不会改在 127.0.0.1 上提供它。",
+    "fix": [
+      "在 meridian session url 打印的地址上打开会话，使用能解析 localhost 下名称的浏览器（如 Chrome 和 Firefox），或通过到它的 ssh -L 打开。"
+    ]
+  },
+  "session_service_foreign": {
+    "title": "另一个用户在监听的会话服务",
+    "why": "指向本机服务的会话，是通过把每个请求转到工作流给出的端口（在本机的回环地址上）来提供的。在服务没有监听时，例如它启动期间或停止之后，本机的任何用户都可以在那里监听，并收到会话的请求，连同你在其应用中的 cookie 和密码。因此 Meridian 在发送请求之前，会询问系统这个连接的另一端属于谁，只有当它属于你时才转发请求；在 Linux 上，属于 root 时也转发，因为在那里系统回答的是谁接受了连接，而 root 的进程本来就能夺取任何连接。macOS 和 FreeBSD 回答的是谁创建了监听者，而不是谁在它上面接受连接，而 root 创建的监听者可能已被交给任何用户的程序，所以在那里 root 的监听者也算作另一个用户的。持有这个连接的是另一个用户的监听者，因此 Meridian 没有发送任何内容就关闭了连接，并在运行的日志中连同该用户记录了一次。",
+    "fix": [
+      "找到在该端口上监听的程序（如 ss -ltnp 或 lsof -nP -iTCP 所示），并让人停止它。",
+      "端口空出后重新启动会话的服务，或让会话指向一个没有其他人监听的端口。"
+    ]
+  },
+  "session_service_owner_unknown": {
+    "title": "Meridian 无法判断其用户的会话服务连接",
+    "why": "指向本机服务的会话，是通过把每个请求转到工作流给出的端口（在本机的回环地址上）来提供的。在服务没有监听时，例如它启动期间或停止之后，本机的任何用户都可以在那里监听，并收到会话的请求，连同你在其应用中的 cookie 和密码。因此 Meridian 在发送请求之前，会询问系统这个连接的另一端属于谁，只有当它属于你（在 Linux 上也包括 root）时才转发请求。对这个连接，Meridian 无法判断它属于谁。例如过了一秒系统仍未列出其另一端：通过 DNAT 从另一个网络命名空间发布的端口，像 docker 关闭用户态代理时或有 root 权限的 podman 发布的端口，Meridian 会拒绝这种端口；在 FreeBSD 上，也可能是被 security.bsd.see_other_uids 隐藏的另一个用户的套接字。又如系统以一种不说明所有者的状态列出它，像服务一接受就关闭的连接；或者 Meridian 无法询问或读不懂回答，像它已没有可用的文件描述符、回答没有到来、列表中有 Meridian 不认识的内容或那一端有两个套接字。Meridian 没有发送任何内容就关闭了连接；运行的日志中记录了一次系统的回答。",
+    "fix": [
+      "让服务在 Meridian 自己的网络命名空间中、在本机的回环地址上监听：通过代理而不是 DNAT 发布容器的端口，例如 docker 的用户态代理或无 root 的 podman 的代理。",
+      "查看 meridian run 的日志，其中写明了系统对这个连接的回答。"
+    ]
+  },
+  "session_key_unknown": {
+    "title": "没有该会话的运行",
+    "why": "meridian session 在运行于其树中的调用尚未结束的会话里，按工作流 sessions: 中的键查找运行的会话：会话随其树顶端的运行一起结束。消息列出了该运行拥有的键。",
+    "fix": [
+      "给出该运行某个会话的键，即运行在提供会话时输出中所示的键。"
+    ]
+  },
+  "session_not_ready": {
+    "title": "尚未提供的会话",
+    "why": "只有在使用 parallelworks/update-session 的步骤让会话指向某个服务，并且接管并提供它的进程为它在某个端口上监听之后，会话才会被提供，也才有链接。",
+    "fix": [
+      "等待 meridian run 显示的该步骤完成后再试。"
+    ]
+  },
+  "session_not_served": {
+    "title": "没有进程提供的会话",
+    "why": "会话由接管它的 meridian run、resume 或 cancel 在该进程存活期间提供。其链接的一次性代码由该进程兑换，因此在没有进程提供会话时，meridian session url 不会生成一个无人兑换的代码。",
+    "fix": [
+      "用会话所在树顶端的运行执行 meridian resume，让它重新提供其会话，然后再请求链接。"
+    ]
+  },
+  "login_name_unknown": {
+    "title": "运行 meridian 的用户没有登录名",
+    "why": "会话的路径是 /me/session/<user>/<name>/，其中 <user> 是运行 Meridian 的用户的登录名，工作流从 PW_USER 读取它。Meridian 从系统的用户数据库读取它，否则读取 $USER，但两者都没有找到。",
+    "fix": [
+      "以系统用户数据库中存在的用户身份运行 meridian，或将 USER 设为登录名。"
+    ]
+  },
   "source_server_unknown": {
     "title": "GitLab 服务器未注册",
     "why": "步骤的 with: $host 指定存放其 uses: 所指工作流的 GitLab 服务器。Git 使用用户自己的配置和凭据访问服务器，因此 Meridian 只访问 gitlab.com 和用户注册的服务器，而不是工作流指定的任意服务器：在本地，就是配置目录中 sources.yaml 的 gitlab-servers 所列的服务器。",
@@ -2674,6 +2958,29 @@
     "fix": [
       "请主机的管理员允许转发 Unix 套接字：在 sshd_config 中设置 AllowStreamLocalForwarding yes 或 all。",
       "在同一台机器上以同一用户运行 ssh -R <path>:/dev/null <host> true，确认能把套接字转发到那里。"
+    ]
+  },
+  "ssh_tcp_forwarding_refused": {
+    "title": "不为 Meridian 连接某个地址的主机",
+    "why": "Meridian 像 ssh -L 和 ssh -W 那样通过主机到达一个地址：通过它与主机的 SSH 连接，请主机的 sshd 连接该地址，并承载这条连接（direct-tcpip）。Meridian 不在主机上开放端口。sshd 拒绝了：它不为客户端转发 TCP 连接，例如 sshd_config 中设置了 AllowTcpForwarding no 或 remote，或 DisableForwarding yes；那里的 PermitOpen 不允许该地址；或者 Meridian 登录所用的密钥在 authorized_keys 中带有 no-port-forwarding 或 restrict。",
+    "fix": [
+      "请主机的管理员允许转发到该地址的 TCP 连接：在 sshd_config 中设置 AllowTcpForwarding yes 或 local，如果设置了 PermitOpen，则让它允许该地址。",
+      "在同一台机器上以同一用户运行 ssh -W <address> <host>，确认能够连接。"
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "title": "无法为 Meridian 连接某个地址的主机",
+    "why": "Meridian 像 ssh -L 和 ssh -W 那样通过主机到达一个地址：通过它与主机的 SSH 连接，请主机的 sshd 连接该地址（direct-tcpip）。sshd 尝试了但没能连上：该地址上没有任何程序在监听，该名称在主机上无法解析，主机无法到达它，或者 sshd 现在无法再打开连接。消息会显示 sshd 所说的内容。",
+    "fix": [
+      "确认本应在该地址监听的程序正在运行，并且从主机看来，它在工作流给出的地址和端口上监听。",
+      "在同一台机器上以同一用户运行 ssh -W <address> <host>，确认能够连接。"
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "title": "Meridian 不会让主机连接的地址",
+    "why": "Meridian 通过请主机的 sshd 连接一个地址来经由主机到达它（direct-tcpip，与 ssh -L 相同）。地址来自工作流，例如会话的 remoteHost 和 remotePort，因此 Meridian 只以主机无法读成不只是地址的形式请求连接：由字母、数字、-、_ 和点组成且不以 - 开头的主机名称，或不带方括号的 IPv4 或 IPv6 地址；以及 1 到 65535 之间的端口。消息会把值中的控制字符转义显示，例如 \\n。",
+    "fix": [
+      "按工作流的预期，只给出主机的名称或地址，不带端口或方括号，并以 1 到 65535 之间的数字给出端口。"
     ]
   },
   "ssh_host_release_mismatch": {

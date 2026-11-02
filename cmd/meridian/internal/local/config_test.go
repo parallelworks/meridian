@@ -29,13 +29,32 @@ func configDir(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// testLogin is the login name load's config names its clusters' URIs by,
+// in the place of the login name of the user who runs the test.
+const testLogin = "alice"
+
+// load loads the config of the files files, whose variables' environment
+// is vars, as the user testLogin.
 func load(t *testing.T, files map[string]string, vars map[string]string) *Config {
 	t.Helper()
 	c, err := LoadConfig(configDir(t, files), lookup(vars))
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.user = Login{Name: testLogin}
 	return c
+}
+
+// TestConfigLogin checks that a config names its clusters' URIs by the
+// login name of the user who runs meridian, as PW_USER does.
+func TestConfigLogin(t *testing.T) {
+	c, err := LoadConfig(configDir(t, nil), lookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := UserLogin(); c.user.Name != want.Name || (c.user.Err == nil) != (want.Err == nil) {
+		t.Errorf("the config's login is %+v, want %+v", c.user, want)
+	}
 }
 
 func TestBuiltInLocalGroup(t *testing.T) {
@@ -191,6 +210,123 @@ func TestSourcesFile(t *testing.T) {
 	}
 }
 
+// TestSourcesWorkflows checks that sources.yaml's workflows map workflows
+// a platform stores, each by its uses: as Normal reads it, to workflows in
+// Git, as a step names one; and that a key that names no such workflow, or
+// names one another key does, or a mapping to what a step's uses: can't
+// name, is refused, where it is.
+func TestSourcesWorkflows(t *testing.T) {
+	c := load(t, map[string]string{SourcesFile: `gitlab-servers: [git.example.com]
+workflows:
+  marketplace/tools@v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}
+  marketplace/tools/{version}: {uses: "github/acme/flows@release-{version}", yaml: "flows/{version}/tools.yaml"}
+  marketplace/tools: {uses: github/acme/flows@main, yaml: latest.yaml}
+  workflow/nightly: {uses: gitlab/team/flows, host: git.example.com}
+`}, nil)
+	want := Workflows{
+		"marketplace/tools/v1.2":      {Uses: "github/acme/flows@main", Path: "tools.yaml"},
+		"marketplace/tools/{version}": {Uses: "github/acme/flows@release-{version}", Path: "flows/{version}/tools.yaml"},
+		"marketplace/tools/latest":    {Uses: "github/acme/flows@main", Path: "latest.yaml"},
+		"workflow/nightly":            {Uses: "gitlab/team/flows", Host: "git.example.com"},
+	}
+	got := c.Workflows()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Workflows = %+v, want %+v", got, want)
+	}
+	// Changing what Workflows gives changes nothing in the config.
+	delete(got, "workflow/nightly")
+	if again := c.Workflows(); len(again) != len(want) {
+		t.Errorf("a change to what Workflows gave reached the config: %+v", again)
+	}
+	if got := load(t, map[string]string{SourcesFile: "workflows:\n"}, nil).Workflows(); len(got) != 0 {
+		t.Errorf("an empty workflows: Workflows = %+v", got)
+	}
+	// The servers registered after the workflows, in the file, are theirs
+	// too; and gitlab.com needs none.
+	later := load(t, map[string]string{SourcesFile: "workflows:\n  workflow/a: {uses: gitlab/team/flows, host: Git.Example.com}\n  workflow/b: {uses: gitlab/team/flows}\ngitlab-servers: [git.example.com]\n"}, nil)
+	if got := later.Workflows(); len(got) != 2 {
+		t.Errorf("Workflows with the servers after them = %+v", got)
+	}
+
+	for name, tc := range map[string]struct {
+		text string
+		kind *problems.Kind
+		line int
+		what string
+	}{
+		"a key to Git":         {"workflows:\n  github/acme/flows: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"a brace in a version": {"workflows:\n  marketplace/tools/{ver}: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"a brace in a slug":    {"workflows:\n  marketplace/{version}/v1: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"a saved template":     {"workflows:\n  workflow/{version}: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"no slug":              {"workflows:\n  marketplace//v1: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"no name":              {"workflows:\n  workflow/: {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		// What a terminal would act on, or show otherwise, as a key begins
+		// the location of each run of its workflow that status shows.
+		"an escape":       {"workflows:\n  \"marketplace/a/v1\\e[31m\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"an 8-bit escape": {"workflows:\n  \"marketplace/a/v1\\x9b31m\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"an override":     {"workflows:\n  \"marketplace/a\\u202e/v1\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"a newline":       {"workflows:\n  \"workflow/x\\n\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		"a separator":     {"workflows:\n  \"workflow/x\\u2028y\": {uses: github/acme/flows}\n", problems.WorkflowMappingKeyInvalid, 2, ""},
+		// Two keys that name one workflow, as Normal reads them.
+		"one version twice": {"workflows:\n  marketplace/tools@v1: {uses: github/acme/a}\n  marketplace/tools/v1: {uses: github/acme/b}\n", problems.WorkflowMappingRepeated, 3, ""},
+		"the latest twice":  {"workflows:\n  marketplace/tools: {uses: github/acme/a}\n  marketplace/tools/latest: {uses: github/acme/b}\n", problems.WorkflowMappingRepeated, 3, ""},
+		"one key twice":     {"workflows:\n  workflow/w: {uses: github/acme/a}\n  workflow/w: {uses: github/acme/b}\n", problems.ConfigKeyRepeated, 3, ""},
+		"not a mapping":     {"workflows: [workflow/w]\n", problems.ConfigWrongType, 1, ""},
+		"a mapping to text": {"workflows:\n  workflow/w: github/acme/flows\n", problems.ConfigWrongType, 2, ""},
+		"an unknown key":    {"workflows:\n  workflow/w: {uses: github/acme/flows, path: w.yaml}\n", problems.ConfigKeyUnknown, 2, ""},
+		"no uses":           {"workflows:\n  workflow/w: {yaml: w.yaml}\n", problems.WorkflowMappingInvalid, 2, "uses"},
+		"a URL":             {"workflows:\n  workflow/w: {uses: \"https://github.com/acme/flows\"}\n", problems.WorkflowMappingInvalid, 2, "uses"},
+		"credentials":       {"workflows:\n  workflow/w: {uses: \"github/me:token@acme/flows\"}\n", problems.WorkflowMappingInvalid, 2, "uses"},
+		"a chain":           {"workflows:\n  workflow/w: {uses: marketplace/tools/v1}\n", problems.WorkflowMappingInvalid, 2, "platform"},
+		"a file outside":    {"workflows:\n  workflow/w: {uses: github/acme/flows, yaml: ../w.yaml}\n", problems.WorkflowMappingInvalid, 2, "yaml"},
+		"a server's port":   {"workflows:\n  workflow/w: {uses: gitlab/team/flows, host: \"git.example.com:8443\"}\n", problems.WorkflowMappingInvalid, 2, "host"},
+		// A GitLab server must be registered, wherever in the file.
+		"a server not registered": {"gitlab-servers: [git.example.com]\nworkflows:\n  workflow/w: {uses: gitlab/team/flows, host: other.example.com}\n", problems.WorkflowMappingInvalid, 3, "server"},
+		"no servers registered":   {"workflows:\n  workflow/w: {uses: gitlab/team/flows, host: git.example.com}\n", problems.WorkflowMappingInvalid, 2, "server"},
+		// A version template is a slug's mapping's, and only in its yaml
+		// and its revision; and what it gives is checked as a step's.
+		"a template of one version": {"workflows:\n  workflow/w: {uses: github/acme/flows, yaml: \"{version}.yaml\"}\n", problems.WorkflowMappingInvalid, 2, "template"},
+		"a template's repository":   {"workflows:\n  marketplace/t/{version}: {uses: \"github/acme/{version}\"}\n", problems.WorkflowMappingInvalid, 2, "template"},
+		"a template's server":       {"workflows:\n  marketplace/t/{version}: {uses: gitlab/team/flows, host: \"{version}.example.com\"}\n", problems.WorkflowMappingInvalid, 2, "template"},
+		"a template's file outside": {"workflows:\n  marketplace/t/{version}: {uses: github/acme/flows, yaml: \"{version}/../../w.yaml\"}\n", problems.WorkflowMappingInvalid, 2, "yaml"},
+		"a template's revision":     {"workflows:\n  marketplace/t/{version}: {uses: \"github/acme/flows@{version}..x\"}\n", problems.WorkflowMappingInvalid, 2, "uses"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := configDir(t, map[string]string{SourcesFile: tc.text})
+			_, err := LoadConfig(dir, lookup(nil))
+			p := kindtest.Want(t, err, tc.kind)
+			if line, _ := p.Params[problems.ParamLine].(int); line != tc.line || p.Params[problems.ParamFile] != filepath.Join(dir, SourcesFile) {
+				t.Errorf("the problem is at %v:%d, want line %d", p.Params[problems.ParamFile], line, tc.line)
+			}
+			if tc.what != "" && p.Params["what"] != tc.what {
+				t.Errorf("the problem is of the mapping's %v, want %s", p.Params["what"], tc.what)
+			}
+		})
+	}
+}
+
+// TestSourcesExample checks that the example file in the docs is a sources
+// file that gives what its comments say.
+func TestSourcesExample(t *testing.T) {
+	text, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "docs", "examples", SourcesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := load(t, map[string]string{SourcesFile: string(text)}, nil)
+	if got := c.GitLabServers(); !reflect.DeepEqual(got, []string{"git.example.com"}) {
+		t.Errorf("the example's GitLab servers are %q", got)
+	}
+	want := Workflows{
+		"marketplace/tools/v1.2":      {Uses: "github/acme/flows@main", Path: "flows/tools.yaml"},
+		"marketplace/tools/{version}": {Uses: "github/acme/flows@release-{version}", Path: "flows/tools.yaml"},
+		"marketplace/tools/latest":    {Uses: "github/acme/flows@main", Path: "flows/tools.yaml"},
+		"workflow/nightly":            {Uses: "gitlab/team/pipelines", Path: "nightly.yaml", Host: "git.example.com"},
+	}
+	if got := c.Workflows(); !reflect.DeepEqual(got, want) {
+		t.Errorf("the example's workflows are %+v, want %+v", got, want)
+	}
+}
+
 func TestConfigFilesOthersCanChange(t *testing.T) {
 	for _, tc := range []struct {
 		file string
@@ -286,21 +422,59 @@ func TestPlatformGroupsNotFound(t *testing.T) {
 func TestResolveInput(t *testing.T) {
 	c := load(t, map[string]string{GroupsFile: "gpu:\n  members:\n    - {name: a, backend: ssh}\n"}, nil)
 	for _, name := range []string{"gpu", "local"} {
-		if v, err := c.ResolveInput(t.Context(), "execution-groups", nil, name); err != nil || v != name {
+		if v, err := c.ResolveInput(t.Context(), "execution-groups", nil, name, false); err != nil || v != name {
 			t.Errorf("ResolveInput(%s) = %v, %v", name, v, err)
 		}
 	}
-	_, err := c.ResolveInput(t.Context(), "execution-groups", nil, "cpu")
+	_, err := c.ResolveInput(t.Context(), "execution-groups", nil, "cpu", false)
 	p := kindtest.Want(t, err, problems.ExecutionGroupUnknown)
 	if p.Params["value"] != `"cpu"` || p.Params["groups"] != `"gpu", "local"` {
 		t.Errorf("ResolveInput of an unknown group: %v, want the groups listed", p.Params)
 	}
-	_, err = c.ResolveInput(t.Context(), "execution-groups", nil, 3)
+	_, err = c.ResolveInput(t.Context(), "execution-groups", nil, 3, false)
 	if p := kindtest.Want(t, err, problems.ExecutionGroupUnknown); p.Params["value"] != "3" {
 		t.Errorf("ResolveInput of a number: %v", p.Params)
 	}
-	if _, err := c.ResolveInput(t.Context(), "slurm-partitions", nil, "debug"); !errors.Is(err, compile.ErrInputType) {
+	if _, err := c.ResolveInput(t.Context(), "region", nil, "us-east-1", false); !errors.Is(err, compile.ErrInputType) {
 		t.Errorf("ResolveInput of a type it doesn't provide: %v", err)
+	}
+}
+
+// TestResolveInputPassesNamesThrough checks that each input type whose
+// value is a name, a scheduler's, a Kubernetes cluster's or an
+// organization group's, gives its value as it was given, as format 1
+// does: a name, "", or a mapping, as a run passes the value it has to a
+// workflow it calls; and refuses any other value as input_not_text, as
+// the bug fix to format 1 does (docs/design.md, Bug fixes to format 1).
+func TestResolveInputPassesNamesThrough(t *testing.T) {
+	c := load(t, nil, nil)
+	mapping := map[string]any{"name": "debug"}
+	for _, typ := range []string{
+		"slurm-partitions", "slurm-accounts", "slurm-qos", "pbs-queues",
+		"kubernetes-clusters", "kubernetes-namespaces", "kubernetes-pvc",
+		"organization-groups",
+	} {
+		for _, v := range []any{"debug", "", "gpu,debug", mapping} {
+			for _, called := range []bool{false, true} {
+				if got, err := c.ResolveInput(t.Context(), typ, nil, v, called); err != nil || !reflect.DeepEqual(got, v) {
+					t.Errorf("ResolveInput(%s, %v), called %v = %v, %v, want it as it is", typ, v, called, got, err)
+				}
+			}
+		}
+		for v, shown := range map[any]string{int64(3): "3", true: "true"} {
+			_, err := c.ResolveInput(t.Context(), typ, nil, v, false)
+			if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != shown {
+				t.Errorf("ResolveInput(%s, %v): %v", typ, v, p.Params)
+			}
+		}
+		// A list too, whatever multi says: multi is read for none of these
+		// types.
+		for _, def := range []map[string]any{nil, {"multi": true}} {
+			_, err := c.ResolveInput(t.Context(), typ, def, []any{"debug"}, false)
+			if p := kindtest.Want(t, err, problems.InputNotText); p.Params["value"] != `["debug"]` {
+				t.Errorf("ResolveInput(%s) of a list with %v: %v", typ, def, p.Params)
+			}
+		}
 	}
 }
 

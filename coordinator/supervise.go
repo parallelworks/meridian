@@ -409,6 +409,8 @@ type controlNotifier interface {
 // (store.Options.OnRunsEnded).
 func (c *Coordinator) runsEnded(ids []string) {
 	c.plans.forget(ids...)
+	// A root's end ends its tree's sessions.
+	c.wakeSessions()
 	c.mu.Lock()
 	n := c.controls
 	c.mu.Unlock()

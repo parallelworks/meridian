@@ -259,9 +259,27 @@ Format 1 is the format Parallel Works ACTIVATE runs.
     the run started on ([Workflows a step calls](#workflows-a-step-calls));
   - the limits on outputs, and a FIFO in a step's `$OUTPUTS`
     ([Outputs](#outputs));
+  - what the meridian command's Inputs gives of a called workflow's
+    platform inputs and of a bucket: a called workflow's input of a
+    platform's type resolved and checked as a root's is, a cluster's or
+    a bucket's keeping the details its caller passes; and a bucket's
+    details without what only the platform's record holds
+    ([Interfaces](#interfaces));
   - how a job's `ssh:` reaches its host, where its run's directory is
     there, and what an outage or a cancel does to its steps
-    ([The `ssh` backend](#the-ssh-backend)).
+    ([The `ssh` backend](#the-ssh-backend));
+  - a step whose `ssh:` puts it on another host than its job's, which runs
+    there as a run of its own, with a placement for each try, an
+    `OUTPUTS` of its own and its own log; one whose `ssh:` is null, or
+    gives no `remoteHost`, in a job on a host, which runs in the run's
+    default group; one whose `ssh:` reads what only its job's worker
+    knows, which fails; a calling step's own `ssh:`, which is refused;
+    and an action the coordinator performs with an `ssh:` of its own,
+    which connects to no host
+    ([Steps on another host](#steps-on-another-host));
+  - how a session is served, where, and at what name and link, what a
+    step that points it may give, and when a browser that opened it is
+    signed out ([Serving a session](#serving-a-session)).
 
 ### Conformance
 
@@ -430,14 +448,71 @@ the SHA-256 hash of its content: 218 files.
   keys the inner group dropped. None of the 218 known workflows has a group
   with `flatten`, which format 1 adds
   ([The workflow format](#the-workflow-format)).
-- **A `compute-clusters` input given a list keeps what in it isn't a
-  name**, where ACTIVATE made each item that isn't text, or is `""`, null:
-  so the details of clusters that a workflow passes to one it calls, which
-  it resolved already, reached the called workflow as `[null]`. Only a
-  name is resolved; the rest of a list is kept as it is, as a value that
-  isn't a list is. ACTIVATE takes the same fix. None of the 211
-  `compute-clusters` inputs of the known workflows is `multi`, the form
-  that takes a list.
+- **A resource input's value is its URI**: a `compute-clusters` or
+  `compute-resources` input takes `pw://user/name`, a user's cluster, or
+  `pw://name`, an organization's, and a `bucket` input `pw://user/name`;
+  with `multi`, a list of them; and `""` is no value. The workspace keeps
+  the names it is resolved by: `workspace` and `user-workspace`, alone,
+  as `pw://workspace` and `pw://user-workspace`, and as
+  `pw://<user>/workspace` and `pw://<user>/user-workspace`. At a run's own
+  input, submitted or a default, a name alone, or a mapping of details,
+  is refused (`cluster_uri_required`, `bucket_uri_invalid`); a called
+  workflow's input also takes the details its caller passes, a mapping,
+  which are kept, and resolves a URI. A value of another shape is
+  `input_not_text`, or `input_not_list` with `multi`. Only these three
+  types read `multi`; a scheduler's partitions, accounts, QoS and
+  queues, Kubernetes clusters, namespaces and volume claims, and an
+  organization's groups take text or a mapping whatever it says. Format
+  1 took a name alone as the user's own resource, and failing that
+  guessed at an organization's or a shared one, so a resource named
+  otherwise than by its URI could be another than meant; it kept a
+  cluster's mapping as it was, as its form sent a `compute-resources`
+  input's, so a run's own input could hold details nothing resolved; and
+  its run creation checked no shape against `multi`, so a read of a
+  cluster's or a bucket's details, as its `ip` or `uri`, from a list, or
+  of a cluster's from a number or a boolean, gave `""`, and an input that
+  takes a name, such as a Slurm partition, given a list, gave its JSON
+  text. A cluster list resolves each URI and, at a called workflow's
+  input, keeps details, where ACTIVATE made each item that isn't text,
+  or is `""`, null, so that they reached the called workflow as
+  `[null]`; a run's own list refuses an item that is `""` or null, as
+  ACTIVATE does. ACTIVATE takes the same fix as it creates a run. Both
+  check the value the run reads, a default included, but for one written
+  as an expression: ACTIVATE refuses a run that leaves one of these inputs
+  to an expression default, where Meridian evaluates it and checks what it
+  gives. None of the known workflows has one. And ACTIVATE's fix gives
+  these three types' input its default, when that is non-empty text and
+  not an expression, only for `""` and null, where its fallback gave it
+  for any value but text, a mapping among them; Meridian does the same
+  for their null, so outside a list's rows a null whose default is an
+  expression stays null on both sides, and gives every type's `""` its
+  default, whatever that is.
+  Of the 218 known
+  workflows' inputs of these types, 206 `compute-clusters`, 7
+  `compute-resources`, 11 `bucket` and 315 of the others, none is
+  `multi`, and no default is a list, a number, a boolean, a mapping or an
+  expression: the only defaults of the three are 4 `compute-clusters`
+  ones of `workspace`, which its reserved names keep, so none of the 218
+  breaks. Of their 270 calls, the 261 whose called workflow is known give
+  151 values to these inputs, all `compute-clusters` and all the
+  caller's details, which a called workflow's input keeps; none gives
+  one a list, a number or a boolean.
+- **A `compute-resources` input names a cluster as a `compute-clusters`
+  one does**: its `pw://` URI becomes the cluster's details, where
+  ACTIVATE's run handler resolved one only for `compute-clusters`, so
+  that a `compute-resources` input given one through its API or its CLI
+  reached the run as the URI, and every read of its details, as its
+  `ip`, gave `""`. Its form, which lists the Kubernetes clusters the user
+  can reach for `compute-resources` too, sent the cluster's details,
+  which a run's own input now refuses (above). ACTIVATE takes the same
+  fix, and resolves a
+  `pw://` reference to a Kubernetes cluster the user can reach to what
+  its form gives for one; Meridian has no Kubernetes clusters of its own,
+  so `clusters.yaml` names only clusters
+  ([The `meridian` command](#the-meridian-command)). 7 of the known
+  workflows have a `compute-resources` input, and all 7 read its
+  details: whether it is a Kubernetes cluster, its `ip` and its
+  `schedulerType`. None reads it as a name.
 - **A `parallelworks/cancel-jobs` of a job that hasn't started yet is
   kept**: the job ends cancelled where it waits, on the jobs it needs or
   to be placed, and never starts
@@ -967,7 +1042,15 @@ ACTIVATE's launch form and its backend do together:
 - **Platform types.** Input types that name a platform's resources, such as
   clusters, Slurm partitions and buckets, need an Inputs resolver, which
   checks the value and gives the run the resource's details. Without one, an
-  input of such a type that has a value is an error.
+  input of such a type that has a value is an error. Format 1 gives a run
+  the details of a cluster and of a bucket for its URI; every other
+  type's value is the name as it was given, text or a mapping, of the
+  shape a bug fix checks ([Bug fixes to format 1](#bug-fixes-to-format-1)),
+  whose name nothing checks as the run is created: a platform's form lists
+  the names to choose from, as a cluster's partitions, and the scheduler,
+  or the command the workflow gives the name to, checks it as the run uses
+  it. The meridian command's resolver gives these names so
+  ([Interfaces](#interfaces)).
 - **What waits for Start.** A default that reads something not known when
   the run is created, such as `env` or a secret variable, isn't evaluated
   until then: its input isn't among the plan's values, and Start, which
@@ -1177,7 +1260,11 @@ made from one, it doesn't hold in another form either.
    and tells the provider what evaluating them read: what is made from a
    variable or a password is private, and from a secret masked as what is
    made from one is. One that fails to evaluate fails the run, as an
-   `env:` value does, without showing what it read. Create only checks
+   `env:` value does, without showing what it read. As in format 1, only
+   one session may have `redirect: true`, the one the person who runs the
+   workflow is taken to: Create refuses two that the workflow writes so,
+   and Start two that expressions give so (`session_redirect_twice`).
+   Create only checks
    them, as they are written, since a run that is created may never start.
    Making them again for a run that has them makes nothing more, and a
    rerun, whose sessions ended with the run, makes them again. A run with
@@ -1562,8 +1649,17 @@ The coordinator encrypts and stores it.
   transaction that ends the run commits, the store checkpoints the
   write-ahead log into the database and truncates it, so the log keeps no
   copy either. If a reader or a writer in another process holds the log,
-  that checkpoint can't truncate it, and the next one does: when the next
-  run ends, when the store is next opened, or in hopper's maintenance. A
+  that checkpoint can't truncate it: the store tries again until one
+  does, and, where the store closes first, the next Open does. The
+  transaction that deletes the record counts it in the store, and a
+  truncation that finishes counts the deletions it read before it began
+  as covered; both counts only rise. A process warns that the log may
+  still hold a secret record a process deleted, once it has tried for a
+  while, or closes first, only while a deletion is counted that no
+  truncation covered: its own, a running run's, or one a process that
+  ended before it could truncate left. Each Open truncates the log, which
+  a run going on in another process holds up as often as not, so a short
+  command, as `meridian session url`, says nothing while none is. A
   backup of the database taken before the run ended holds the record,
   sealed, as it was.
 - **Stored, not held in memory.** Coordinator replicas keep no state between
@@ -1648,11 +1744,20 @@ sees one version.
   (`Plan.Calls`), the variables the tree reads (`Run.TreeVariables`), each
   pin's remote context (`Source.Remote`), and a child run's link to its
   step (`Run.Parent`), with what its secret record holds of the step
-  (`Record.Inherited`); and the pins of `parallelworks/checkout` steps, a
+  (`Record.Inherited`); the pins of `parallelworks/checkout` steps, a
   run's own (`Step.Checkout`) and its called workflows'
-  (`Plan.Checkouts`). So a run that calls no workflow, and checks out
-  nothing, is of version 1. A release reads every version up to its own,
-  each by its own schemas, under `plan/schema/<version>/`, and refuses
+  (`Plan.Checkouts`); and what a step run's secret record holds of the
+  step's try it runs (`Record.StepRun`, [Steps on another
+  host](#steps-on-another-host)). So a run that calls no workflow, and
+  checks out nothing, is of version 1. A step run's secret record is of
+  version 2 whatever its plan's version, as it holds `Record.StepRun`,
+  while the step run's row keeps its plan's version, its caller's, which
+  can be 1: a replica of a release that reads only version 1 would claim
+  the step run, and fail to read its record. No release has written
+  either version yet, so it is harmless; before one does, a step run's
+  row is to keep its record's version. A release reads every version up
+  to its own, each by its own schemas, under `plan/schema/<version>/`,
+  and refuses
   what a later version added in an earlier one's plan
   (`plan.ErrMalformed`).
 - **The version says who can read it.** The run's row keeps its plan's
@@ -1862,14 +1967,41 @@ interface, and the compiler, coordinator and worker see only the interface:
 
 | Interface | Provides | Local implementation |
 | --- | --- | --- |
-| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by name, and the workspace, this machine; a scheduler's partitions, accounts and queues come later |
+| Inputs | Input types beyond the built-in ones: what a value of one names, as a cluster's details for its name | `execution-groups`, the user's groups by name; `compute-clusters`, the clusters of `clusters.yaml` by their URI, `pw://<login>/<name>`, and the workspace, this machine, by its reserved names too, where `pw://name`, an organization's cluster, names none; `compute-resources` the same, as format 1 gives a cluster that either names the same details ([Bug fixes to format 1](#bug-fixes-to-format-1)), though its form lists Kubernetes clusters too, which it never names here; a scheduler's partitions, accounts, QoS and queues, Kubernetes clusters, namespaces and volume claims, and an organization's groups, each the name as it is given, as format 1 gives it; `bucket`, a bucket's `pw://user/name` URI, as the details format 1 gives a bucket but those only the platform's record holds, its id, cloud, own name and region, and never its credentials (`bucket_uri_invalid`, `bucket_credentials_need_platform`); the platform's other resources, as its regions, come later |
 | Variables | Organization and user variables, plain or secret, by name | A variables file in Meridian's config directory, in which a secret names the environment variable or file that holds its value |
 | Keys | The key that wraps each run's secret record's data key, for the run, by its store's ID and its own | A key file in Meridian's state directory, which only the user can read |
 | Groups | Execution groups | The user's config |
-| Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later |
+| Sources | Workflows that `uses:` names, and the repositories `parallelworks/checkout` names, pinned and read by their pins | Git, through the `git` command, 2.29 or later; a workflow a platform stores, where `sources.yaml` maps it to one in Git |
 | Trees | The trees of the commits checkouts were pinned to, which the coordinator serves to their steps' workers | The copies of the repositories that Sources pinned them from, in Meridian's cache directory |
-| Sessions | Interactive sessions a workflow serves, which it makes and updates | None |
+| Sessions | Interactive sessions a workflow serves, which it makes and updates | This machine: each session at a host name of its own on its loopback addresses, which `meridian run`, `resume` and `cancel` serve as they coordinate ([Serving a session](#serving-a-session)) |
 | Logs | Storing and reading step logs | Files in Meridian's state directory |
+
+A name the local Inputs gives as it was given means what it means on a
+platform: a Kubernetes cluster's is the name the platform knows it by,
+and a bucket's URI the one the platform reaches it by. A step that gives
+one to the platform's own CLI, as `pw kube auth` does in every known
+workflow with a Kubernetes input, and `pw buckets cp` in every one that
+requires a bucket, needs that CLI installed and
+signed in to the platform as it runs, standalone as on the platform:
+Meridian gives the step the name, and doesn't stand in for that CLI.
+
+The local Inputs gives format 1's platform inputs otherwise than ACTIVATE
+in two ways:
+
+- **A called workflow's input of a platform's type is resolved**, and its
+  shape checked, as a run's own is
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)), and a cluster's or a
+  bucket's also takes the details its caller passes, a mapping, which are
+  kept. ACTIVATE resolves and checks only a root run's submitted inputs,
+  as it creates the run, so a caller whose `with:` gives a bucket's or a
+  cluster's `pw://` URI gives the called workflow that text there, and its
+  details here. All 151 values the known workflows' calls give these
+  inputs are details.
+- **A bucket's details are its `type`, `name`, `user` and `uri`.**
+  ACTIVATE's hold its `csp` and `id` too, and its `bucketName` and
+  `region` once it is provisioned, which only the platform's record of it
+  knows. The known workflows read a bucket's `uri`, 15 times, and its
+  whole value, 10 times, and nothing else.
 
 The compiler's resolvers, Inputs, Variables, Groups, Sources and Sessions,
 are interfaces in `compile`, the coordinator's, Keys, Trees and Logs, in
@@ -1946,6 +2078,16 @@ another repository's copy, its lock or a copy being made is in the cache,
 where a repository's name, as `.github`, can start with one; and a `$yaml`
 with an empty name or `.` in it, or a control character, `./` among them,
 whose reading by ACTIVATE can't be confirmed.
+A reference to a workflow a platform stores reads as ACTIVATE reads it
+too: a `marketplace/` one as the item's slug and version,
+`marketplace/<slug>/<version>`, where the version follows the slug's first
+slash, or, without one, its first `@`, and is `latest` when there is none,
+so that `marketplace/m@v1` and `marketplace/m/v1` are one; a `workflow/`
+one, a saved workflow's name, as it is written; and neither with its
+`$yaml` or `$host`, which ACTIVATE ignores and the schema warns of. A
+platform reads the normal reference as the same item, and the local
+Sources reads one only where the user's `sources.yaml` maps it to a
+workflow in Git ([The `meridian` command](#the-meridian-command)).
 Two steps whose references read the same are pinned once, to one commit,
 however they write it. A pinned workflow keeps its reference beside its
 commit and digest (`Source.Ref`), so Sources reads it again by it, and gives
@@ -2413,8 +2555,9 @@ runs as any other; none of the known calls has an `ssh:` of its own.
   works. The root's record is kept until every run in its tree has ended:
   the root's finisher waits for them, and the end of each wakes it.
 - **Its sessions.** A child's `sessions:` makes its own sessions, as its
-  run's. Its `parallelworks/update-session` asks the provider as any
-  run's does, which is told the child's tree's root and the root's
+  run's, which every try of its call shares (below). Its
+  `parallelworks/update-session` asks the provider as any run's does,
+  which is told the child's tree's root and the root's
   `permissions:`, never the child's own, so that it authorizes the step
   as format 1 does a tree's, whose sessions it makes with the root's run,
   and whose token is the root's ([Built-in actions](#built-in-actions)).
@@ -2497,6 +2640,21 @@ runs as any other; none of the known calls has an `ssh:` of its own.
   child again, evaluating its `with:` again, as in format 1: a child for
   each try, linked to it. A rerun, which is Meridian's own, makes new
   children from the plan's pins.
+- **A call's sessions are made once.** Format 1 makes a called workflow's
+  `sessions:` once for each call in the tree, as the run is submitted, so
+  every try of a call, every attempt of its job, and every instance of a
+  matrix job that makes it, shares them. Meridian keeps them so: by where
+  the call is, each level's job, without a matrix instance's index, and
+  step, but not its try or its attempt. It names them as format 1 does,
+  `<workflow>_<root>_<job>_step_<n>[_<job>_step_<n>…]_<key>`, where
+  `<workflow>` is the root's file's name; `prompt-for-name` asks nothing
+  of a called workflow. A name longer than 128 bytes, as a deep tree's,
+  keeps its first 111, and ends with a hyphen and 64 bits of the whole
+  one's SHA-256, in hex: a session's path holds its name, and a browser
+  ignores a cookie's path past 1 KiB. Instances that point their shared
+  session in turn leave it where the last pointed it, as in format 1: 2
+  of the 14 known workflows whose matrix job calls a workflow call one
+  with a session.
 - **What people see.** A child is a run, with its own number, shown under
   the step that called it:
   - `meridian run`, `resume` and `cancel -f`, and `meridian logs`, follow
@@ -2528,8 +2686,10 @@ runs as any other; none of the known calls has an `ssh:` of its own.
   fails a calling step, and its job, rather than cancelling them; a cancel
   from within a child that stops its caller's job too; a type check of a
   `with:` against its child's inputs, and a refusal of a key the child
-  doesn't define; and a name for a matrix instance's directory that can't
-  be a job's, as `build-0` can.
+  doesn't define; a name for a matrix instance's directory that can't
+  be a job's, as `build-0` can; and sessions of its own for each instance
+  of a matrix job that calls a workflow with `sessions:`, rather than one
+  set that the instances share.
 
 ### Steps on another host
 
@@ -2598,7 +2758,8 @@ does, whatever the version, a step that calls a workflow.
   a host never chooses where the coordinator connects with the user's
   keys, and a host that a variable or a password names is placed
   privately. Its tries come in order, each once the one before has
-  failed, so the retry counter is the try's. A step whose `ssh:` reads
+  ended, however it ended, or ran in its job, so the retry counter is
+  the try's. A step whose `ssh:` reads
   what only the job's worker knows, as its earlier steps' outputs, its
   own job's outputs through `needs`, a job of `needs` that only
   evaluating it names, the job's status, or `env` but the retry counter,
@@ -2631,7 +2792,10 @@ does, whatever the version, a step that calls a workflow.
   caller's worker masked at the try, as a workflow a step calls masks its
   caller's secrets, and names an output that holds what it masks a
   secret; the caller's worker masks each output named private or secret
-  as a secret of its job's, at least. Its `OUTPUTS` starts empty, and
+  as a secret of its job's, at least, but one shorter than what the
+  phases mask of what is made from a secret (`plan.MinDerived`), which
+  would mask common text, as the step run only says it holds what the
+  caller's worker masks already. Its `OUTPUTS` starts empty, and
   what the step
   writes there comes back to the caller's worker, as the values it
   reads, which appends them to the file the step would have written, the
@@ -2681,7 +2845,12 @@ Where format 1 does otherwise, none of it in the known workflows:
   each try, a second or two once the host has the binary, where format 1
   reuses its connection. A host that can't be reached fails the try
   after the backend's tries (`ssh_unreachable`), as format 1's connection
-  fails it after its own, and the step's `retry:` applies in both.
+  fails it after its own, and the step's `retry:` applies in both. A
+  later optimization could place a job whose steps all name one host on
+  that host, once for the job, at the cost that a host that can't be
+  reached fails the job as it is placed, before a step's `retry:` could
+  try another. It needs every step's `ssh:` known at Ready, as all the
+  known ones are.
 - **`OUTPUTS` starts empty on the host**, so the step doesn't read what
   its job's earlier steps wrote there, and a step that writes it with
   `>` doesn't erase that, as format 1's copy back does. All 9 of the
@@ -2719,7 +2888,7 @@ jobs the coordinator's own.
 | --- | --- | --- | --- |
 | `parallelworks/checkout` | A Git repository | The coordinator, which pins it through Sources as the run is created, and sends its tree, read through Trees, to the worker, which writes it | Works, with Git on the coordinator's host, as Sources needs |
 | `parallelworks/cancel-jobs` | Jobs of the step's run | The coordinator, asked by the worker | Works |
-| `parallelworks/update-session` | A session the run may update, as the provider decides | The coordinator, through Sessions | The step fails (`resolver_missing`), as there is no local Sessions |
+| `parallelworks/update-session` | A session the run may update, as the provider decides | The coordinator, through Sessions | Works: the session is served on this machine ([Serving a session](#serving-a-session)); what only a platform reaches, as `targetInfo`'s Kubernetes resource, fails the step (`session_update_unsupported`) |
 | `parallelworks/scheduler-agent`, `parallelworks/wait-for-agent` | A platform's agent on a cluster's compute node, which the first starts through the cluster's scheduler with the platform's command-line tool and credentials, and the second waits for | A platform | The step fails (`action_needs_platform`) |
 
 None of them is a no-op where nothing provides it: a step that succeeded
@@ -2906,7 +3075,14 @@ checkout.
 - **update-session** updates the session its `name` names, as text,
   through Sessions (`Sessions.Update`), with the rest of its `with:` as
   it was evaluated, and whether that read a variable or a password, which
-  the provider keeps private, or a secret, which it masks. A name is any
+  the provider keeps private, or a secret, which it masks. Its keys, and
+  those of its `targetInfo`, are read as format 1 reads them, as Go's
+  encoding/json decodes an object into a struct: `LocalPort` is
+  `localPort`, which the compiler neither warns about nor drops, and of
+  keys that differ only in case, the last in byte order counts, as
+  json.Marshal orders a map's keys before format 1 decodes them.
+  `local_port`, which one known workflow writes, is no key of it, and is
+  ignored with a warning, as format 1 ignores it. A name is any
   session's: `${{ sessions.<key> }}` gives one of the run's own, as format
   1's does, but Meridian doesn't hold a step to those. The provider
   decides whether the run may update the session, as format 1's platform
@@ -2928,11 +3104,12 @@ checkout.
   run may not update, fails the step, as a command that fails does, so
   its `retry:` tries it again; a provider that can't answer is asked
   again, as the worker repeats its request. Where nothing provides
-  Sessions, as with `meridian run`, the step fails when it runs
-  (`resolver_missing`, with the interface Sessions), as a feature whose
-  interface is missing fails, but when the step runs, not as the run is
-  created; a run with `sessions:` can't start there anyway, and all 15
-  known update-session steps are in workflows that have them.
+  Sessions, the step fails when it runs (`resolver_missing`, with the
+  interface Sessions), as a feature whose interface is missing fails, but
+  when the step runs, not as the run is created; a run with `sessions:`
+  can't start there anyway, and all 15 known update-session steps are in
+  workflows that have them. `meridian run` provides them
+  ([Serving a session](#serving-a-session)).
 - **scheduler-agent and wait-for-agent** need a platform's agent, its
   command-line tool and its credentials, which Meridian has none of, so the
   step fails (`action_needs_platform`). A platform that embeds Meridian can
@@ -3841,7 +4018,8 @@ and a platform that embeds Meridian serve the same API.
 - **Child runs:** ask for the child run of a workflow a step's try calls
   (`/v1/child`), with the step's `with:` and environment as Step evaluated
   them, which parts of them are private or hold a secret, and the strings
-  the worker masks for the step, which a repeat answers with the same
+  the worker masks for the step, 10,000 of them, of 1 MiB in all, at
+  most, which a repeat answers with the same
   child, and a child that wasn't made with why, as `child_not_created`
   with its own problems; wait for its end (`/v1/child/end`), held as a
   control is, with how the child run ended; and stop it, with why
@@ -3873,7 +4051,11 @@ and a platform that embeds Meridian serve the same API.
   host](#steps-on-another-host)). A step run's attempt's claim has the
   try of the step it runs and that state, and its job has that step, the
   steps before it by their `id` alone, and no `outputs:`. Version 3 adds
-  them, and such a job needs it, as one that calls a workflow does.
+  them, and such a job needs it, as one that calls a workflow does. A
+  step whose child or step run would mask more strings than the
+  coordinator takes fails before it asks (`masks_too_many`,
+  `masks_too_large`): the worker never asks with fewer, which would let
+  the run's logs show the rest.
 - **Actions:** ask the coordinator to do a step's cancel-jobs,
   update-session or checkout, from version 3
   ([Built-in actions](#built-in-actions)). The request has the step's
@@ -3990,11 +4172,12 @@ coordinator say to each other.
   claim holds what masks what it inherits, needs version 3; any other,
   version 1. A later
   worker, in an attempt an earlier coordinator serves at an earlier
-  version, fails such a step (`uses_not_supported`), rather than run it
-  otherwise. The same problem fails, as it runs, a step that has no pin:
-  a checkout of a run created before checkouts were pinned, which the
-  coordinator fails, and a call of a workflow of one created before calls
-  were, which the worker fails.
+  version, fails such a step (`uses_not_supported`, or for a step on
+  another host `step_ssh_not_supported` or `step_off_job_host`), rather
+  than run it otherwise. The same problem fails, as it runs, a step that
+  has no pin: a checkout of a run created before checkouts were pinned,
+  which the coordinator fails, and a call of a workflow of one created
+  before calls were, which the worker fails.
 - **What a body carries of a run is the plan's.** The run's values, the
   job Ready evaluated and the results of the jobs it needs are encoded at
   the run's plan version, and a change to one of their types raises the
@@ -4136,8 +4319,11 @@ placement on it, however long it takes. The next attempt on the member
 takes the lease again, as idle: no worker of the member's can have waited
 for it, so it starts no grace, unless another process placed an attempt
 on the member meanwhile, and lapsed leases go on counting however often
-members come and go ([Leases and fencing](#leases-and-fencing)). Taking a
-lease at a start or a takeover still starts one. A host's pooled SSH
+members come and go ([Leases and fencing](#leases-and-fencing)). It
+remembers a member it let go of so for a day, and one that comes back
+after that takes its lease as at a start, so that a long-lived
+coordinator remembers only its last day's members. Taking a lease at a
+start or a takeover still starts one. A host's pooled SSH
 connection isn't let go yet. A replica that takes the lease over,
 once its holder has stopped renewing it, sets the connection up again at
 the same address, so the
@@ -4171,7 +4357,11 @@ own runs.
   one is a secret to the jobs that need the job. They go over the environment the workflow gives the step, as in
   format 1, and the worker's own over them. Without a platform, `PW_JOB_ID`
   is the run's ID and `PW_PARENT_JOB_DIR` its directory; a child run's are
-  its root's ([Workflows a step calls](#workflows-a-step-calls)).
+  its root's ([Workflows a step calls](#workflows-a-step-calls)). The
+  `meridian` command gives `PW_USER`, format 1's name of the person who
+  runs the workflow, as the login name of the user who runs it
+  (`coordinator.Options.Env`), which known workflows build a session's
+  path from, `/me/session/${PW_USER}/…`.
 - **The shell** is bash, or sh, as `shell:` says: format 1 runs no other.
 - **The env context on the worker.** As in format 1, `env` reads the
   workflow's `env:`, the job's over it, the step's over that, and the
@@ -4222,18 +4412,21 @@ own runs.
   the host it names, and a step's runs it on its own: `ssh: null` runs the
   step where the job runs without its `ssh:`, and an empty or null
   `remoteHost` runs it there too, with a note in its log, as format 1 does
-  (`ssh_host_empty`). A step whose `ssh:` names a host of its own is to
-  run there as a run of its own, and so is such a step in a job on a host
-  ([Steps on another host](#steps-on-another-host)); until that is built, a
-  worker on the host a job's `ssh:` names fails such a step
-  (`step_off_job_host`) rather than run it on the wrong host, and any
-  worker fails one whose `ssh:` names a host of its own
-  (`step_ssh_not_supported`), but for one whose `ssh:` names the same host
-  and login as its job's, as a step that repeats its job's `remoteHost`
-  does, which runs where its job runs: the same `remoteHost`,
-  `remoteUser`, `jumpNodeHost` and `jumpNodeUser`, by which format 1 keys
-  the connections it reuses, with
-  null and none as `""`, whatever else it says, such as its
+  (`ssh_host_empty`). A step whose `ssh:` names a host of its own runs
+  there as a run of its own, and so does one whose `ssh:` is null, or
+  gives no `remoteHost`, in a job on a host, but a step that calls a
+  workflow, which is refused, and one that uses an action the
+  coordinator performs other than checkout, which runs in its job ([Steps
+  on another host](#steps-on-another-host)). In an attempt of version 2
+  of the worker API or earlier, as a worker or a coordinator of an older
+  release serves, such a step fails instead, rather than run on the
+  wrong host: one off its job's host (`step_off_job_host`), and one whose
+  `ssh:` names a host of its own (`step_ssh_not_supported`). A step whose
+  `ssh:` names the same host and login as its job's, as a step that
+  repeats its job's `remoteHost` does, runs where its job runs: the same
+  `remoteHost`, `remoteUser`, `jumpNodeHost` and `jumpNodeUser`, by which
+  format 1 keys the connections it reuses, with null and none as `""`,
+  whatever else it says, such as its
   `disconnect-timeout`. `host:22` isn't `host`, as format 1 connects to
   `host:port` as it is and reads `host` through the user's `ssh_config`.
   All 536 jobs' `ssh:` mappings in the known workflows read `remoteHost`
@@ -4337,13 +4530,17 @@ own runs.
 Today the worker runs steps only on the host. A job whose steps are to run
 in a container fails before its first step, with a problem that says so,
 rather than run them on the host, and a step that `uses:` a built-in
-action the worker doesn't run, or runs on another host with `ssh:`, fails,
-as does one whose `ssh:` is null, or gives no `remoteHost`, on a worker
-that a job's `ssh:` placed on a host, until steps on another host are
-built ([Steps on another host](#steps-on-another-host)); one that uses an
-action only a platform provides fails saying so (`action_needs_platform`, [Built-in
-actions](#built-in-actions)). A step that `uses:` a workflow runs it as a
-run of its own ([Workflows a step calls](#workflows-a-step-calls)), whose
+action the worker doesn't run fails; one that uses an action only a
+platform provides fails saying so (`action_needs_platform`, [Built-in
+actions](#built-in-actions)). A step on another host with `ssh:`, and one
+whose `ssh:` is null, or gives no `remoteHost`, on a worker that a job's
+`ssh:` placed on a host, runs there as a run of its own, from version 3
+of the worker API, and fails in an attempt of an earlier version ([Steps
+on another host](#steps-on-another-host)), but a step that calls a
+workflow, which is refused, and one that uses an action the coordinator
+performs other than checkout, which runs in its job. A step that `uses:` a
+workflow runs it as a run of its own ([Workflows a step
+calls](#workflows-a-step-calls)), whose
 directory its `clean-on-retry:` cleans on the machine the run started
 on, never on a host. Its events are kept in memory
 while the coordinator is unreachable, since each is small but for a step's
@@ -4728,17 +4925,20 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   workers' placements, and the runs' directories. ACTIVATE keeps the
   job's directory alone.
 - **A step on another host than its job's**, as a step's `ssh:` that
-  names one, fails (`step_ssh_not_supported`) until it runs there as a run
-  of its own ([Steps on another host](#steps-on-another-host)), which
-  differs from ACTIVATE's run of it as that section says. ACTIVATE runs
-  it there, but for a step that calls a workflow, whose child it runs
-  where its caller runs, which Meridian refuses.
+  names one, runs there as a run of its own ([Steps on another
+  host](#steps-on-another-host)), which differs from ACTIVATE's run of it
+  as that section says, and fails (`step_ssh_not_supported`) only in an
+  attempt of an earlier version of the worker API. ACTIVATE connects to
+  that host itself, over a connection of its own from where the run
+  started, and runs the step there, but for a step that calls a
+  workflow, whose child it runs where its caller runs, which Meridian
+  refuses.
 - **A step off its job's host.** In a job on a host, a step whose `ssh:`
-  is null, or gives no `remoteHost`, would run where its job runs without
-  its `ssh:`, the machine the run started on, which a worker on the host
-  can't reach, so it fails (`step_off_job_host`) until it runs there as a
-  run of its own. ACTIVATE runs it on that machine. None of the known
-  workflows has one.
+  is null, or gives no `remoteHost`, runs as a run of its own in the
+  run's default group ([Steps on another host](#steps-on-another-host)),
+  and fails (`step_off_job_host`) only in an attempt of an earlier
+  version of the worker API. ACTIVATE runs it where the job would run
+  without its `ssh:`. None of the known workflows has one.
 - **An unreachable host** is tried again after about 1, 2 and 4 seconds,
   where ACTIVATE waits 2, 4 and 8.
 - **Host keys.** Meridian checks every host's key against known_hosts,
@@ -4832,7 +5032,10 @@ A job's time limit is its `timeout:`. There is no separate walltime:
 - **Other users on a shared host** can't reach Meridian's state: the state
   directory is readable only by its user, sockets live in it, a listening
   coordinator requires TLS and a token, and tokens never appear on command
-  lines.
+  lines. Nor can they take a session's requests by listening at its
+  service's port first: a request goes on only to a connection that the
+  system says is the user's, or, on Linux, root's
+  ([Serving a session](#serving-a-session)).
 - **The user's own processes can.** With the `local` backend, a workflow's
   steps run as the user who started it, so they can read what the user can:
   the state directory's key file, `secret-record.key`, and its database,
@@ -4990,6 +5193,7 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian logs <run> [job]` | Shows or follows logs. |
 | `meridian cancel <run>` | Cancels a run. |
 | `meridian resume <run>` | Picks up a run whose coordinator stopped. |
+| `meridian session url\|reset <run> <key>` | Prints a link to a run's session, or signs everyone out of it. |
 | `meridian rerun <run>` | Runs a run again, or only its failed jobs. |
 | `meridian serve` | Runs a coordinator that keeps running. |
 | `meridian worker`, `meridian host`, `meridian relay` | Started by backends, not by people. |
@@ -5027,7 +5231,7 @@ the config replaces. Groups and clusters are never read from the repository
 a workflow comes from, so cloning a workflow can't add a host to yours. It
 can still send its jobs to one you defined, by naming it: a `runs-on:` that
 names one of your groups, or a `compute-clusters` input whose default is
-`hpc`, names your own group or cluster. And a format 1 `ssh:` names its
+`pw://<your login>/hpc`, names your own group or cluster. And a format 1 `ssh:` names its
 host itself.
 
 - **`groups.yaml`** holds each group by name, with its members in order:
@@ -5046,10 +5250,67 @@ host itself.
   the user's credentials, so a workflow can't name a server of its own,
   and at HTTPS's port, or at another that Git's own `url.<base>.insteadOf`
   rewrites the server's address to.
-- **`clusters.yaml`** holds the clusters a `compute-clusters` input can
-  name, each by its name, with its `host`, and, if it gives one, its
-  `scheduler`, `slurm` or `pbs`
-  ([`docs/examples/clusters.yaml`](examples/clusters.yaml)). The host is
+
+  It holds `workflows` too, which map workflows a platform stores to
+  workflows in Git, so that a `uses:` of `marketplace/` or `workflow/`
+  runs without the platform
+  ([`docs/examples/sources.yaml`](examples/sources.yaml)):
+
+  - **Each key** is such a `uses:`, as format 1 reads it
+    ([Workflows a step calls](#workflows-a-step-calls)):
+    `marketplace/<slug>/<version>`, `workflow/<name>`, or
+    `marketplace/<slug>/{version}`, which maps each version of the slug
+    that no key of its own maps. Two keys that read the same, as
+    `marketplace/tools@v1` and `marketplace/tools/v1`, are refused
+    (`workflow_mapping_repeated`), as is a key that names no such workflow,
+    or holds what a terminal would act on, or show other than as it is, a
+    control or format character, as a key begins the location of each run
+    of its workflow (`workflow_mapping_key_invalid`).
+  - **Each value** names a workflow in Git as a step does: `uses`, a
+    `github/` or `gitlab/` reference, `yaml`, its file, and `host`, a GitLab
+    project's server, which `gitlab-servers` must register, all checked as
+    a step's are, as the file loads; never another workflow a platform
+    stores, or a URL (`workflow_mapping_invalid`).
+  - **A slug's mapping** writes the version as `{version}`, in its `yaml`
+    and after its `uses`'s `@`, and nowhere else. The version is the
+    workflow's text, so before Git runs it must be letters, digits, `.`,
+    `_`, `+` and `-`, not first `.` or `-`, at most 255 bytes, and give a
+    revision and a file that a `uses:` could name
+    (`source_version_invalid`). So a revision that is `{version}` alone
+    lets a workflow name any revision of the repository, a full commit
+    among them, which on GitHub can be one only a fork has (see
+    [Security](#security)): no more than a `github/` `uses:` of its own can
+    name, but more than the mapping means. A prefix, as
+    `@release-{version}`, keeps it to the branches and tags that the
+    repository names so.
+  - **`latest`**, which a `uses:` without a version names, is the item's
+    latest as its platform decides it, which a slug's mapping can't know:
+    only a key of its own, `marketplace/<slug>/latest`, maps it, as the
+    user's choice of the workflow, not the item's highest version
+    (`source_latest_not_mapped`, which names the key).
+  - **A mapped workflow** is pinned, read again by its pin, and kept in the
+    cache as a `github/` or `gitlab/` one is, through its mapping, and its
+    remote context is its repository's, as it was when it was pinned. Its
+    location names both, the one the `uses:` names first, as
+    `marketplace/tools/v1.2 → github.com/acme/flows@main:tools.yaml`,
+    wherever a run's workflow is shown: `meridian status`, which shows a
+    location's control and format characters escaped, wherever it came
+    from, a chain of calls, and the file a called workflow's problems are
+    in. A pin read again through a mapping changed since, to other text, is
+    `source_changed`, `source_file_not_found` or
+    `source_revision_not_found`, never the other text.
+  - **A mapping is the user's word** that the name is that workflow: the
+    platform's own item may be another. A `uses:` it doesn't map is
+    `source_on_platform`.
+- **`clusters.yaml`** holds the clusters a `compute-clusters` input, or
+  a `compute-resources` one, can name, each by its name, with its
+  `host`, and, if it gives one, its `scheduler`, `slurm` or `pbs`. An
+  input names one by its URI, `pw://<login>/<name>`, where `<login>` is
+  the login name of the user who runs meridian, as `PW_USER` is, as
+  `meridian run --input cluster=pw://alice/hpc` for the user `alice`
+  ([`docs/examples/clusters.yaml`](examples/clusters.yaml)); for a user
+  the system knows no login name of, no URI names a cluster
+  (`cluster_login_unknown`). The host is
   an alias that ssh resolves, as `ssh -G` does, or a host name or an
   address, without a port: format 1 gives an existing cluster's `ip` so,
   and 21 of the known workflows run `ssh` or `scp` with it in a script. A
@@ -5057,33 +5318,43 @@ host itself.
   or an IPv6 address, is an alias the user's `ssh_config` defines, as
   format 1 takes a login from the config's `User`. A host can't start
   with `-` or hold a space, as a workflow's script can put it in a
-  command line. A name is letters, digits, `_`, `-` and `.`, as a group's.
+  command line. A name is letters, digits, `_`, `-` and `.`, as a group's,
+  and isn't `workspace` or `user-workspace`, which name the workspace, or
+  `localhost`, which a session's target reads as the workspace, as a
+  cluster's `id` is its name.
 
   An input that names a cluster sees what format 1 gives for an existing
-  cluster's details, for what a cluster here can know of them: `name`;
+  cluster's details, for what a cluster here can know of them: its name,
+  as `name` and as `id`, which every target a known workflow's
+  `parallelworks/update-session` gives reads (`${{ inputs.<cluster>.id }}`,
+  11 steps), and nothing else of theirs does;
   its host as `ip`, which 189 of the 196 workflows we know of that have
   such an input read, as a job's `ssh:` `remoteHost` above all; its
   scheduler as `schedulerType`, or `""` for none, as format 1 writes a
   cluster's that has none; `existing` as its `type` and its `provider`, as
   format 1 names a cluster that a platform reaches but didn't make, which
   73 of those workflows read to decide what else to ask for; and `$type`
-  `computeResource`. What names a platform's own record of the cluster,
-  its `id` and its `pw://` `uri`, and its owner's platform account, its
-  `user` and its `namespace`, it leaves out: an existing cluster without
-  the account fields, a shape format 1 doesn't give, where the 5 reads of
-  them in the known workflows feed the platform's own CLI. The workspace,
-  `workspace` or `user-workspace`, is the machine a run starts on, this
-  one, and needs no config: `id` and `name` `user-workspace`, and `ip`
-  `""`, as format 1 gives it, without the person's platform account.
+  `computeResource`; and its URI as `uri`, and the login name as its
+  `user` and its `namespace`, as format 1 gives its owner's platform
+  account, which 7, 2 and 3 of the known workflows read. The workspace is
+  the machine a run starts on, this one, and needs no config: it keeps
+  the names format 1 resolves it by, `workspace` and `user-workspace`,
+  alone, after `pw://` and after `pw://<login>/`, and gives `id`
+  and `name` `user-workspace`, `ip` `""`, as format 1 gives it, and its
+  URI, `user` and `namespace`.
 
-  A name resolves whatever the input's definition says, as format 1
+  A URI resolves whatever the input's definition says, as format 1
   resolves it: `include-workspace`, `provider` and `csp` choose only what
-  a form lists, and a name given otherwise, or a default the form can't
-  list, is resolved all the same. Another name is `cluster_unknown`, which
-  lists the clusters, or `clusters_none` when there are none, as without
-  a clusters file. A list of names gives each one's details, and what in
-  it isn't a name, as the details a run passes to a workflow it calls, is
-  kept as it is ([Bug fixes to format 1](#bug-fixes-to-format-1)).
+  a form lists, and a URI given otherwise, or a default the form can't
+  list, is resolved all the same. A name alone, and `pw://name`, which a
+  platform reads as an organization's cluster, of which there are none
+  here, are `cluster_uri_required`, which gives the URI to name the
+  cluster by. Another user's URI, or one of no cluster, is
+  `cluster_unknown`, which lists the clusters' URIs, or `clusters_none`
+  when there are none, as without a clusters file. A list of URIs gives
+  each one's details, and a called workflow's input keeps the details its
+  caller passes, in a list too
+  ([Bug fixes to format 1](#bug-fixes-to-format-1)).
 
   A cluster's host is in the run's values in the clear, as the rest of an
   input's value is, which whoever can see the run sees, as on a platform.
@@ -5316,6 +5587,307 @@ their workers store them.
   as for any problem of its own, and when an interrupt leaves the run it
   coordinates running. `meridian status` shows a run
   that has been stopped, and hasn't ended, as `stopping`, with why.
+
+### Serving a session
+
+A run's session is served on this machine, on a port of its own of its
+loopback addresses, at a host name of its own, `<label>.localhost`, whose
+label is 128 random bits, kept with the session, at the path format 1's
+platform serves it at, `/me/session/<user>/<name>/`
+(`internal/sessionproxy`). `meridian run`, `resume` and `cancel`, as they
+coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
+`local.SessionHost`).
+
+- **Which process serves it.** Each session is served by one process at a
+  time, which holds a lease on it, a lock beside the store's database. The
+  process whose step points a session takes it; one that, as it looks at
+  the store, every second, finds a session that points somewhere and that
+  no process that lives serves, as after the one that served it ended,
+  takes it over. As a process takes a session, before it serves it, it
+  gives it a new salt: while no process served it, another program could
+  have listened at its port and taken the cookie that a page of it, as it
+  reconnected, sent there, which the new secret makes worthless. So a
+  `meridian resume` after a crash, or any takeover, signs the session's
+  browsers out, and the links printed before it work no more. A session
+  another process that lives serves keeps its salt and its codes, and a
+  step of another process that points it has that process serve it there
+  as it next looks.
+- **Its name.** A session is named by its `prompt-for-name`'s default,
+  which format 1's form fills in, and which `meridian run` asks no one
+  for: a literal one, which a path holds as it is, or else the run can't
+  be created (`session_name_needed`); or, without `prompt-for-name`, by
+  its key, made fit for a path, a hyphen and 40 random bits. A workflow a
+  step calls has its sessions named as format 1 names them
+  ([Workflows a step calls](#workflows-a-step-calls)). A name a workflow
+  chooses is used as it is: one that, with the login name, makes the
+  session's path longer than 1 KiB leaves a browser without its cookie.
+  A session that needs what only a platform has, as `detach: true`, which
+  outlives its run, or `openAI: true`, can't be created
+  (`session_field_unsupported`); `meridian validate` says so too. Its
+  `useCustomDomain: true` asks nothing here, where each session has a host
+  name of its own, as it asks nothing of format 1's platform where that
+  has no domain for sessions. Without a login name, as where the system's
+  user database has none for the user, no session can be named
+  (`login_name_unknown`).
+- **Where a step points it**, as format 1 reads `update-session`'s
+  `with:`, whose `type` is the session's own, for a step whose `name` is
+  written `${{ sessions.<key> }}` and nothing else, where the workflow's
+  `sessions:` gives the session one, `null` a tunnel's, as format 1 gives
+  such a step its session's type. A link, `type: link`, is its `url`, an
+  absolute http or https URL (`session_url_invalid`), which the run's
+  output says, and nothing serves. A tunnel is a service at `remotePort`,
+  and `remoteHost`, as its `target` reaches it: none, `""`, `localhost` or
+  `user-workspace` is the workspace, this machine, at `localhost` whatever
+  `remoteHost` says, as format 1 has it; a cluster of `clusters.yaml`, by
+  its id, is reached over SSH through the cluster's host, as its jobs'
+  workers are, where its host connects to `remoteHost`, `localhost` by
+  default (`session_target_unknown` for another), which must be an
+  address, or a name, that the cluster's host can be asked to connect to,
+  or the step fails (`ssh_tcp_address_invalid`). `localhost` is resolved
+  as 127.0.0.1, where a service that listens on one loopback address alone
+  listens, and never by a resolver, which can give `[::1]` first, where
+  another user of the machine could listen at the same port and take the
+  session's requests: on this machine, a service that refuses at 127.0.0.1
+  is tried at `[::1]`, for that connection alone, as for a service that
+  listens there alone, until the service has answered at 127.0.0.1, which
+  it is asked at alone from then: an answer at `[::1]` is never kept,
+  since another program that listened there first, as while the service
+  started, would hold the session once the service is up. A cluster's host
+  is asked for 127.0.0.1. `remotePort` is a whole number from 1 to 65535,
+  or text of one (`session_port_invalid`). The session is served at the
+  port it is served at already, or at one the system picks: `localPort`,
+  format 1 ignores, and so does Meridian, though a step whose `localPort`
+  isn't a number, which format 1 truncates, or text of a whole one, fails,
+  as in format 1 (`session_port_invalid`). What only a platform does is
+  refused, failing the step (`session_update_unsupported`): `targetInfo`'s
+  Kubernetes resource, `openAI` and `apiKey`; and so is a tunnel to the
+  workspace of a session whose `useTLS` is true, which Meridian can't yet
+  reach over TLS that it checks, and doesn't reach over plain HTTP instead
+  (`session_tls_unsupported`). A tunnel to a cluster ignores `useTLS`, as
+  format 1 does.
+- **Saying so.** As a process serves a session, its run's output says
+  so: on a person's terminal, with a link that holds a one-time code;
+  elsewhere, since a log keeps no link that works, with the command that
+  makes one, `meridian session url <run> <key>`; and, as JSON, as a
+  `session.ready` line, with the `run` and the `key`, and never a code,
+  even on a terminal, since a program reads it, and keeps it, as an
+  editor's task runner does. A link session's `url` is said as it is.
+  `meridian session url` prints a new link, whose code works once, within
+  ten minutes, from the run whose `sessions:` has the session, any run of
+  its call among them; `meridian session reset` gives the session a new
+  salt, which signs out every browser that opened it. A session that
+  isn't served yet has no link (`session_not_ready`), nor one that no
+  process serves, as after the one that served it ended, which
+  `meridian resume` of its tree's root serves again
+  (`session_not_served`): its code would be redeemed by none.
+- **A port another program took.** A process that takes a session over
+  forgets the port it was served at as it takes it, so that no link is
+  made to it meanwhile (`session_not_ready`); serves it at that port, or,
+  where another program holds that now, at one the system picks; and says
+  which in the store, so that every process shows it. Where it can serve
+  it at none, it says why there, once: `session_local_port_taken`, as
+  where every port the system picked is another program's on `[::1]`, or
+  `session_local_port_refused`, as where the system won't let it listen;
+  which `meridian session url` says too, and tries again each time it
+  looks.
+- **Who has the service's port.** Any user of this machine can listen at
+  a port of its loopback addresses that no one listens at, as while a
+  session's service starts, after a step points the session at it, while
+  it restarts, or after it exits, and would get the session's requests,
+  with the cookies and passwords of its app. So each connection to a
+  service on this machine, at 127.0.0.1 as at `[::1]`, is passed on only
+  once the system says who has its other end (`internal/sockowner`): not
+  the port's listener, which can change between a look at it and a dial,
+  but the connection's own socket there. Linux says so through
+  `NETLINK_SOCK_DIAG`, asked for that one socket, as `ss` asks; macOS and
+  FreeBSD in their lists of TCP sockets, the sysctls
+  `net.inet.tcp.pcblist_n` and `net.inet.tcp.pcblist`, as `netstat` reads
+  them, each of whose records' kind and length is checked against the
+  headers of macOS, and of FreeBSD 13 and 14, and a list with any other
+  refused. What the systems say differs, and so does whom it is trusted
+  as:
+  - **On Linux,** the kernel says who owns a socket only once a process
+    has accepted it, and then the user of the process that did; before,
+    it gives root, whoever listens, which isn't trusted, but waited for,
+    five seconds at most, after which the service doesn't answer
+    (`session_unreachable`). The user who runs Meridian is trusted, and
+    root, whose process could take any connection anyway: a rootful
+    `docker -p 127.0.0.1:P:P` publishes a port through root's
+    `docker-proxy`, and a user of the `docker` group, who could publish
+    another, is as good as root on that machine anyway.
+  - **On macOS and FreeBSD,** each connection a listener accepts has the
+    credential of whoever made the listener, not of whoever accepts on
+    it, and a listener root made may have been passed to any user's
+    program: so only the user who runs Meridian is trusted, and root's
+    listener is another user's there. A connection in FreeBSD's
+    syncache, whose socket the kernel makes as the handshake's last
+    packet comes, is waited for, as on Linux one no process has
+    accepted.
+
+  A connection whose socket the system doesn't list yet is looked for
+  again, for a second: the socket of a connection a listener answered
+  with a SYN cookie, as each of the three systems does once a listener's
+  queue is about full, comes only with the handshake's last packet,
+  which on the loopback address comes about as the end that connected
+  has finished it, and FreeBSD's list shows neither its syncache entry
+  nor its socket for the moment between; Linux answers for such a
+  connection with its listener. Another user's connection is closed
+  before a byte is sent on it, and the browser is answered that another
+  user listens there (`session_service_foreign`, 502); one whose owner
+  Meridian can't tell is refused too (`session_service_owner_unknown`,
+  502): one in another state than an open connection, as the service
+  closed; one the system still doesn't list after that second, as for a
+  port published from another network namespace by DNAT, as docker
+  publishes one with its userland proxy off, or rootful podman does, or
+  another user's that FreeBSD hides where `security.bsd.see_other_uids`
+  is 0; and one Meridian couldn't ask about, or read the answer of, as
+  where it has no file descriptor left, or the list has a record it
+  doesn't read, or two sockets at the connection's end. The host's log says each
+  once for each place a step points the session, with the user, or with
+  what the system said, and of a private session only by its code. A
+  dial that waits for an owner stops as the request it was made for
+  ends. Before a step points a session at a service on this machine, and
+  before a process serves one there, Meridian checks that the system says
+  of a connection to a listener of its own that it is its user's, and
+  where it doesn't, as in a sandbox that refuses `NETLINK_SOCK_DIAG`, the
+  step fails, and the session isn't served (`session_service_unchecked`):
+  nothing is ever passed on unchecked. A tunnel to a cluster isn't
+  checked so: the cluster's host connects to `remoteHost`, often another
+  machine, as a compute node, through sshd's `direct-tcpip`, where
+  Meridian can't see who listens, and Meridian trusts that host with the
+  connection, as with the jobs it runs there.
+
+- **The host name.** A browser sends a cookie to its host alone, whatever
+  the port, and keeps a host's storage, and service workers, apart from
+  another's: so no request to another name, as 127.0.0.1, `localhost` or
+  another session's, carries a session's cookie, or reaches its pages'
+  storage; and a service's own responses that set no `Referrer-Policy`
+  get `same-origin`, so the label goes in no `Referer` to another site.
+  The port answers only a request addressed to its
+  session's name, at any port, as `ssh -L` to another one gives it: one
+  to 127.0.0.1, `localhost`, another session's name, or a name a page
+  made resolve to 127.0.0.1 (DNS rebinding), it refuses
+  (`session_host_refused`). Chrome and Firefox resolve any name under
+  `localhost` to this machine themselves, and so do curl, and
+  systemd-resolved, and glibc where `nss-myhostname` is configured; where
+  a browser doesn't, it can't open the session, and Meridian doesn't
+  serve it at 127.0.0.1 instead, which would give its cookie to every
+  port. Safari wasn't checked.
+- **The path.** Each request's path loses the session's, which
+  `X-Forwarded-Prefix` gives the service, as format 1's platform passes a
+  tunnel's on; a path the browser escaped, as `%2F`, goes on as it is,
+  under it. A `Location` the service gives under `/`, or at `localhost`
+  without a port, the host the service was asked for, is put back under
+  the session's path; one already under it, a relative one, and one at
+  another host are left as they are. Every cookie the service sets is held
+  to the session's path with its slash, without a `Domain`. `<user>` is
+  the login name of the user who runs Meridian, the same bytes as the
+  `PW_USER` that workflows build the path from (`internal/login`), so a
+  name a URL's path would escape, any outside letters, digits, `.`, `_`,
+  `-`, `@` and `~`, as SSSD's `user@domain`, and `.` and `..`, can't be
+  served (`session_user_unsupported`). `/` and the path without its slash
+  lead to the path (302); anything else on the port is nothing
+  (`session_not_here`).
+- **The port** listens on both of this machine's loopback addresses,
+  127.0.0.1 and `[::1]`, the same port of both, and never on another
+  address, which another machine reaches through `ssh -L`: one the system
+  picks that is free on both, as format 1's platform picks its own. A
+  browser resolves `<label>.localhost` to both, and can try `[::1]` first,
+  as curl and Chrome do: a program that listened there at the session's
+  port would get its first request, with its code, or its cookie. `[::1]`
+  is left out only where the system has no IPv6 loopback, as it says by
+  refusing the address, or the family, where no program can listen on it
+  either. A port in use on either address, or one the system won't give,
+  is a problem of its own (`session_local_port_taken`,
+  `session_local_port_refused`), as at the port a session was served at
+  before, which another program took.
+- **Who may use it.** Anyone on this machine can connect to its loopback
+  address, so a session is served only to a browser that holds its
+  cookie. A link Meridian prints holds a one-time code of the session's,
+  128 random bits, of which only the keyed hash, of the session's ID and
+  the code, is kept, which a GET alone uses, once, within ten minutes: a
+  HEAD, as a link checker sends, leaves it. It gives the browser the
+  cookie with a page that sends it on to the same URL without the code,
+  from the session's own origin, which no cache keeps: a redirect would
+  carry on a navigation that another site's page started, with which a
+  browser sends no SameSite=Strict cookie. The cookie holds the session's
+  secret, an HMAC-SHA256, under a key derived from the state directory's
+  key file, of the store's ID, the session's and a salt, each field led by
+  its length; it is HttpOnly, SameSite=Strict, without a `Domain`, so it
+  goes to the session's host alone, and held to the session's path.
+  Replacing the salt signs every browser out.
+- **Where a request may come from.** A request a browser says came from
+  another site (`Sec-Fetch-Site` `same-site` or `cross-site`), as
+  another port's page does, is served only as a navigation of the
+  browser's to a page (`Sec-Fetch-Mode` `navigate`, `Sec-Fetch-Dest`
+  `document`), never as a frame or a resource of the other page's. A
+  WebSocket, which isn't held to its page's origin, and any request but
+  GET, HEAD or OPTIONS, is served only with an `Origin`, if it has one,
+  that is the one it was sent to, and a `Sec-Fetch-Site`, if it has one,
+  of `same-origin` or `none` (`session_cross_origin`, both).
+- **What the service gets** is nothing until a request has passed all of
+  that: no connection to it is opened before. Then it gets the request
+  without Meridian's code and cookies, with `localhost` as its host, as
+  format 1's platform gives it, `X-Forwarded-Proto: http`, and the
+  browser's `Authorization`, which is the service's own; and none of the
+  headers whose names start with `X-PW-`, which format 1's platform uses
+  to say who asks: Meridian neither passes them on from the browser nor
+  sets them, as it signs none. The service may answer as slowly as it
+  likes, as a long poll does. The browser gets its answer without any
+  cookie named as Meridian's, or without a name, nor `Clear-Site-Data`.
+- **Pointing it elsewhere.** Each place a session points has a transport
+  of its own: once a step points the session elsewhere, every request goes
+  there, and no connection to where it pointed is used again; those of
+  requests going on, as a WebSocket's, run on until they end.
+- **Bounds.** A session has 16 connections to its service open, or
+  opening, at once, at most, a quarter of what the ssh backend opens over
+  its connection to a host. A request waits ten seconds at most for one,
+  and then is told the session has as many as it may (`session_busy`,
+  503), or, where its dial took that long, that the service doesn't answer
+  (`session_unreachable`, 502); a dial it gave up on, or whose request
+  ended, is told so, and holds its place until it ends: so a browser that
+  retries a service that doesn't answer can't take what the host's other
+  sessions need. A page that keeps
+  a connection open, as a WebSocket, holds one as long as it is open. A
+  browser has ten seconds to send a request's headers, and a connection
+  waits two minutes for its next. A connection to the service that fails
+  is logged once a minute at most; of a private session, as the problem's
+  code alone, since what its error says, as the service's address, can be
+  what the session read.
+- **Pages.** What the port answers itself is a page of text, in the
+  language the browser asks for, which no cache keeps; a request without
+  the cookie is 401, with `WWW-Authenticate: Meridian-Link`, a scheme of
+  Meridian's own, which no browser answers itself.
+
+Where format 1's platform serves a session otherwise, as a workflow, or
+the person who runs it, sees:
+
+- **Where.** It serves it over HTTPS, at the platform's host, behind the
+  platform's login; Meridian serves it over HTTP, on this machine's
+  loopback addresses, at a host name of the session's own, behind a
+  link's code and a cookie. Its own answers are the platform's pages
+  there, and pages of text here.
+- **Names.** The platform names a session of a run no step called, whose
+  `prompt-for-name` gives none, `<workflow>_<number>_<key>`; Meridian names
+  it by its key and 40 random bits, since the run has no number yet as
+  its sessions are named, as it is created.
+- **What a step may give.** A link's `url` must be an absolute http or
+  https URL here, and `remotePort` a whole number from 1 to 65535, or text
+  of one, where the platform takes more.
+- **Redirect.** The platform takes the person who runs a workflow to the
+  session whose `redirect:` is true; Meridian takes no one anywhere, and
+  says each session as it serves it, that one among them.
+- **The workspace.** A target of the workspace reaches this machine, the
+  coordinator's, whichever member of its group a job's attempt was placed
+  on, as format 1's workspace is the machine its runs start on.
+- **Its URL.** The platform serves a session at its own host, which 3
+  known workflows build a link to from `PW_PLATFORM_HOST`, which Meridian
+  doesn't set: what they print leads nowhere, and the link the run's
+  output says, or `meridian session url` prints, is the session's.
+- **Signing out.** A browser that opened a session on the platform stays
+  signed in to it for as long as its platform login lasts; here, a
+  session taken over by another process, as a `meridian resume` after a
+  crash takes it, signs it out, which a new link signs in again.
 
 ## Editors and web UIs
 

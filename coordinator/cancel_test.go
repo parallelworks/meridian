@@ -317,7 +317,12 @@ func TestCancelKeepsPlacement(t *testing.T) {
 	}
 }
 
-// timedOut is a run with a timeout: of a second.
+// timedOut is a run with a timeout: of a second. A test of it that needs
+// the run as it is at a point before the timeout opens its coordinator on
+// a store whose clock stands still (newFakeClock), and moves the clock on
+// a second at that point: by a clock that runs, a busy runner can take the
+// second before the run's job is even placed, and the stop then ends the
+// job with no attempt.
 const timedOut = `
 timeout: 1s
 jobs:
@@ -332,10 +337,12 @@ jobs:
 // run with it.
 func TestRunTimeout(t *testing.T) {
 	parallel(t)
-	c, _ := openStop(t, map[string]string{"main": obey})
+	clock := newFakeClock()
+	c, _ := openStopWith(t, Options{now: clock.Now}, map[string]string{"main": obey})
 	id, _ := create(t, c, timedOut, nil, nil)
 	serve(t, c)
 	a := latestIs(t, c, id, "main", running)
+	clock.Advance(time.Second)
 	r := waitEnded(t, c, id)
 	if r.Outcome != plan.OutcomeFailure || r.Reason != plan.ReasonTimeout || r.StopReason != plan.ReasonTimeout {
 		t.Errorf("the run ended %s (%s), stopped for %s", r.Outcome, r.Reason, r.StopReason)
@@ -354,9 +361,12 @@ func TestRunTimeout(t *testing.T) {
 // 1's does when it starts under the passed deadline.
 func TestRunTimeoutUnclaimed(t *testing.T) {
 	parallel(t)
-	c, d := openStop(t, map[string]string{"main": late})
+	clock := newFakeClock()
+	c, d := openStopWith(t, Options{now: clock.Now}, map[string]string{"main": late})
 	id, _ := create(t, c, timedOut, nil, nil)
 	serve(t, c)
+	latestIs(t, c, id, "main", (*store.Attempt).Placed)
+	clock.Advance(time.Second)
 	r := waitEnded(t, c, id)
 	if r.Outcome != plan.OutcomeFailure || r.Reason != plan.ReasonTimeout {
 		t.Errorf("the run ended %s (%s)", r.Outcome, r.Reason)
@@ -484,7 +494,8 @@ func TestJobTimeoutBackstop(t *testing.T) {
 // TestStopBetweenAttempts checks that a job between attempts as its run
 // stops, waiting to be placed again after a failure before its first
 // step, isn't placed again: it ends cancelled after a cancel, and failed,
-// with the reason timeout, after the run's timeout.
+// with the reason timeout, after the run's timeout, which passes once the
+// job's first attempt has failed (timedOut).
 func TestStopBetweenAttempts(t *testing.T) {
 	parallel(t)
 	for _, tc := range []struct {
@@ -496,7 +507,8 @@ func TestStopBetweenAttempts(t *testing.T) {
 		{"timeout", timedOut, plan.OutcomeFailure, plan.ReasonTimeout},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := open(t, Options{})
+			clock := newFakeClock()
+			c := open(t, Options{now: clock.Now})
 			c.supervision.setup = []time.Duration{time.Minute, time.Minute, time.Minute}
 			failSetup(c, setupProblems[0])
 			id, _ := create(t, c, tc.workflow, nil, nil)
@@ -506,6 +518,8 @@ func TestStopBetweenAttempts(t *testing.T) {
 				if err := c.Cancel(t.Context(), id); err != nil {
 					t.Fatal(err)
 				}
+			} else {
+				clock.Advance(time.Second)
 			}
 			r := waitEnded(t, c, id)
 			if r.Outcome != tc.outcome || r.StopReason != tc.reason {

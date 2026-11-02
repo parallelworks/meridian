@@ -83,12 +83,13 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	coord, err := coordinate(ctx, c, w.dirs, w.cfg, db)
+	co, err := coordinate(ctx, c, w.dirs, w.cfg, db)
 	if err != nil {
 		return c.fail(err)
 	}
-	// The coordinator is closed once it has stopped serving.
-	defer func() { _ = coord.Close() }()
+	// Closed once the coordinator has stopped serving.
+	defer func() { _ = co.close() }()
+	coord := co.coord
 	storeID := coord.StoreID()
 	logs, err := local.NewLogs(w.dirs.State, storeID)
 	if err != nil {
@@ -117,7 +118,8 @@ func runRun(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 		}
 		return c.fail(p)
 	}
-	progress := local.NewProgress(c.stdout, c.stderr, c.json)
+	// It says each session it serves as it does.
+	progress := co.progress(c)
 	if err := progress.Created(id, dir); err != nil {
 		return c.fail(err)
 	}
@@ -186,10 +188,15 @@ func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *c
 		serveMembers = (*coordinator.Coordinator).ServeMembers
 	}
 	go func() { members <- serveMembers(coord, work, rs.logs) }()
+	// It serves the store's sessions that no other process serves, each
+	// at a port of its own of this machine's loopback addresses.
+	sessions := make(chan error, 1)
+	go func() { sessions <- coord.ServeSessions(work) }()
 	defer func() {
 		stop()
 		<-sock.done
 		<-members
+		<-sessions
 		<-served
 	}()
 	following, stopFollowing := context.WithCancel(work)
@@ -221,6 +228,12 @@ func supervise(ctx context.Context, c *cli, coord *coordinator.Coordinator, w *c
 			quiet()
 			return c.fail(err)
 		case err := <-sock.errs:
+			quiet()
+			return c.fail(err)
+		case err := <-sessions:
+			// ServeSessions returns before work is done only when it
+			// can't serve.
+			sessions <- err
 			quiet()
 			return c.fail(err)
 		case sig := <-interrupts:

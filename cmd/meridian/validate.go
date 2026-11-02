@@ -63,7 +63,7 @@ func runValidate(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) i
 	diags := w.diags
 	if *start && w.created != nil {
 		_, started, err := compile.Start(ctx, w.created.Plan, compile.StartInput{
-			Variables: w.cfg, Record: w.created.Record, Inputs: w.cfg,
+			Variables: w.cfg, Record: w.created.Record, Inputs: w.cfg, Sessions: local.SessionNames{},
 		})
 		if err != nil {
 			return c.fail(err)
@@ -116,8 +116,10 @@ type compiled struct {
 
 // compileWorkflow creates a run of the workflow at path, or standard input
 // for -, without storing it, as validate and run do: with the user's
-// variables and groups, the workflows its steps' uses: name, and the input
-// values inputs gives. A workflow too large to read has no run, only its
+// variables and groups, the workflows its steps' uses: name, the input
+// values inputs gives, and its sessions checked and named as this
+// machine serves them, at the login name of the user who runs meridian
+// (local.SessionNames). A workflow too large to read has no run, only its
 // diagnostic; one with errors may have none.
 func compileWorkflow(ctx context.Context, c *cli, inputs *inputOptions, path string) (*compiled, error) {
 	sets, err := parseInputSets(inputs.set)
@@ -149,13 +151,13 @@ func compileWorkflow(ctx context.Context, c *cli, inputs *inputOptions, path str
 	if err := setInputs(submitted, inputDefinitions(name, data), sets); err != nil {
 		return nil, err
 	}
-	var sources compile.Sources = &cacheSources{dirs: dirs, servers: cfg.GitLabServers()}
+	var sources compile.Sources = &cacheSources{dirs: dirs, servers: cfg.GitLabServers(), workflows: cfg.Workflows()}
 	if c.sources != nil {
 		sources = c.sources
 	}
 	w.created, w.diags, err = compile.Create(ctx, name, data, submitted, compile.Options{
 		Source: plan.Source{Location: workflowLocation(path)},
-		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: sources,
+		Inputs: cfg, Variables: cfg, Groups: cfg, Sources: sources, Sessions: local.SessionNames{User: local.UserLogin()},
 	})
 	if err != nil {
 		return nil, err
@@ -168,8 +170,11 @@ func compileWorkflow(ctx context.Context, c *cli, inputs *inputOptions, path str
 // workflow, so that a workflow that names none makes none.
 type cacheSources struct {
 	dirs local.Dirs
-	// servers are the GitLab servers the user registered.
-	servers []string
+	// servers are the GitLab servers the user registered, and workflows
+	// the workflows a platform stores that the user mapped to workflows in
+	// Git.
+	servers   []string
+	workflows local.Workflows
 	// mu guards sources, which the coordinator's requests for checkouts'
 	// trees open at once.
 	mu      sync.Mutex
@@ -188,7 +193,7 @@ func (s *cacheSources) open() (*local.Sources, error) {
 		if err := s.dirs.EnsureCache(); err != nil {
 			return nil, err
 		}
-		s.sources = local.NewSources(s.dirs.Cache, s.servers)
+		s.sources = local.NewSources(s.dirs.Cache, s.servers, s.workflows)
 	}
 	return s.sources, nil
 }

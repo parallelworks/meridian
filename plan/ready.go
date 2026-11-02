@@ -408,6 +408,57 @@ func (j *Job) ReadsSteps(steps []StepResult) []StepResult {
 	return out
 }
 
+// StepRunReads returns, of steps, the results of the job's steps that
+// have had their turn, what a step run of the step at index, or of its
+// cleanup:, for cleanup, is given of them: what its own job, whose steps
+// StepRunSteps gives, without the job's outputs:, reads (ReadsSteps). The
+// coordinator gives a step run no more, and the worker asks with no more,
+// so that what a job's earlier steps wrote and the step doesn't read
+// never makes the request too large.
+func (j *Job) StepRunReads(index int, cleanup bool, steps []StepResult) []StepResult {
+	trimmed := *j
+	trimmed.Steps, trimmed.Outputs = StepRunSteps(j.Steps, index, cleanup), nil
+	return trimmed.ReadsSteps(steps)
+}
+
+// StepRunReads is Job.StepRunReads of the job j was readied from, whose
+// name, env:, working-directory: and steps j holds as the plan does.
+func (j *ReadyJob) StepRunReads(index int, cleanup bool, steps []StepResult) []StepResult {
+	job := Job{Name: j.Name, Env: j.Env, WorkingDirectory: j.WorkingDirectory, Steps: j.Steps}
+	return job.StepRunReads(index, cleanup, steps)
+}
+
+// StepRunSteps returns the steps of a step run's job, of steps, its
+// caller's job's: the step at index whole, without its cleanup:, the steps
+// before it by their id and path alone, and none after it; or, for a
+// cleanup's, every step so, but the step at index, with what the Cleanup
+// phase evaluates of it, its cleanup: among them, and none of what only
+// its tries run, as its run:, its uses: and with:, its timeout: and its
+// early-cancel:, but whether it has a retry:, which gives the cleanup its
+// retry counters, as format 1 does.
+func StepRunSteps(steps []Step, index int, cleanup bool) []Step {
+	n := index + 1
+	if cleanup {
+		n = len(steps)
+	}
+	out := make([]Step, n)
+	for i := range out {
+		out[i] = Step{ID: steps[i].ID, Path: steps[i].Path}
+	}
+	s := steps[index]
+	if cleanup {
+		s.Run, s.Uses, s.Source, s.Checkout, s.With = Value{}, "", nil, nil, Value{}
+		s.Timeout, s.EarlyCancel = Value{}, ""
+		if s.Retry != nil {
+			s.Retry = &StepRetry{}
+		}
+	} else {
+		s.Cleanup = Value{}
+	}
+	out[index] = s
+	return out
+}
+
 // readsOutput reports whether a reference to needs that follows path can
 // read the output of the job job named output: as needs.<job>.outputs.<name>,
 // or with a * or an [index] in the place of the job's name or the

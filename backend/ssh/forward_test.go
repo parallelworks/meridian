@@ -116,6 +116,20 @@ func TestForward(t *testing.T) {
 	}
 }
 
+// TestForwardDropped checks that a forward over the pool's connection to
+// a host that dropped it, before the pool knew, is made over the
+// connection made again, as a host that rebooted its sshd has.
+func TestForwardDropped(t *testing.T) {
+	r := newRig(t)
+	r.probe()
+	r.server.Drop()
+	l, err := r.d.Forward(t.Context(), r.m)
+	if err != nil {
+		t.Fatalf("a forward once the host dropped the connection gave %v", err)
+	}
+	_ = l.Close()
+}
+
 // TestForwardRefused checks that a host whose sshd forwards no Unix
 // sockets is ssh_forwarding_refused.
 func TestForwardRefused(t *testing.T) {

@@ -26,7 +26,6 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -225,33 +224,10 @@ type Store struct {
 	stmtsMu sync.Mutex
 	stmts   map[string]*sql.Stmt
 
-	// pending is set while the write-ahead log may hold a secret record a
-	// transaction deleted, which a reader or a writer kept a truncation
-	// from erasing (eraseWAL); erasing while one goroutine, which erasers
-	// counts, tries it again, until it succeeds, or the store closes:
-	// Close cancels closing, which ends the goroutine and its try, waits
-	// for it, and tries once more, if one is pending, which lastTried then
-	// says. heldUp counts the tries held up, so that a try that succeeds
-	// clears pending only if none was held up as it ran, which may have
-	// been of a record deleted after the log it truncated. warnAfter is
-	// how long the goroutine tries before it warns, once (eraseWarnAfter,
-	// which a test shortens). erased, if a test sets it, is called as the
-	// goroutine ends; truncated, as a try has truncated the log, before
-	// heldUp is read; and checkpointing with the connection of a try that
-	// waits for no one, as its checkpoint is about to run
-	// (truncateWALNow).
-	warnAfter     time.Duration
-	walMu         sync.Mutex
-	pending       bool
-	heldUp        uint64
-	truncated     func()
-	checkpointing func(*sql.Conn)
-	erasing       bool
-	lastTried     bool
-	closing       context.Context //nolint:containedctx // the store's own, which Close cancels
-	close         context.CancelFunc
-	erasers       sync.WaitGroup
-	erased        func()
+	// walEraser erases from the write-ahead log the secret records the
+	// store's transactions delete (eraseWAL).
+	walEraser
+
 	// closeOnce has Close close the store once; closeErr is what it
 	// returned.
 	closeOnce sync.Once
@@ -349,8 +325,7 @@ func openOnce(ctx context.Context, path string, log *slog.Logger, opts *Options,
 		return nil, err
 	}
 	s := &Store{driver: d, db: d.DB(), log: log, readOnly: readOnly}
-	s.closing, s.close = context.WithCancel(context.WithoutCancel(ctx))
-	s.warnAfter = eraseWarnAfter
+	s.initEraser(ctx)
 	s.maxLead = DefaultMaxLead
 	if opts != nil {
 		s.lastTry, s.retriesFor, s.clock = opts.LastTry, opts.RetriesFor, opts.Now
@@ -366,10 +341,7 @@ func openOnce(ctx context.Context, path string, log *slog.Logger, opts *Options,
 	}
 	if err := setUp(ctx, log); err != nil {
 		// A truncation of the log setUp began to try again ends first.
-		s.walMu.Lock()
-		s.close()
-		s.walMu.Unlock()
-		s.erasers.Wait()
+		s.stopErasing()
 		return nil, errors.Join(err, d.Close())
 	}
 	return s, nil
@@ -477,13 +449,27 @@ func (s *Store) setUp(ctx context.Context, log *slog.Logger) error {
 	if err := s.View(ctx, s.readID); err != nil {
 		return err
 	}
-	if err := s.Tx(ctx, func(tx *Tx) error { return tx.eraseDigests() }); err != nil {
+	var pending bool
+	if err := s.Tx(ctx, func(tx *Tx) error {
+		found, err := tx.eraseDigests()
+		if err != nil {
+			return err
+		}
+		if found {
+			if err := tx.markErasePending(); err != nil {
+				return err
+			}
+		}
+		pending, err = tx.erasePending()
+		return err
+	}); err != nil {
 		return err
 	}
 	// A process that ended between a run's end and the checkpoint after it
-	// left the log holding the run's secret record; and the digests just
-	// erased are in it.
-	s.eraseWAL(context.WithoutCancel(ctx))
+	// left the log holding the run's secret record, which the store's
+	// marker says, as it says of the digests just erased, if any: this
+	// process warns of those as of its own, if it can't truncate the log.
+	s.eraseWAL(context.WithoutCancel(ctx), pending)
 	return nil
 }
 
@@ -501,13 +487,22 @@ const noDigest = "x'000000000000000000000000000000000000000000000000000000000000
 // again, and so does each run's end. Each finds only the rows that hold
 // one, by an index of them. The store's writes overwrite what they
 // replace with zeros (secure_delete), and the write-ahead log is truncated
-// after.
-func (tx *Tx) eraseDigests() error {
-	if _, err := tx.exec("UPDATE meridian_attempts SET complete_digest = NULL WHERE complete_digest IS NOT NULL"); err != nil {
-		return err
+// after. It reports whether it found any.
+func (tx *Tx) eraseDigests() (bool, error) {
+	attempts, err := tx.exec("UPDATE meridian_attempts SET complete_digest = NULL WHERE complete_digest IS NOT NULL")
+	if err != nil {
+		return false, err
 	}
-	_, err := tx.exec("UPDATE meridian_actions SET digest = " + noDigest + " WHERE keyed = 0 AND digest <> " + noDigest)
-	return err
+	actions, err := tx.exec("UPDATE meridian_actions SET digest = " + noDigest + " WHERE keyed = 0 AND digest <> " + noDigest)
+	if err != nil {
+		return false, err
+	}
+	a, err := attempts.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	b, err := actions.RowsAffected()
+	return a+b > 0, err
 }
 
 // checkSchema checks that a store just opened only to read it has
@@ -593,21 +588,8 @@ func (s *Store) Close() error {
 // closeStore closes the store, once (Close).
 func (s *Store) closeStore() error {
 	// A truncation of the write-ahead log that a reader or a writer held
-	// up is tried once more here, as the store closes, once the goroutine
-	// that tries it again has ended; one held up after this one warns
-	// itself (eraseWAL). closing is cancelled under walMu, which a new
-	// goroutine starts under, so that none starts after the wait.
-	s.walMu.Lock()
-	s.close()
-	s.walMu.Unlock()
-	s.erasers.Wait()
-	s.walMu.Lock()
-	pending := s.pending
-	s.lastTried = true
-	s.walMu.Unlock()
-	if pending && !s.truncateWAL(context.WithoutCancel(s.closing)) {
-		s.warnPending()
-	}
+	// up is tried once more here, as the store closes (eraseLast).
+	s.eraseLast()
 	s.holdsMu.Lock()
 	for h := range s.holds {
 		h.unlock()
@@ -850,7 +832,7 @@ func (s *Store) run(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error
 		}
 	}
 	if tx.erased {
-		s.eraseWAL(context.WithoutCancel(ctx))
+		s.eraseWAL(context.WithoutCancel(ctx), true)
 	}
 	if tx.events {
 		s.changedMu.Lock()
@@ -878,192 +860,6 @@ func (s *Store) Changes() <-chan struct{} {
 		s.changed = make(chan struct{})
 	}
 	return s.changed
-}
-
-// eraseWAL truncates the write-ahead log once a transaction has deleted a
-// secret record (Tx.erased), so that the record, which secure_delete
-// overwrote with zeros in the pages the checkpoint writes, is in neither
-// the database nor the log: at once, and, while a reader or a writer
-// keeps the checkpoint from finishing, as a follower's transaction can for
-// longer than the busy timeout the checkpoint waits, again in the
-// background, by one goroutine for the store, which the ends of runs
-// meanwhile start no other of, from eraseRetryFirst apart, doubling up to
-// eraseRetryMost, until it is truncated, or the store closes, which tries
-// once more (Close). Open erases the log so too, for a process that ended
-// first. hopper's maintenance truncates the log only once it is past
-// 8 MiB, which a log that holds a record needn't be, so the store counts
-// on itself alone.
-func (s *Store) eraseWAL(ctx context.Context) {
-	s.walMu.Lock()
-	heldUp := s.heldUp
-	s.walMu.Unlock()
-	if s.truncateWAL(ctx) {
-		if s.truncated != nil {
-			s.truncated()
-		}
-		s.walMu.Lock()
-		if s.heldUp == heldUp {
-			s.pending = false
-		}
-		s.walMu.Unlock()
-		return
-	}
-	s.walMu.Lock()
-	defer s.walMu.Unlock()
-	s.heldUp++
-	switch {
-	case s.lastTried:
-		// The store has closed, past its last try.
-		s.warnPending()
-		return
-	case s.closing.Err() != nil:
-		// Close's last try, which hasn't been made, covers it.
-		s.pending = true
-		return
-	}
-	s.pending = true
-	if !s.erasing {
-		s.erasing = true
-		s.erasers.Go(s.eraseLater)
-	}
-}
-
-// The waits between the tries of a truncation of the write-ahead log that
-// a reader or a writer held up (eraseWAL), and how long they go on before
-// the store warns, once, that the log may still hold a secret record.
-const (
-	eraseRetryFirst = 10 * time.Millisecond
-	eraseRetryMost  = time.Second
-	eraseWarnAfter  = time.Minute
-)
-
-// eraseLater tries the truncation of the write-ahead log again until it
-// succeeds, or the store closes (eraseWAL), each try without waiting for
-// a reader or a writer (truncateWALNow), and warns once if it has tried
-// for warnAfter, then says so again only below its warnings.
-func (s *Store) eraseLater() {
-	if s.erased != nil {
-		defer s.erased()
-	}
-	began, warned := time.Now(), false
-	for wait := eraseRetryFirst; ; wait = min(2*wait, eraseRetryMost) {
-		t := time.NewTimer(wait)
-		select {
-		case <-s.closing.Done():
-			t.Stop()
-			s.walMu.Lock()
-			s.erasing = false
-			s.walMu.Unlock()
-			return
-		case <-t.C:
-		}
-		s.walMu.Lock()
-		heldUp := s.heldUp
-		s.walMu.Unlock()
-		if s.truncateWALNow(s.closing) {
-			if s.truncated != nil {
-				s.truncated()
-			}
-			s.walMu.Lock()
-			if s.heldUp == heldUp {
-				s.erasing, s.pending = false, false
-				s.walMu.Unlock()
-				return
-			}
-			// A try held up as this one ran may be of a record deleted
-			// after the log it truncated: tried again, from the first wait.
-			s.walMu.Unlock()
-			wait = eraseRetryFirst / 2
-			continue
-		}
-		s.walMu.Lock()
-		s.heldUp++
-		s.walMu.Unlock()
-		if !warned && time.Since(began) >= s.warnAfter {
-			warned = true
-			s.log.Warn("store: a reader or a writer has kept the write-ahead log from being truncated for a while, so it may still hold a secret record deleted since; it is tried again", "for", time.Since(began).Round(time.Second))
-		}
-	}
-}
-
-// warnPending warns that the log may hold a secret record past the
-// store's close.
-func (s *Store) warnPending() {
-	s.log.Warn("store: a reader or a writer kept the write-ahead log from being truncated as the store closed, so it may still hold a secret record deleted since; the next Open truncates it")
-}
-
-// A queryer is a database or one of its connections, which a checkpoint
-// runs on.
-type queryer interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-// truncateWAL checkpoints the write-ahead log into the database and
-// truncates it, and reports whether it did: a reader that still reads
-// from the log, or a writer, keeps the checkpoint from finishing once the
-// busy timeout has passed, which the store says in its log only below its
-// warnings, as it tries again (eraseWAL). An error it warns of.
-func (s *Store) truncateWAL(ctx context.Context) bool {
-	return s.checkpoint(ctx, s.db)
-}
-
-// truncateWALNow is truncateWAL without waiting for a reader or a writer:
-// on a connection of its own whose busy timeout is 0 while it tries, so
-// that a checkpoint held up fails at once, rather than hold back writers,
-// as a truncation that waits for readers does, for the busy timeout. A
-// connection whose busy timeout it can't set back isn't used again.
-func (s *Store) truncateWALNow(ctx context.Context) bool {
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		if ctx.Err() == nil {
-			s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
-		}
-		return false
-	}
-	defer conn.Close()
-	var timeout int64
-	if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&timeout); err != nil {
-		if ctx.Err() == nil {
-			s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
-		}
-		return false
-	}
-	// Set back however the try goes, the setting to 0 included, which can
-	// take effect and still return an error.
-	defer func() {
-		if _, err := conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA busy_timeout = "+strconv.FormatInt(timeout, 10)); err != nil {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-		}
-	}()
-	if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout = 0"); err != nil {
-		if ctx.Err() == nil {
-			s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
-		}
-		return false
-	}
-	if s.checkpointing != nil {
-		s.checkpointing(conn)
-	}
-	return s.checkpoint(ctx, conn)
-}
-
-// checkpoint runs a truncating checkpoint of the write-ahead log on q, as
-// truncateWAL says.
-func (s *Store) checkpoint(ctx context.Context, q queryer) bool {
-	var busy, logPages, checkpointed int64
-	err := q.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &checkpointed)
-	switch {
-	case err != nil && ctx.Err() != nil:
-		// The store is closing.
-		return false
-	case err != nil:
-		s.log.WarnContext(ctx, "store: checkpoint the write-ahead log", "error", err)
-		return false
-	case busy != 0:
-		s.log.DebugContext(ctx, "store: a reader or a writer kept the write-ahead log from being checkpointed and truncated, which is tried again", "pages", logPages, "checkpointed", checkpointed)
-		return false
-	}
-	return true
 }
 
 // SQL returns the transaction, for hopper's calls in it, such as

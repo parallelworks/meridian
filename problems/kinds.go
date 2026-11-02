@@ -128,11 +128,32 @@ var (
 	ExecutionGroupUnknown = define(Error, "execution_group_unknown", "No such execution group", "input", "value", "groups")
 	// ClusterUnknown is what the meridian command's Inputs gives for a
 	// compute-clusters input whose value names neither the workspace nor
-	// one of the user's clusters, and ClustersNone when the user has none:
-	// value is the name, as Show writes it, and clusters the clusters there
-	// are, as QuoteAll writes them.
-	ClusterUnknown = define(Error, "cluster_unknown", "No such cluster", "input", "value", "clusters")
-	ClustersNone   = define(Error, "clusters_none", "No clusters to choose from", "input", "value")
+	// one of the user's clusters, as a URI of another user's, or of none,
+	// and ClustersNone when the user has none: value is the value, as Show
+	// writes it, and clusters the clusters' URIs, as QuoteAll writes them.
+	// ClusterURIRequired is what it gives for a value that names a cluster
+	// otherwise than by its URI here: a name alone, pw://name, which a
+	// platform reads as an organization's cluster, or, at a run's own
+	// input, the cluster's details, which only a workflow's caller passes;
+	// value is the value, as Show writes it, and uri the URI to name the
+	// cluster by.
+	// ClusterLoginUnknown is what it gives for a cluster's URI when it
+	// can't tell the login name of the user who runs meridian, which the
+	// URI holds, for reason.
+	ClusterUnknown      = define(Error, "cluster_unknown", "No such cluster", "input", "value", "clusters")
+	ClustersNone        = define(Error, "clusters_none", "No clusters to choose from", "input", "value")
+	ClusterURIRequired  = define(Error, "cluster_uri_required", "Not a cluster's pw:// URI", "input", "value", "uri")
+	ClusterLoginUnknown = define(Error, "cluster_login_unknown", "No login name to name a cluster by", "input", "reason")
+	// BucketURIInvalid is what the meridian command's Inputs gives for a
+	// bucket input whose value isn't a bucket's pw://user/name URI, as a
+	// name alone or pw://name, which a platform reads as one of the user's
+	// own buckets, and a run here has no platform user to read it as, or,
+	// at a run's own input, the bucket's details, which only a workflow's
+	// caller passes: value is the value, as Show writes it. BucketCredentialsNeedPlatform is what
+	// it gives for a bucket input with generateCredentials, whose access
+	// keys only the platform that holds the bucket can make.
+	BucketURIInvalid              = define(Error, "bucket_uri_invalid", "Not a bucket's pw:// URI", "input", "value")
+	BucketCredentialsNeedPlatform = define(Error, "bucket_credentials_need_platform", "Bucket's credentials need a platform", "input")
 )
 
 // The workflows a step's uses: names, as a Sources resolver reports them.
@@ -143,8 +164,14 @@ var (
 	SourceRefInvalid = define(Error, "source_ref_invalid", "Not a reference to a workflow in Git", "ref")
 	// SourceWithInvalid is a step's with: $yaml or $host, key, that isn't a
 	// file's path or a server's name: what is server or file.
-	SourceWithInvalid      = define(Error, "source_with_invalid", "Workflow's server or file not one a uses: can name", "key", "what")
-	SourceOnPlatform       = define(Error, "source_on_platform", "Workflow a platform stores", "ref")
+	SourceWithInvalid = define(Error, "source_with_invalid", "Workflow's server or file not one a uses: can name", "key", "what")
+	SourceOnPlatform  = define(Error, "source_on_platform", "Workflow a platform stores", "ref")
+	// SourceVersionInvalid is a marketplace workflow's version, as a uses:
+	// names it, that its slug's mapping in sources.yaml can't take; and
+	// SourceLatestNotMapped one that names the latest, which only a mapping
+	// of its own maps, whose key is key.
+	SourceVersionInvalid   = define(Error, "source_version_invalid", "Marketplace workflow's version a mapping can't take", "ref", "version")
+	SourceLatestNotMapped  = define(Error, "source_latest_not_mapped", "Marketplace workflow's latest version not mapped", "ref", "key")
 	SourceRevisionNotFound = define(Error, "source_revision_not_found", "No such repository or revision", "repo", "revision", "reason")
 	SourceFileNotFound     = define(Error, "source_file_not_found", "No such workflow file in the repository", "repo", "path", "commit")
 	SourceTooLarge         = define(Error, "source_too_large", "Workflow file in a repository too large", "location", "commit", "limit")
@@ -224,6 +251,56 @@ var (
 	// Meridian ignores the key, and runs it. value is the key's value, as
 	// the workflow writes it.
 	SSHDisconnectTimeoutInvalid = define(Warning, "ssh_disconnect_timeout_invalid", "disconnect-timeout format 1 can't read", "value")
+)
+
+// A workflow's sessions:.
+var (
+	// SessionRedirectTwice is more than one session whose redirect: is
+	// true, of which format 1 allows one: keys are their keys, as QuoteAll
+	// writes them.
+	SessionRedirectTwice = define(Error, "session_redirect_twice", "More than one session to take the user to", "keys")
+)
+
+// Serving a run's sessions on this machine, which a session provider
+// refuses the run, or the step that points a session, with: user is the
+// login name of the user who runs Meridian, as it is; port a port of
+// 127.0.0.1, as text.
+var (
+	SessionUserUnsupported = define(Error, "session_user_unsupported", "Login name a session's path can't hold", "user")
+	// name is a session's name, as a run's sessions: named it, or as
+	// update-session's with: gives it.
+	SessionNameTaken    = define(Error, "session_name_taken", "Session name another session has", "name")
+	SessionNameEmpty    = define(Error, "session_name_empty", "update-session without a session's name")
+	SessionUnknown      = define(Error, "session_unknown", "No such session", "name")
+	SessionNotPermitted = define(Error, "session_not_permitted", "Session the run may not point", "name")
+	// key is a session's key in a workflow's sessions:, and field one of
+	// its keys, or of update-session's with:; target is update-session's
+	// target, clusters the clusters of the clusters file, as QuoteAll
+	// writes them, and listed whether there are any, "true" or "false"
+	// (Listed), as every new kind that lists names takes them;
+	// value is a value of update-session's with:, as Show writes it, and
+	// name a session's name.
+	SessionFieldUnsupported  = define(Error, "session_field_unsupported", "Session meridian run can't serve", "key", "field")
+	SessionNameNeeded        = define(Error, "session_name_needed", "Session that asks for a name", "key")
+	SessionUpdateUnsupported = define(Error, "session_update_unsupported", "update-session meridian run can't do", "name", "field")
+	SessionURLInvalid        = define(Error, "session_url_invalid", "Link that isn't an http or https URL", "value")
+	SessionPortInvalid       = define(Error, "session_port_invalid", "Port update-session can't read", "key", "value")
+	SessionTargetUnknown     = define(Error, "session_target_unknown", "Session's target that names no cluster", "target", "clusters", "listed")
+	SessionTLSUnsupported    = define(Error, "session_tls_unsupported", "Session over TLS meridian run can't reach yet", "name")
+	// port is a session's port, and picked whether the system picked it,
+	// "true" or "false", as for port 0.
+	SessionLocalPortTaken   = define(Error, "session_local_port_taken", "Session's port in use", "port", "picked")
+	SessionLocalPortRefused = define(Error, "session_local_port_refused", "Session's port this machine won't listen on", "port", "picked")
+	// os is the system Meridian runs on, as Go names it, as linux, where
+	// it won't say which user listens at a port of this machine's, as in
+	// a sandbox that refuses NETLINK_SOCK_DIAG, or where Meridian can't
+	// read what it says: no session that points at a service on it is
+	// served, and a session's port answers a request for one with this
+	// too, 502.
+	SessionServiceUnchecked = define(Error, "session_service_unchecked", "Session's service whose user Meridian can't tell", "os")
+	// reason is why the system gives no login name: a session can't be
+	// named, nor a step point one, nor meridian session url link one.
+	LoginNameUnknown = define(Error, "login_name_unknown", "No login name for the user who runs meridian", "reason")
 )
 
 // Creating and starting a run: what the caller gives the compiler, and
@@ -393,6 +470,14 @@ var (
 	StepRunRequestFailed     = define(Error, "step_run_request_failed", "Request to the coordinator for a step's run on another host that failed", "reason")
 	StepRunOutputsUnwritten  = define(Error, "step_run_outputs_unwritten", "Outputs of a step on another host the worker couldn't add", "reason")
 	StepRunOutputLineTooLong = define(Error, "step_run_output_line_too_long", "Output of a step on another host too long to add", "name", "limit")
+	// MasksTooMany is a step's try, or its cleanup's, that calls a
+	// workflow or runs on another host, whose run of its own would mask
+	// count strings, more than limit, the most the coordinator takes
+	// (workerapi.MaxMasks); and MasksTooLarge one whose strings to mask
+	// come to size bytes, more than limit (workerapi.MaxMaskedBytes). The
+	// worker fails the step rather than ask for the run with fewer.
+	MasksTooMany  = define(Error, "masks_too_many", "Too many strings to mask for a step's run of its own", "count", "limit")
+	MasksTooLarge = define(Error, "masks_too_large", "Strings to mask too large for a step's run of its own", "size", "limit")
 	// CheckoutPathNotFound is an entry of a parallelworks/checkout step's
 	// with: sparse_checkout, path, that names nothing in the commit the
 	// step was pinned to; CheckoutSubmodules a checkout of all of the
@@ -614,6 +699,13 @@ var (
 	// path is the socket on the host that the coordinator asked sshd to
 	// listen on for the host's workers.
 	SSHForwardingRefused = define(Error, "ssh_forwarding_refused", "Host that won't forward a socket to the coordinator", "host", "path")
+	// address is what the host was asked to connect to, as host:port, and
+	// reason what the host said of why it couldn't; value and port a host
+	// and a port, as they were given, which Meridian asks no host to
+	// connect to.
+	SSHTCPForwardingRefused = define(Error, "ssh_tcp_forwarding_refused", "Host that won't connect to an address for Meridian", "host", "address")
+	SSHTCPConnectFailed     = define(Error, "ssh_tcp_connect_failed", "Host that couldn't connect to an address for Meridian", "host", "address", "reason")
+	SSHTCPAddressInvalid    = define(Error, "ssh_tcp_address_invalid", "Address Meridian doesn't ask a host to connect to", "value", "port")
 )
 
 // The meridian command's directories. mode is a file's or directory's
@@ -683,6 +775,16 @@ var (
 	VariableFileHome       = defineCommand("variable_file_home", "Variable's file in an unknown home directory", "variable", "file")
 	ClusterNameInvalid     = defineCommand("cluster_name_invalid", "Invalid cluster name", "cluster")
 	ClusterInvalid         = defineCommand("cluster_invalid", "Invalid cluster", "cluster", "key", "value")
+	// A mapping of sources.yaml's workflows: key is its key, as it is
+	// written; first the key of an earlier one that names the same
+	// workflow, and first_line its line; and what is what of the workflow
+	// in Git it maps to isn't one a step's uses: can name: uses, yaml or
+	// host, server for a GitLab server gitlab-servers doesn't register,
+	// platform for another workflow a platform stores, or template for a
+	// version template where none can be.
+	WorkflowMappingKeyInvalid = defineCommand("workflow_mapping_key_invalid", "Mapping of something other than a workflow a platform stores", "key")
+	WorkflowMappingRepeated   = defineCommand("workflow_mapping_repeated", "Two mappings of one workflow", "key", "first", "first_line")
+	WorkflowMappingInvalid    = defineCommand("workflow_mapping_invalid", "Mapping to something other than a workflow in Git", "key", "what")
 )
 
 // The key that wraps runs' data keys, and git, which reads the workflows
@@ -779,6 +881,42 @@ var (
 	AttemptLeaseLapsed          = defineCommand("attempt_lease_lapsed", "Attempt's lease about to lapse")
 	WorkerHardenFailed          = defineCommand("worker_harden_failed", "Worker's memory can't be protected", "reason")
 	WorkerSystemUnsupported     = defineCommand("worker_system_unsupported", "System where the worker can't protect its memory", "os")
+)
+
+// What a session's port answers a browser with, in CommandRegistry, for a
+// request it doesn't pass on to the session's service: name is the
+// session's name; run and key the run's ID and the session's key in its
+// sessions:, with which meridian session url makes a link to it; path
+// the path the port serves the session at, as /me/session/<user>/<name>/;
+// host the host the request asked for, as its Host header gives it;
+// limit how many connections to its service a session has open or
+// opening at once, at most; and port the port of this machine's loopback
+// address that the session points at, as text.
+var (
+	SessionUnreachable  = defineCommand("session_unreachable", "Session's service not answering", "name")
+	SessionBusy         = defineCommand("session_busy", "Session with as many connections to its service as it may have", "name", "limit")
+	SessionUnauthorized = defineCommand("session_unauthorized", "Session asked for without a link of Meridian's", "run", "key")
+	SessionCrossOrigin  = defineCommand("session_cross_origin", "Request to a session from another page")
+	SessionNotHere      = defineCommand("session_not_here", "No session at this path", "path")
+	SessionHostRefused  = defineCommand("session_host_refused", "Session asked for at another host name", "host")
+	// SessionServiceForeign is a session that points at a port of this
+	// machine where another user listens, not the user who runs Meridian,
+	// nor, on Linux, root, which is answered 502, as one unreachable is.
+	SessionServiceForeign = defineCommand("session_service_foreign", "Session's service another user listens at", "name", "port")
+	// SessionServiceOwnerUnknown is a connection to a session's service
+	// on this machine whose other end's owner Meridian can't tell, as one
+	// the system doesn't list, of a port published from another network
+	// namespace by DNAT, or one it couldn't ask about, which is answered
+	// 502 too.
+	SessionServiceOwnerUnknown = defineCommand("session_service_owner_unknown", "Connection to a session's service whose user Meridian can't tell", "name", "port")
+	// What meridian session finds of a run's session: run is the run's
+	// ID, key the session's key, keys the keys of the run's sessions that
+	// haven't ended, as QuoteAll writes them, and listed whether there are
+	// any, "true" or "false"; root is the ID of the run at the top of its
+	// tree.
+	SessionKeyUnknown = defineCommand("session_key_unknown", "Run without such a session", "run", "key", "keys", "listed")
+	SessionNotReady   = defineCommand("session_not_ready", "Session not served yet", "run", "key")
+	SessionNotServed  = defineCommand("session_not_served", "Session no process serves", "run", "key", "root")
 )
 
 // The worker API's own problems, in WorkerRegistry, with which a coordinator

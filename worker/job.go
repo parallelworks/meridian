@@ -601,16 +601,26 @@ func (a *attempt) beginTry(t *startedTry, end stepEnd) (stepEnd, bool) {
 		return a.notRun(t.i, t.try, end, cause, t.diags, rs.IgnoreErrors && last), false
 	}
 	seq := a.events.add(workerapi.Event{Time: now(), Step: t.i, Try: t.try})
-	if !a.firstStarted {
-		// Whether the workflow's code may have run must always be
-		// known: the coordinator stores that the first step is
-		// starting before it starts.
-		if cause := a.await(s, func() (bool, <-chan struct{}) { return a.events.isStored(seq) }); cause != noStop {
-			return a.notRun(t.i, t.try, end, cause, t.diags, rs.IgnoreErrors && last), false
-		}
-		a.firstStarted = true
+	if cause := a.awaitFirstStart(s, seq); cause != noStop {
+		return a.notRun(t.i, t.try, end, cause, t.diags, rs.IgnoreErrors && last), false
 	}
 	return end, true
+}
+
+// awaitFirstStart waits, before the attempt's first step starts, until
+// the coordinator has stored seq, the event that says it starts, unless
+// what s watches stops it first, and returns why it did, if it did.
+// Whether the workflow's code may have run must always be known: the
+// coordinator stores that the first step is starting before it starts.
+func (a *attempt) awaitFirstStart(s stops, seq int64) stopCause {
+	if a.firstStarted {
+		return noStop
+	}
+	if cause := a.await(s, func() (bool, <-chan struct{}) { return a.events.isStored(seq) }); cause != noStop {
+		return cause
+	}
+	a.firstStarted = true
+	return noStop
 }
 
 // runCallTry runs t, a try of a step that calls a workflow, whose child is
@@ -640,41 +650,40 @@ func (a *attempt) runCallTry(ctx context.Context, t *startedTry, end stepEnd) (s
 // step ended, from end, and whether to try it again; or that it was cut
 // short, if the job was halted.
 func (a *attempt) runOwnTry(ctx context.Context, t *startedTry, end stepEnd) (stepEnd, bool) {
-	var (
-		exit     int
-		cause    stopCause
-		tryDiags problems.Diagnostics
-		// acted are the problems an action reported: why its try
-		// failed, which, unlike a command's problems, leaves its
-		// retry: and its ignore-errors: to say what follows, as they
-		// do for a command that exits other than 0, and its warnings.
-		acted problems.Diagnostics
-		// succeeded is set for a try that succeeded: a command that
-		// exited 0, or an action that did, by itself.
-		succeeded bool
-	)
-	rs := t.rs
-	switch {
-	case slices.Contains(platformActions, rs.Uses):
-		// As in format 1, an action fails as it runs, and the try
-		// with it, as a command that fails does: no platform here
-		// provides this one. Its log says why, as a note is.
-		acted = problems.Diagnostics{a.at(problems.ActionNeedsPlatform, t.path, problems.Params{"uses": rs.Uses})}
-		exit, tryDiags = -1, a.writeLog(t.key, noted(t.note, acted))
-	case rs.Uses != "":
-		// runnable lets through only an action the coordinator
-		// performs.
-		exit = -1
-		succeeded, cause, acted, tryDiags = a.runAction(ctx, t.key, rs, t.s, t.note)
-	default:
-		exit, cause, tryDiags = a.runCommand(t.key, rs, rs.Run, t.dir, a.stepEnv(rs, t.vars), t.s, t.note)
-		succeeded = cause == noStop && exit == 0
-	}
+	exit, cause, succeeded, acted, tryDiags := a.runStepBody(ctx, t.key, t.rs, t.path, t.dir, t.vars, t.s, t.note)
 	if a.halted.fired() {
 		end.cut = true
 		return end, false
 	}
 	return a.endOwnTry(t, end, exit, cause, succeeded, acted, tryDiags)
+}
+
+// runStepBody runs a try of the step rs, at path, whose log is key, here:
+// its action, or its command, in dir, with vars, the variables the worker
+// defines for the step, as what s watches allows, with note in its log,
+// if there is one. It returns the command's exit status, or -1 for none;
+// why what s watches stopped it, if it did; whether it succeeded: a
+// command that exited 0, or an action that did, by itself; acted, the
+// problems an action reported: why its try failed, which, unlike a
+// command's problems, leaves its retry: and its ignore-errors: to say what
+// follows, as they do for a command that exits other than 0, and its
+// warnings; and tryDiags, the problems of the try itself.
+func (a *attempt) runStepBody(ctx context.Context, key logKey, rs *plan.ReadyStep, path, dir string, vars map[string]string, s stops, note *problems.Diagnostic) (exit int, cause stopCause, succeeded bool, acted, tryDiags problems.Diagnostics) {
+	switch {
+	case slices.Contains(platformActions, rs.Uses):
+		// As in format 1, an action fails as it runs, and the try
+		// with it, as a command that fails does: no platform here
+		// provides this one. Its log says why, as a note is.
+		acted = problems.Diagnostics{a.at(problems.ActionNeedsPlatform, path, problems.Params{"uses": rs.Uses})}
+		return -1, noStop, false, acted, a.writeLog(key, noted(note, acted))
+	case rs.Uses != "":
+		// runnable lets through only an action the coordinator
+		// performs.
+		succeeded, cause, acted, tryDiags = a.runAction(ctx, key, rs, s, note)
+		return -1, cause, succeeded, acted, tryDiags
+	}
+	exit, cause, tryDiags = a.runCommand(key, rs, rs.Run, dir, a.stepEnv(rs, vars), s, note)
+	return exit, cause, cause == noStop && exit == 0, nil, tryDiags
 }
 
 // endOwnTry ends t, a try of a step that ran a command, used an action or

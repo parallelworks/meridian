@@ -1,0 +1,18 @@
+description: >-
+  A step whose ssh: names a host other than its job's runs there, and what
+  it appends to $OUTPUTS there is its job's, as format 1 copies the file
+  back once the step's try succeeds: a later job reads it through needs.
+  The step reads what its job's earlier step wrote, as its expressions are
+  evaluated with its job's state.
+source: ACTIVATE's executor, and Meridian
+hosts:
+  farm: {}
+expect:
+  run:
+    outcome: success
+    jobs:
+      main: {outcome: success}
+      after:
+        outcome: success
+        logs:
+          - {step: 0, text: "on the host, after here\n"}

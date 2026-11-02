@@ -71,12 +71,12 @@ func TestLogsFollow(t *testing.T) {
 	env := runEnv(t)
 	workflow, release := waitingWorkflow(t)
 	running := startCommand(t, env, nil, "run", workflow)
-	waitUntil(t, "the step's first line", func() bool { return strings.Contains(running.stdout.String(), "main step 0| one\n") })
+	untilSaid(t, running, "main step 0| one\n")
 	if r := commandTest(t, env, "logs", "1"); r.code != exitOK || r.stdout != "main step 0| one\n" {
 		t.Errorf("meridian logs of a run that runs = %+v", r)
 	}
 	followed := startCommand(t, env, nil, "logs", "-f", "1", "main")
-	waitUntil(t, "meridian logs -f to show the first line", func() bool { return strings.Contains(followed.stdout.String(), "main step 0| one\n") })
+	untilSaid(t, followed, "main step 0| one\n")
 	select {
 	case r := <-followed.done:
 		t.Fatalf("meridian logs -f returned before the run ended: %+v", r)

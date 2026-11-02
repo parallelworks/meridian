@@ -242,3 +242,37 @@ func TestProgressJSON(t *testing.T) {
 		t.Errorf("the last line is %+v", l)
 	}
 }
+
+// TestProgressSession checks how a session that is served is said: with
+// its link, on a terminal, or a link session's url; with the command that
+// makes a link elsewhere; and as a session.ready line, as JSON, with what
+// control characters a url holds escaped in text.
+func TestProgressSession(t *testing.T) {
+	var out, errs strings.Builder
+	p := NewProgress(&out, &errs, false)
+	for _, link := range []string{"http://x.localhost:8000/me/session/alice/web-1/?meridian-code=c", "", "https://example.com/\x1b[2J"} {
+		if err := p.Session("7", "web", link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := `session web of run 7 is ready: http://x.localhost:8000/me/session/alice/web-1/?meridian-code=c
+session web of run 7 is ready: meridian session url 7 web
+session web of run 7 is ready: https://example.com/\x1b[2J
+`
+	if out.String() != want || errs.Len() != 0 {
+		t.Errorf("the sessions are said as\n%s\nwant\n%s", out.String(), want)
+	}
+	out.Reset()
+	p = NewProgress(&out, &errs, true)
+	for _, link := range []string{"http://x.localhost:8000/", ""} {
+		if err := p.Session("7", "web", link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want = `{"version":1,"kind":"session.ready","run":"7","key":"web","url":"http://x.localhost:8000/"}
+{"version":1,"kind":"session.ready","run":"7","key":"web"}
+`
+	if out.String() != want {
+		t.Errorf("as JSON, the sessions are said as\n%s\nwant\n%s", out.String(), want)
+	}
+}

@@ -1,0 +1,10 @@
+jobs:
+  main:
+    steps:
+      - run: echo "from the first host" > "$HOME/marker"
+        ssh:
+          remoteHost: farm
+      - run: echo "marker=$(cat "$HOME/marker")" >> $OUTPUTS
+        ssh:
+          remoteHost: farm2
+      - run: echo "${{ needs.main.outputs.marker }}"

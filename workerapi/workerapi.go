@@ -194,11 +194,17 @@ const Version2 = 2
 // a step whose uses: names a workflow asks for the run of it, waits for it
 // and stops it (ChildRequest, Child, ChildStop), Claim.Tree, what a child
 // run's attempt has of its tree, and Claim.RunDirOnMember, which says
-// where the worker cleans a child's directory. A worker asks only in an
-// attempt of version 3 or later, and the coordinator answers the paths
-// for another as ones the API doesn't have, 404. An attempt whose job has
-// a step whose uses: names a workflow, or an action the coordinator
-// performs, or of a child run, needs version 3 (WorkerAPITooOld). No
+// where the worker cleans a child's directory; and step runs: PathStepRun,
+// PathStepRunEnd and PathStepRunStop, through which a step whose ssh:
+// puts it on another host than its job's asks for its run there, waits
+// for it and stops it (StepRunRequest, StepRun, StepRunStop), and
+// Claim.StepRun, what a step run's attempt has of the step's try it runs.
+// A worker asks only in an attempt of version 3 or later, and the
+// coordinator answers the paths for another as ones the API doesn't have,
+// 404. An attempt whose job has a step whose uses: names a workflow, or
+// an action the coordinator performs, or whose ssh: can put it on another
+// host, or of a child run or a step run, needs version 3
+// (WorkerAPITooOld). No
 // release has written it yet, so what is added before one does joins it,
 // as for a plan version.
 const Version3 = 3
@@ -340,14 +346,25 @@ const MaxChildRequest = 4 << 20
 // MaxActionRequest.
 const MaxStepRunRequest = 4 << 20
 
-// MaxStepRunMasked is the most bytes a StepRunRequest's Masked hold in
-// all, which the step run's secret record keeps.
-const MaxStepRunMasked = 1 << 20
+// MaxMaskedBytes is the most bytes a ChildRequest's or a
+// StepRunRequest's Masked hold in all (MaskedSize), which the child run's
+// secret record keeps.
+const MaxMaskedBytes = 1 << 20
 
-// MaxStepRunMasks is the most strings a StepRunRequest's Masked hold:
-// each is masked in every line the step run's worker logs, and in each of
-// its step's outputs, which one masked makes a secret.
-const MaxStepRunMasks = 10_000
+// MaxMasks is the most strings a ChildRequest's or a StepRunRequest's
+// Masked hold: each is masked in every line the child run's workers log,
+// and in each of its steps' outputs, which one masked makes a secret.
+const MaxMasks = 10_000
+
+// MaskedSize returns how many bytes the strings masked hold in all, as
+// MaxMaskedBytes counts them.
+func MaskedSize(masked []string) int {
+	size := 0
+	for _, m := range masked {
+		size += len(m)
+	}
+	return size
+}
 
 // MaxOutputs is the most bytes of a step's $OUTPUTS file that a worker
 // reads (docs/design.md, Outputs), as the file holds them; and the most of
@@ -668,6 +685,16 @@ type StepRunState struct {
 	JobAttempt int `json:"jobAttempt,omitzero"`
 }
 
+// PlanSteps returns the state's steps as the job's state holds them
+// (plan.JobState.Steps).
+func (s StepRunState) PlanSteps() []plan.StepResult {
+	out := make([]plan.StepResult, len(s.Steps))
+	for i, r := range s.Steps {
+		out[i] = plan.StepResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
+	}
+	return out
+}
+
 // A StepRunResult is how a step of a job ended, as a later step of it
 // reads it (plan.StepResult). Every member is of version 3.
 type StepRunResult struct {
@@ -675,6 +702,19 @@ type StepRunResult struct {
 	Outputs        map[string]string `json:"outputs,omitzero"`
 	CleanupOutcome plan.Outcome      `json:"cleanupOutcome,omitzero"`
 	CleanupOutputs map[string]string `json:"cleanupOutputs,omitzero"`
+}
+
+// StepRunResults returns steps, the results of a job's steps, as a
+// StepRunState holds them: nil for none, which a state leaves out.
+func StepRunResults(steps []plan.StepResult) []StepRunResult {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]StepRunResult, len(steps))
+	for i, r := range steps {
+		out[i] = StepRunResult{Outcome: r.Outcome, Outputs: r.Outputs, CleanupOutcome: r.CleanupOutcome, CleanupOutputs: r.CleanupOutputs}
+	}
+	return out
 }
 
 // A Tree is what an attempt of a child run has of its tree (Claim.Tree):
@@ -977,7 +1017,8 @@ type ChildRequest struct {
 	EnvSecrets  []string `json:"envSecrets,omitzero"`
 	// Masked are the strings the worker masks for the step: its run's
 	// secrets', and what its job and step made from one, which the child's
-	// jobs mask too (Tree.Masked).
+	// jobs mask too (Tree.Masked): MaxMasks of them, of MaxMaskedBytes
+	// bytes, at most, or the request is 400.
 	Masked []string `json:"masked,omitzero"`
 	// WorkingDirectory is the step's own working-directory:, as Step gave
 	// it (plan.ReadyStep.WorkingDirectory): a path relative to its run's
@@ -1018,8 +1059,8 @@ type Child struct {
 // is null or names no host, which the coordinator evaluates itself and
 // refuses the request where they differ; the state of the job at the try
 // (StepRunState); and the strings the worker masks at the try, which the
-// step run's worker masks too, MaxStepRunMasks of them, of
-// MaxStepRunMasked bytes, at most. Every member is of version 3.
+// step run's worker masks too, MaxMasks of them, of MaxMaskedBytes
+// bytes, at most. Every member is of version 3.
 type StepRunRequest struct {
 	Step    int          `json:"step,omitzero"`
 	Try     int          `json:"try,omitzero"`

@@ -70,8 +70,12 @@ func (s *Server) serveChild(w http.ResponseWriter, r *http.Request, a *store.Att
 		s.badRequest(w, r, "a child's request that isn't one")
 		return
 	}
-	if req.Step < 0 || req.Try < 0 {
+	switch {
+	case req.Step < 0 || req.Try < 0:
 		s.badRequest(w, r, "a child of a step or a try that is no step's or try's")
+		return
+	case !maskedWithin(req.Masked):
+		s.badRequest(w, r, "a child's request that masks more than it may")
 		return
 	}
 	if !a.Holds {
@@ -91,76 +95,28 @@ func (s *Server) serveChild(w http.ResponseWriter, r *http.Request, a *store.Att
 }
 
 // serveChildEnd answers a poll for the end of the child of a step's try
-// (workerapi.PathChildEnd), named in the query: once the child has ended,
-// as Server.Ended says, or the store does when it is read again, every
-// childRecheck; or after the hold, with the child as it is. A try that has
-// no child is 404.
+// (workerapi.PathChildEnd), named in the query, a workflow its step calls,
+// as awaitEnd does: once it has ended, how; or after the hold, as it is. A
+// try that has no such child, as one whose child is a step run, is 404.
 func (s *Server) serveChildEnd(w http.ResponseWriter, r *http.Request, a *store.Attempt) {
-	ctx := r.Context()
 	step, err1 := strconv.Atoi(r.URL.Query().Get(workerapi.QueryStep))
 	try, err2 := strconv.Atoi(r.URL.Query().Get(workerapi.QueryTry))
 	if err1 != nil || err2 != nil || step < 0 || try < 0 {
 		s.badRequest(w, r, "a poll for a child's end without its step and try")
 		return
 	}
-	var id string
-	if err := s.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		id, err = tx.Child(a.ID, step, try)
-		return err
-	}); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeStatus(w, http.StatusNotFound)
-			return
-		}
-		s.writeError(w, r, err)
+	id, ok := s.childOf(w, r, a, step, try, false, false)
+	if !ok {
 		return
 	}
-	hold := time.NewTimer(s.hold)
-	defer hold.Stop()
-	tick := time.NewTicker(s.childRecheck)
-	defer tick.Stop()
-	for {
-		// The poll waits before the store is read, so that an end stored
-		// after the read wakes it.
-		ended, done := s.ends.wait(id)
-		var child *store.Run
-		err := s.store.View(ctx, func(tx *store.Tx) error {
-			var err error
-			child, err = tx.Run(id)
-			return err
-		})
-		switch {
-		case err != nil:
-			done()
-			s.writeError(w, r, err)
-			return
-		case child.State == store.RunEnded:
-			done()
-			writeBody(w, a.APIVersion, &workerapi.Child{Run: id, Ended: true, Outcome: child.Outcome, Reason: child.Reason})
-			return
-		}
-		select {
-		case <-ended:
-		case <-tick.C:
-		case <-hold.C:
-			done()
-			writeBody(w, a.APIVersion, &workerapi.Child{Run: id})
-			return
-		case <-ctx.Done():
-			done()
-			return
-		}
-		done()
-	}
+	s.awaitEnd(w, r, a, id, func(_ context.Context, child *store.Run) (any, error) {
+		return &workerapi.Child{Run: id, Ended: true, Outcome: child.Outcome, Reason: child.Reason}, nil
+	}, &workerapi.Child{Run: id})
 }
 
 // serveChildStop stops the child of a step's try (workerapi.PathChildStop),
-// as Children does, and answers 204 once its stop is stored. A try that
-// has no child is 404. An attempt that no longer holds its job may stop
-// its step's child too: stopping changes nothing that runs but the child.
+// a workflow its step calls, as stopOf does.
 func (s *Server) serveChildStop(w http.ResponseWriter, r *http.Request, a *store.Attempt) {
-	ctx := r.Context()
 	body, ok := s.readBody(w, r, MaxClaimBody)
 	if !ok {
 		return
@@ -170,28 +126,7 @@ func (s *Server) serveChildStop(w http.ResponseWriter, r *http.Request, a *store
 		s.badRequest(w, r, "a child's stop that isn't one")
 		return
 	}
-	if stop.Step < 0 || stop.Try < 0 || stop.Reason != plan.ReasonCancelled && stop.Reason != plan.ReasonTimeout {
-		s.badRequest(w, r, "a child's stop of no step's try, or for no reason a step is stopped for")
-		return
-	}
-	var id string
-	if err := s.store.View(ctx, func(tx *store.Tx) error {
-		var err error
-		id, err = tx.Child(a.ID, stop.Step, stop.Try)
-		return err
-	}); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeStatus(w, http.StatusNotFound)
-			return
-		}
-		s.writeError(w, r, err)
-		return
-	}
-	if err := s.children.StopChild(ctx, id, stop.Reason); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	s.stopOf(w, r, a, "a child's stop", stop.Step, stop.Try, false, false, stop.Reason)
 }
 
 // Ended answers the polls for the ends of the child runs ids that the

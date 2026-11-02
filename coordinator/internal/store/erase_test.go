@@ -227,6 +227,18 @@ ON CONFLICT (attempt_id, step, try) DO UPDATE SET digest = excluded.digest`, a.I
 	inTx(t, s, func(tx *Tx) error { return tx.EndRun(b.Run, plan.OutcomeCancelled, plan.ReasonCancelled) })
 	erased("once a run has ended", "written-before-a-run-ends")
 
+	// An erase says whether it found any, which the store warns of where
+	// it can't truncate the log after.
+	keepDigests(s, "found-by-an-erase")
+	inTx(t, s, func(tx *Tx) error {
+		for i, want := range []bool{true, false} {
+			if found, err := tx.eraseDigests(); err != nil || found != want {
+				t.Errorf("erase %d found any: %t, %v; want %t", i+1, found, err, want)
+			}
+		}
+		return nil
+	})
+
 	// Each erase finds the rows by the index of those that hold a digest.
 	inTx(t, s, func(tx *Tx) error {
 		for table, index := range map[string]string{"meridian_attempts": "meridian_attempts_end_digest", "meridian_actions": "meridian_actions_plain_digest"} {
@@ -728,6 +740,254 @@ func TestEraseAfterLastTry(t *testing.T) {
 	}
 	if err := release(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestCloseWarnsOfItsOwn checks that a store warns, as it closes, that the
+// write-ahead log may still hold a secret record only where its own
+// process deleted one, which another process's reader kept it from
+// truncating: a short command, as a meridian session url run beside a
+// meridian run, which deletes none, says nothing, though the truncation
+// its Open tries, for a process that ended before, is held up too; one
+// that ends a run, which deletes its record, warns.
+func TestCloseWarnsOfItsOwn(t *testing.T) {
+	t.Parallel()
+	r := newErasureRig(t)
+	t.Cleanup(func() {
+		if err := r.s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	release := r.hold()
+	defer func() { _ = release() }()
+	open := func() (*Store, *lockedWriter, *bytes.Buffer) {
+		t.Helper()
+		var mu sync.Mutex
+		var buf bytes.Buffer
+		w := &lockedWriter{&mu, &buf}
+		s, err := Open(t.Context(), r.path, &Options{Log: slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn}))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s, w, &buf
+	}
+	read := func(w *lockedWriter, buf *bytes.Buffer) string {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return buf.String()
+	}
+
+	short, w, buf := open()
+	short.walMu.Lock()
+	pending, here := short.pending, short.erasedHere
+	short.walMu.Unlock()
+	if !pending || here {
+		t.Errorf("the truncation Open tried, held up, is pending %t, of its own %t; want pending, not its own", pending, here)
+	}
+	// Tried again for a while, it says nothing either.
+	short.walMu.Lock()
+	short.warnAfter = 10 * time.Millisecond
+	short.walMu.Unlock()
+	time.Sleep(300 * time.Millisecond) //nolint:forbidigo // the store tries again, held up, past warnAfter
+	inTx(t, short, func(tx *Tx) error {
+		_, err := tx.NewRunID()
+		return err
+	})
+	if err := short.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(w, buf); got != "" {
+		t.Errorf("a store that deleted no secret record warned as it closed:\n%s", got)
+	}
+
+	ending, w, buf := open()
+	var id string
+	inTx(t, ending, func(tx *Tx) error {
+		var err error
+		if id, err = tx.NewRunID(); err != nil {
+			return err
+		}
+		if err := tx.InsertRun(NewRun{ID: id, Plan: testPlan(t), DefaultGroup: "local", RunDir: "/r", WorkflowID: fakeJobID(990)}); err != nil {
+			return err
+		}
+		return tx.InsertRecord(id, 1, []byte("the-wrapped-data-key"), []byte("another-secret-record"))
+	})
+	inTx(t, ending, func(tx *Tx) error { return tx.EndRun(id, plan.OutcomeSuccess, "") })
+	if err := ending.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(w, buf); !strings.Contains(got, "the next Open truncates it") {
+		t.Errorf("a store that deleted a secret record, which it couldn't truncate, didn't warn as it closed:\n%s", got)
+	}
+}
+
+// TestCloseWarnsOfLeftRecord checks the store's count of the secret records
+// the write-ahead log may hold, which outlives a process that ended before
+// it truncated the log: a later process whose Open can't truncate it
+// either, as a short command beside a run going on, warns of it as it
+// closes; once a truncation has finished, which covers it, one that can't
+// truncate says nothing. The counts hold nothing of what was deleted.
+func TestCloseWarnsOfLeftRecord(t *testing.T) {
+	t.Parallel()
+	r := newErasureRig(t)
+	t.Cleanup(func() {
+		if err := r.s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	open := func() (*Store, func() string) {
+		t.Helper()
+		var mu sync.Mutex
+		var buf bytes.Buffer
+		w := &lockedWriter{&mu, &buf}
+		s, err := Open(t.Context(), r.path, &Options{Log: slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn}))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s, func() string {
+			mu.Lock()
+			defer mu.Unlock()
+			return buf.String()
+		}
+	}
+	counts := func() (marked, done int64) {
+		t.Helper()
+		if err := r.s.View(t.Context(), func(tx *Tx) error {
+			var err error
+			marked, done, err = tx.eraseCounts()
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return marked, done
+	}
+
+	release := r.hold()
+	// A process that ends a run, and ends itself before it can truncate
+	// the log: its record stays in it, and so does the mark.
+	left, _ := open()
+	var id string
+	inTx(t, left, func(tx *Tx) error {
+		var err error
+		if id, err = tx.NewRunID(); err != nil {
+			return err
+		}
+		if err := tx.InsertRun(NewRun{ID: id, Plan: testPlan(t), DefaultGroup: "local", RunDir: "/r", WorkflowID: fakeJobID(991)}); err != nil {
+			return err
+		}
+		return tx.InsertRecord(id, 1, []byte("the-wrapped-data-key"), []byte("a-record-left-behind"))
+	})
+	inTx(t, left, func(tx *Tx) error { return tx.EndRun(id, plan.OutcomeSuccess, "") })
+	if err := left.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if marked, done := counts(); marked != 1 || done != 0 {
+		t.Fatalf("a record left in the log is counted %d, and %d covered; want 1, and 0", marked, done)
+	}
+	short, warnings := open()
+	if err := short.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := warnings(); !strings.Contains(got, "the next Open truncates it") {
+		t.Errorf("a store whose Open couldn't truncate a record left in the log didn't warn:\n%s", got)
+	}
+
+	// Once a truncation has finished, the mark is gone, and a store that
+	// can't truncate says nothing.
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	cleared, _ := open()
+	if err := cleared.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if marked, done := counts(); marked != 1 || done != 1 {
+		t.Errorf("once the log was truncated, %d deletions are counted, and %d covered; want 1 of 1", marked, done)
+	}
+	release = r.hold()
+	defer func() { _ = release() }()
+	quiet, warnings := open()
+	if err := quiet.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := warnings(); got != "" {
+		t.Errorf("once the mark was gone, a store that couldn't truncate warned:\n%s", got)
+	}
+}
+
+// TestOpenMarksDigests checks that an Open that erases plain digests, a
+// release before kept, marks them as a deletion the write-ahead log may
+// hold, where it can't truncate the log, as a run's end does its record.
+func TestOpenMarksDigests(t *testing.T) {
+	t.Parallel()
+	path := newPath(t)
+	s := openAt(t, path)
+	a := claimedAttempt(t, s, 'a')
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.EndAttempt(a.ID, AttemptEnd{Kind: EndCompleted, Outcome: plan.OutcomeSuccess}); err != nil {
+			return err
+		}
+		_, err := tx.exec("UPDATE meridian_attempts SET complete_digest = ? WHERE id = ?", []byte("a-plain-digest"), a.ID)
+		return err
+	})
+	// Another process reads as this one opens.
+	reading, done, result := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		result <- s.View(context.WithoutCancel(t.Context()), func(tx *Tx) error {
+			if _, err := tx.Attempt(a.ID); err != nil {
+				return err
+			}
+			close(reading)
+			<-done
+			return nil
+		})
+	}()
+	<-reading
+	again := openAt(t, path)
+	var marked, covered int64
+	if err := again.View(t.Context(), func(tx *Tx) error {
+		var err error
+		marked, covered, err = tx.eraseCounts()
+		return err
+	}); err != nil || marked != 1 || covered != 0 {
+		t.Errorf("digests an Open erased, which it couldn't truncate, are counted %d, and %d covered, %v; want 1, and 0", marked, covered, err)
+	}
+	close(done)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEraseCountsOnlyRise checks that a deletion counted as another
+// truncation finishes is never taken for one that truncation covered: A
+// reads the count, and truncates; C's truncation finishes, and covers it;
+// B deletes a record, and counts it; then A's, finishing, covers no more
+// than it read, and B's stays pending, as it would were B to end before it
+// truncated the log. Before, A deleted a mark whose value was B's too.
+func TestEraseCountsOnlyRise(t *testing.T) {
+	t.Parallel()
+	s := open(t)
+	pending := func() bool {
+		t.Helper()
+		var p bool
+		inTx(t, s, func(tx *Tx) error {
+			var err error
+			p, err = tx.erasePending()
+			return err
+		})
+		return p
+	}
+	inTx(t, s, func(tx *Tx) error { return tx.markErasePending() })
+	readByA := s.erasedMark(t.Context())
+	if readByA != 1 || !pending() {
+		t.Fatalf("A read %d, pending %t; want 1, pending", readByA, pending())
+	}
+	if !s.truncateMarked(t.Context(), s.truncateWAL) || pending() {
+		t.Fatal("C's truncation didn't cover the deletion")
+	}
+	inTx(t, s, func(tx *Tx) error { return tx.markErasePending() })
+	if s.eraseCovered(t.Context(), readByA) || !pending() {
+		t.Error("A's truncation, covering what it read before it began, took B's deletion for one it covered")
 	}
 }
 

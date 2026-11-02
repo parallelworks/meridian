@@ -8,7 +8,6 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
-	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -21,7 +20,7 @@ import (
 // the coordinator performs, in an attempt of a version of the worker API
 // that has it (asksCoordinator), and a workflow, in such an attempt
 // (callsWorkflow); and where format 1 runs it: where its job runs, unless
-// its ssh: names another host than its job's (sameSSH), or is null, or
+// its ssh: names another host than its job's (plan.SameLogin), or is null, or
 // gives no remoteHost, in a job on a host, which runs it where the job
 // would run without its ssh:. Such a step runs elsewhere, as a step run
 // (elsewhere), in an attempt of version 3 of the worker API or later, but
@@ -55,7 +54,7 @@ func (a *attempt) runnable(rs *plan.ReadyStep, path string) (note, refused *prob
 	job := a.job.Target.Inline
 	canElsewhere := a.claim.APIVersion >= workerapi.Version3 && a.job.Steps[rs.Index].Source == nil
 	switch {
-	case named && job != nil && sameSSH(rs.SSH.SSH, job.SSH):
+	case named && job != nil && plan.SameLogin(rs.SSH.SSH, job.SSH):
 		// A step whose ssh: names its job's host and login runs where its
 		// job runs: here.
 		return nil, nil, false
@@ -222,26 +221,4 @@ func noted(note *problems.Diagnostic, ds problems.Diagnostics) problems.Diagnost
 		return ds
 	}
 	return append(problems.Diagnostics{*note}, ds...)
-}
-
-// sshKeys are the keys of a format 1 ssh: that say which host, and which
-// login on it, a step runs on, by which ACTIVATE keys the connections it
-// keeps, and reuses a job's for a step whose are the same. Its others, such
-// as disconnect-timeout, don't change where the step runs. remoteHost is
-// as written: ACTIVATE reads host:22 apart from host, as host:port is
-// where it connects, and host an alias its ssh_config can resolve.
-var sshKeys = []string{"remoteHost", "remoteUser", "jumpNodeHost", "jumpNodeUser"}
-
-// sameSSH reports whether two ssh: mappings, a step's and its job's, name
-// the same host and login (sshKeys), each as text, as ACTIVATE reads them,
-// in which null, and a key that isn't there, are "".
-func sameSSH(a, b plan.Data) bool {
-	am, _ := a.Get().(map[string]any)
-	bm, _ := b.Get().(map[string]any)
-	for _, k := range sshKeys {
-		if expr.Text(am[k]) != expr.Text(bm[k]) {
-			return false
-		}
-	}
-	return true
 }

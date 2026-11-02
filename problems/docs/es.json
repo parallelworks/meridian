@@ -818,6 +818,120 @@
       "Quita disconnect-timeout, o escríbelo como lo lee el formato 1, como -1 para un paso que nunca se rinde con su host."
     ]
   },
+  "session_redirect_twice": {
+    "title": "Más de una sesión a la que llevar al usuario",
+    "why": "Una sesión con redirect: true es aquella a la que se lleva a quien ejecuta el flujo de trabajo una vez que está lista, y una ejecución solo puede llevarle a una sesión. Así que el formato 1 rechaza, al crear la ejecución, un flujo de trabajo en el que más de una sesión la tiene. Un redirect: que da una expresión se comprueba al empezar la ejecución, una vez que se conoce.",
+    "fix": [
+      "Deja redirect: true en una sola sesión, y quítalo, o ponlo a false, en las demás."
+    ]
+  },
+  "session_user_unsupported": {
+    "title": "Nombre de inicio de sesión que la ruta de una sesión no puede contener",
+    "why": "Meridian sirve una sesión en esta máquina en /me/session/<usuario>/<nombre>/, como hace la plataforma del formato 1, y los flujos de trabajo construyen esa ruta a partir de PW_USER, el nombre de inicio de sesión de quien ejecuta Meridian, para dar a una aplicación su ruta base o mostrar su dirección. Así que la ruta contiene el nombre tal cual, byte a byte: escapado, no sería la ruta que se dio a la aplicación. Un nombre de letras, dígitos, ., _, -, @ y ~, como usuario@dominio, no necesita escaparse, salvo . y .., que los segmentos de punto de una ruta quitan; cualquier otro no se puede servir.",
+    "fix": [
+      "Ejecuta el flujo de trabajo como un usuario cuyo nombre de inicio de sesión solo tenga letras, dígitos, ., _, -, @ y ~."
+    ]
+  },
+  "session_local_port_taken": {
+    "title": "Puerto de la sesión en uso",
+    "why": "Meridian sirve cada sesión en un puerto propio de las direcciones de bucle local de esta máquina, 127.0.0.1 y [::1], el mismo puerto en ambas, uno que elige el sistema. Un proceso que toma una sesión, como después de que terminara el meridian run que la servía, la sirve en el puerto en que se servía antes, y, donde otro programa lo tiene ahora, en otro. Donde el sistema eligió el puerto, cada puerto que eligió, tantas veces como Meridian lo pidió, era de otro programa en [::1], así que Meridian no sirve la sesión en ninguno.",
+    "fix": [
+      "Para un puerto en que se servía antes la sesión: nada, ya que Meridian sirve la sesión en otro puerto, que da meridian session url.",
+      "Para un puerto que eligió el sistema: busca qué tiene puertos en [::1], como muestra ss -ltn, detenlo y vuelve a ejecutar meridian resume."
+    ]
+  },
+  "session_local_port_refused": {
+    "title": "Puerto de la sesión en el que esta máquina no deja escuchar",
+    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, la dirección de bucle local de esta máquina, uno que elige el sistema, o, para una sesión que toma un proceso, aquel en que se servía antes. El sistema no dejó que Meridian escuchara allí, como donde una política restringe los puertos en que un programa puede escuchar.",
+    "fix": [
+      "Permite que Meridian escuche en los puertos de 127.0.0.1 y [::1] que elige el sistema, y vuelve a ejecutar meridian resume, o meridian session url."
+    ]
+  },
+  "session_service_unchecked": {
+    "title": "Servicio de la sesión cuyo usuario Meridian no puede saber",
+    "why": "Una sesión que apunta a un servicio de esta máquina se sirve pasando cada petición al puerto que dio el flujo de trabajo, en la dirección de bucle local de esta máquina, donde cualquier usuario de la máquina puede escuchar mientras el servicio no lo hace, como mientras empieza, o después de detenerse, y recibiría las peticiones de la sesión, con tus cookies y contraseñas de su aplicación. Así que, antes de enviar una petición, Meridian pregunta al sistema quién tiene el otro extremo de su conexión: Linux mediante NETLINK_SOCK_DIAG, y macOS y FreeBSD en sus listas de sockets TCP. Antes de servir una sesión en un servicio de aquí, Meridian comprueba que el sistema lo diga de una conexión a un oyente propio. Aquí no lo dijo: el sistema no quiso decirlo, como en un entorno aislado que rechace los sockets NETLINK_SOCK_DIAG, o lo dijo de una forma que Meridian no lee, como podría hacerlo una versión de macOS o FreeBSD cuya lista no conoce. Así que Meridian no pasa las peticiones de la sesión a nadie, en lugar de a un usuario que no comprobó, y un paso que apunta una sesión a un servicio de aquí falla. Una sesión que apunta a un clúster no se comprueba así: es el host de su clúster el que conecta con el servicio.",
+    "fix": [
+      "Ejecuta meridian donde el sistema diga quién escucha en un puerto: en Linux, fuera de un entorno aislado que rechace los sockets NETLINK_SOCK_DIAG que usa ss; o en macOS o FreeBSD.",
+      "Revisa el registro de meridian run, que dice por qué el sistema no quiso decirlo."
+    ]
+  },
+  "session_name_taken": {
+    "title": "Nombre de sesión que tiene otra sesión",
+    "why": "El nombre de una sesión es su ruta, /me/session/<usuario>/<nombre>/, y aquello por lo que update-session la nombra, así que dos sesiones que no han terminado no tienen el mismo nombre. El nombre es uno que eligió el flujo de trabajo, como el valor por defecto de prompt-for-name, que también tiene otra sesión que no ha terminado: otra de las sessions: del flujo de trabajo, o una de otra ejecución, que sigue en marcha.",
+    "fix": [
+      "Nombra cada una de las sesiones del flujo de trabajo de otra forma, o termina la otra ejecución, con meridian cancel."
+    ]
+  },
+  "session_name_empty": {
+    "title": "update-session sin el nombre de una sesión",
+    "why": "Un paso que usa parallelworks/update-session apunta la sesión que nombra el name de su with:, como ${{ sessions.<clave> }} da una de las de la ejecución. Su name estaba vacío, o faltaba, como cuando lee una entrada o una salida que no tiene valor.",
+    "fix": [
+      "Da a name el nombre de una sesión, como ${{ sessions.<clave> }}, con la clave de una de las sessions: del flujo de trabajo."
+    ]
+  },
+  "session_unknown": {
+    "title": "No existe esa sesión",
+    "why": "Un paso que usa parallelworks/update-session apunta una sesión que creó el árbol de su ejecución, como la crearon sus sessions:, que termina cuando termina la raíz del árbol. Esa sesión no está: el nombre no es el de ninguna, o la ejecución que la creó ha terminado.",
+    "fix": [
+      "Nombra una sesión de la propia ejecución, como la da ${{ sessions.<clave> }}."
+    ]
+  },
+  "session_not_permitted": {
+    "title": "Sesión que la ejecución no puede apuntar",
+    "why": "Como decide la plataforma del formato 1, una ejecución puede apuntar una sesión que creó su propio árbol, y también un flujo de trabajo al que llama; una cuyo flujo de trabajo tiene '*' en permissions: actúa como la persona que la ejecuta, y puede apuntar cualquier sesión suya. Esta sesión es de otra ejecución, y el árbol de esta ejecución no pide '*'.",
+    "fix": [
+      "Apunta una sesión que creó el propio árbol de la ejecución, como la da ${{ sessions.<clave> }}, o da al flujo de trabajo de arriba del árbol permissions: ['*'], si ha de actuar como tú."
+    ]
+  },
+  "session_field_unsupported": {
+    "title": "Sesión que meridian run no puede servir",
+    "why": "meridian run sirve una sesión en esta máquina, mientras dura su ejecución, en un puerto propio. detach: true pide una sesión que sobrevive a su ejecución, lo que necesita un coordinador que sobreviva al comando, como será meridian serve. openAI: true pide a una plataforma registrar la sesión como el punto de acceso de un modelo, lo que no está aquí. useCustomDomain: true lo ignora, como el formato 1 donde una plataforma no tiene dominio para sesiones: aquí cada sesión tiene un nombre de host propio.",
+    "fix": [
+      "Quita el campo, o ponlo a false, para ejecutar el flujo de trabajo con meridian run."
+    ]
+  },
+  "session_name_needed": {
+    "title": "Sesión que pide un nombre",
+    "why": "El formulario del formato 1 pide a quien ejecuta un flujo de trabajo el nombre de una sesión cuyo prompt-for-name no da valor por defecto. meridian run no pregunta a nadie: nombra la sesión por su valor por defecto, que debe ser un nombre que la ruta de una URL contenga tal cual, como lo contiene la ruta de la sesión, y no puede ser una expresión, que solo se evalúa después de nombrar la sesión.",
+    "fix": [
+      "Da a prompt-for-name un valor por defecto literal, como {default: mi-sesion}."
+    ]
+  },
+  "session_update_unsupported": {
+    "title": "update-session que meridian run no puede hacer",
+    "why": "targetInfo apunta una sesión a un recurso de Kubernetes, al que llega una plataforma con sus propias credenciales, y openAI y apiKey la registran como el punto de acceso de un modelo: meridian run no tiene ninguna de las dos cosas.",
+    "fix": [
+      "Quita el campo del with: de update-session."
+    ]
+  },
+  "session_url_invalid": {
+    "title": "Enlace que no es una URL http o https",
+    "why": "update-session con type: link apunta la sesión a una URL, que meridian muestra para que la abra quien ejecuta el flujo de trabajo, y para la que no sirve nada. Debe ser una URL http o https absoluta.",
+    "fix": [
+      "Da a url la dirección de la página, como https://example.com/."
+    ]
+  },
+  "session_port_invalid": {
+    "title": "Puerto que update-session no puede leer",
+    "why": "remotePort, el puerto del servicio, es un número entero de 1 a 65535, o el texto de uno, como lo lee el formato 1, y un túnel lo necesita; el formato 1 acepta más, como -1 o +80, que Meridian rechaza. localPort, el formato 1 lo ignora, y también Meridian, que sirve una sesión en un puerto que elige el sistema; pero el formato 1 aún hace fallar un paso cuyo localPort no es un número, o el texto de un número entero, y también Meridian.",
+    "fix": [
+      "Da remotePort como un número de 1 a 65535, como remotePort: 8888, y quita localPort."
+    ]
+  },
+  "session_target_unknown": {
+    "title": "Destino de una sesión que no nombra ningún clúster",
+    "why": "El target de un túnel es desde dónde se llega a su servicio: el workspace, esta máquina, para ninguno, \"\", localhost o user-workspace; o un clúster, por su id, que, para un clúster de clusters.yaml, es su nombre, como lo da ${{ inputs.<clúster>.id }}. Meridian llega al servicio por SSH a través del host del clúster.",
+    "fix": [
+      "Apunta target a ${{ inputs.<clúster>.id }} de una entrada compute-clusters, o añade el clúster a clusters.yaml."
+    ]
+  },
+  "session_tls_unsupported": {
+    "title": "Sesión por TLS a la que meridian run aún no llega",
+    "why": "Un túnel a esta máquina cuya sesión tiene useTLS: true se sirve por HTTPS hacia su servicio. meridian run aún no puede comprobar el certificado de un servicio de esta máquina, y no llega a él por HTTP en su lugar. Un túnel a un clúster ignora useTLS, como el formato 1.",
+    "fix": [
+      "Sirve la aplicación por HTTP en la dirección de bucle local de esta máquina, y quita useTLS de la sesión."
+    ]
+  },
   "runs_on_invalid": {
     "title": "runs-on no es un lugar donde ejecutar",
     "why": "El runs-on: de un trabajo elige dónde se ejecuta, y una expresión en él dio algo que no nombra ningún lugar. runs-on recibe el nombre de un grupo de ejecución, como lo da una entrada execution-groups; un mapa con execution-group:, o con environment: y su clúster y nombre; o un destino de cómputo, como lo da una entrada compute-target.",
@@ -1251,6 +1365,20 @@
       "Haz que el paso escriba un valor más corto, o con menos saltos de línea, tabulaciones y retornos de carro, o escribe el valor en un archivo del directorio de la ejecución, y la ruta del archivo en $OUTPUTS."
     ]
   },
+  "masks_too_many": {
+    "title": "Demasiadas cadenas que enmascarar para la ejecución propia de un paso",
+    "why": "Un paso que llama a un flujo de trabajo, o cuyo ssh: lo sitúa en otro host distinto del de su trabajo, se ejecuta como una ejecución propia, cuyos workers enmascaran lo que enmascara el worker de su trabajo: los secretos de su ejecución, las variables secretas de la plataforma, lo que el trabajo obtuvo de uno de ellos y lo que enmascaró el paso que llamó a la ejecución del trabajo, si alguno lo hizo. El worker se lo da todo al coordinador al pedir la ejecución, y el coordinador lo guarda en el registro secreto de la ejecución. Acepta como mucho el número de cadenas que el mensaje da como límite. Así se mantienen acotados el registro y el enmascaramiento de cada cadena en cada línea que registran los workers de la ejecución. El trabajo enmascara más, así que el paso falla y no se vuelve a intentar: el worker nunca pide la ejecución con menos, lo que dejaría que sus registros mostraran el resto.",
+    "fix": [
+      "Haz que el trabajo lea menos secretos, u obtenga menos valores de ellos, por ejemplo moviendo los pasos que leen algunos de ellos a un trabajo propio."
+    ]
+  },
+  "masks_too_large": {
+    "title": "Cadenas que enmascarar demasiado grandes para la ejecución propia de un paso",
+    "why": "Un paso que llama a un flujo de trabajo, o cuyo ssh: lo sitúa en otro host distinto del de su trabajo, se ejecuta como una ejecución propia, cuyos workers enmascaran lo que enmascara el worker de su trabajo: los secretos de su ejecución, las variables secretas de la plataforma, lo que el trabajo obtuvo de uno de ellos y lo que enmascaró el paso que llamó a la ejecución del trabajo, si alguno lo hizo. El worker se lo da todo al coordinador al pedir la ejecución, y el coordinador lo guarda en el registro secreto de la ejecución. Acepta como mucho, en total, los bytes que el mensaje da como límite. Así se mantienen acotados el registro y el enmascaramiento de cada cadena en cada línea que registran los workers de la ejecución. El trabajo enmascara más, así que el paso falla y no se vuelve a intentar: el worker nunca pide la ejecución con menos, lo que dejaría que sus registros mostraran el resto.",
+    "fix": [
+      "Haz que el trabajo lea menos secretos, u obtenga menos valores de ellos, por ejemplo moviendo los pasos que leen algunos de ellos a un trabajo propio."
+    ]
+  },
   "cancel_jobs_job_unknown": {
     "title": "Trabajo que un paso no puede cancelar",
     "why": "El jobs: de un paso parallelworks/cancel-jobs nombra los trabajos de su ejecución que hay que cancelar. Este nombre no es el de ningún trabajo de la ejecución, o es el de un trabajo con matriz, cuyas instancias el formato 1 conoce por otros nombres, así que no cancela ninguna. Como en el formato 1, el paso no hace nada por ese nombre y tiene éxito.",
@@ -1546,18 +1674,49 @@
   },
   "cluster_unknown": {
     "title": "Clúster desconocido",
-    "why": "El valor de una entrada compute-clusters nombra un clúster, y la ejecución ve sus detalles, como su ip y su schedulerType. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, digan lo que digan include-workspace, provider y csp de la entrada, que solo eligen lo que lista un formulario.",
+    "why": "El valor de una entrada compute-clusters o compute-resources nombra un clúster por su URI pw://, y la ejecución ve sus detalles, como su ip y su schedulerType. En la máquina que ejecuta el flujo de trabajo, una URI nombra el workspace, esta máquina, como pw://user-workspace o pw://<login>/user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, como pw://<login>/<nombre>, donde <login> es el nombre de inicio de sesión del usuario que ejecuta meridian, digan lo que digan include-workspace, provider y csp de la entrada, que solo eligen lo que lista un formulario. La URI de otro usuario no nombra ningún clúster aquí.",
     "fix": [
       "Elige uno de los clústeres que indica el mensaje, o el workspace.",
-      "O define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él."
+      "O define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él.",
+      "Un clúster de Kubernetes, que una entrada compute-resources puede nombrar en una plataforma, no se puede elegir aquí: ejecutado por sí solo, Meridian solo conoce los clústeres de clusters.yaml y el workspace. Ejecuta un flujo de trabajo así en una plataforma que proporcione el clúster de Kubernetes."
     ]
   },
   "clusters_none": {
     "title": "Ningún clúster entre los que elegir",
-    "why": "El valor de una entrada compute-clusters nombra un clúster. En la máquina que ejecuta el flujo de trabajo, un nombre es el workspace, esta máquina, como workspace o user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, y no hay clusters.yaml, o no define ningún clúster.",
+    "why": "El valor de una entrada compute-clusters o compute-resources nombra un clúster por su URI pw://. En la máquina que ejecuta el flujo de trabajo, una URI nombra el workspace, esta máquina, como pw://user-workspace o pw://<login>/user-workspace, o uno de los clústeres de clusters.yaml en el directorio de configuración de Meridian, como pw://<login>/<nombre>, y no hay clusters.yaml, o no define ningún clúster.",
     "fix": [
       "Define el clúster en clusters.yaml, en el directorio de configuración de Meridian, con el host SSH que llega a él.",
-      "O ejecuta el flujo de trabajo en una plataforma que proporcione los clústeres de la entrada."
+      "O ejecuta el flujo de trabajo en una plataforma que proporcione los clústeres de la entrada: ejecutado por sí solo, Meridian solo conoce los clústeres de clusters.yaml y el workspace, así que un clúster de Kubernetes, que una entrada compute-resources puede nombrar en una plataforma, no está disponible aquí."
+    ]
+  },
+  "cluster_uri_required": {
+    "title": "Valor que no es la URI pw:// de un clúster",
+    "why": "Una entrada compute-clusters o compute-resources nombra un clúster por su URI pw://. En la máquina que ejecuta el flujo de trabajo, un clúster de clusters.yaml en el directorio de configuración de Meridian es pw://, el nombre de inicio de sesión del usuario que ejecuta meridian, una barra y el nombre del clúster, como pw://alice/hpc; y el workspace, esta máquina, es también workspace o user-workspace, solos, tras pw:// o tras pw://alice/. Un nombre solo no es una URI, y pw:// con un nombre nombra el clúster de una organización en una plataforma, de los que una ejecución aquí no tiene ninguno. La entrada propia de una ejecución recibe la URI, como la da el formulario de una plataforma; solo un flujo de trabajo al que llama un paso recibe los detalles de un clúster, un mapeo, tal como los pasa quien lo llama.",
+    "fix": [
+      "Escribe el clúster como la URI que da el mensaje, con el nombre del clúster en clusters.yaml.",
+      "Da los detalles de un clúster solo a un flujo de trabajo al que llama un paso, en el with: del paso, como los pasa el formato 1."
+    ]
+  },
+  "cluster_login_unknown": {
+    "title": "Sin nombre de inicio de sesión con el que nombrar un clúster",
+    "why": "Una entrada compute-clusters o compute-resources nombra un clúster de clusters.yaml, o el workspace, por una URI que contiene el nombre de inicio de sesión del usuario que ejecuta Meridian, como pw://alice/hpc, como lo leen los flujos de trabajo de PW_USER. Meridian lo lee de la base de datos de usuarios del sistema, o si no de $USER, y no encontró ninguno, así que aquí ninguna URI nombra un clúster.",
+    "fix": [
+      "Ejecuta meridian como un usuario que tenga la base de datos de usuarios del sistema, o pon USER al nombre de inicio de sesión."
+    ]
+  },
+  "bucket_uri_invalid": {
+    "title": "Valor que no es la URI pw:// de un bucket",
+    "why": "Una entrada de bucket nombra un bucket por su URI en la plataforma que lo guarda: pw://, el usuario al que pertenece, una barra y el nombre del bucket. Una plataforma lee el nombre de un bucket solo, o pw:// y el nombre, como uno de los buckets del propio usuario, lo que necesita su nombre de usuario en la plataforma. Una ejecución aquí no tiene ninguno, así que la URI debe nombrar al usuario. La entrada propia de una ejecución recibe la URI, como la da el formulario de una plataforma; solo un flujo de trabajo al que llama un paso recibe los detalles de un bucket, un mapeo, tal como los pasa quien lo llama.",
+    "fix": [
+      "Escribe el bucket como pw://usuario/bucket, con el nombre de usuario en la plataforma de quien es dueño del bucket."
+    ]
+  },
+  "bucket_credentials_need_platform": {
+    "title": "Las credenciales del bucket necesitan una plataforma",
+    "why": "Una entrada de bucket con generateCredentials da a la ejecución claves de acceso limitadas al bucket, que crea la plataforma que lo guarda al crear la ejecución. Una ejecución aquí no tiene ninguna plataforma que las cree, y Meridian no inicia la ejecución sin las claves que lee el flujo de trabajo.",
+    "fix": [
+      "Ejecuta el flujo de trabajo en la plataforma que guarda el bucket.",
+      "O, si el flujo de trabajo puede llegar al bucket de otra forma, como con la CLI propia de la plataforma, quita generateCredentials."
     ]
   },
   "source_ref_invalid": {
@@ -1569,10 +1728,26 @@
   },
   "source_on_platform": {
     "title": "Flujo de trabajo que guarda una plataforma",
-    "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git.",
+    "why": "Un uses: que empieza por marketplace/ o workflow/ nombra un flujo de trabajo que guarda una plataforma, como ACTIVATE. Meridian por sí solo lee los flujos de trabajo de repositorios Git, y lee uno que guarda una plataforma solo a través de una asignación tuya: los workflows de sources.yaml asignan ese uses: a un flujo de trabajo de un repositorio Git, que entonces se lee y se fija como un uses: de github/ o gitlab/.",
     "fix": [
-      "Ejecuta el flujo de trabajo en la plataforma que guarda el flujo de trabajo que usa.",
-      "O nombra el flujo de trabajo por su repositorio Git, como github/<propietario>/<repositorio>@<revisión>, con su archivo en with: $yaml."
+      "Asigna el flujo de trabajo en los workflows de sources.yaml, con el uses: como clave, al flujo de trabajo en Git: por ejemplo, marketplace/tools/v1.2: {uses: github/acme/flows@main, yaml: tools.yaml}.",
+      "O nombra el flujo de trabajo por su repositorio Git en el propio uses:, como github/<propietario>/<repositorio>@<revisión>, con su archivo en with: $yaml."
+    ]
+  },
+  "source_version_invalid": {
+    "title": "Versión de un flujo de trabajo del marketplace que una asignación no admite",
+    "why": "En los workflows de sources.yaml, una clave marketplace/<slug>/{version} asigna cada versión del slug de un flujo de trabajo del marketplace: {version}, en su yaml y tras la @ de su uses, representa la versión que nombra un uses:. La versión es texto del propio flujo de trabajo, así que antes de que Git lea nada debe tener solo letras, dígitos, ., _, + y -, no empezar por . ni por -, tener como mucho 255 bytes, y la revisión y el archivo que da deben ser unos que un uses: pueda nombrar, para que no nombre un archivo fuera del repositorio ni se lea como una opción.",
+    "fix": [
+      "Nombra una versión que la asignación admita, como v1.2.",
+      "O asigna esa versión con una clave propia, marketplace/<slug>/<versión>, en los workflows de sources.yaml."
+    ]
+  },
+  "source_latest_not_mapped": {
+    "title": "Última versión de un flujo de trabajo del marketplace sin asignar",
+    "why": "Un uses: de marketplace/<slug>, o de marketplace/<slug>/latest, nombra la última versión del elemento, que decide su plataforma. La asignación de un slug en sources.yaml, marketplace/<slug>/{version}, no puede saber cuál es, así que Meridian asigna la última solo con una clave propia, marketplace/<slug>/latest: tu elección del flujo de trabajo, no la versión más alta del elemento.",
+    "fix": [
+      "Añade la clave que nombra el mensaje, marketplace/<slug>/latest, a los workflows de sources.yaml, asignada al flujo de trabajo que consideres la última.",
+      "O nombra una versión en el uses:, como marketplace/<slug>/<versión>."
     ]
   },
   "source_revision_not_found": {
@@ -1853,7 +2028,7 @@
   },
   "cluster_name_invalid": {
     "title": "Nombre de clúster no válido",
-    "why": "El nombre de un clúster es lo que nombra el valor de una entrada compute-clusters. workspace y user-workspace nombran esta máquina, como el formato 1 nombra el workspace.",
+    "why": "El nombre de un clúster es lo que nombra el valor de una entrada compute-clusters. workspace y user-workspace nombran esta máquina, como el formato 1 nombra el workspace. El nombre de un clúster es también su id, que lee el destino de una sesión, y el formato 1 también lee el destino localhost como el workspace.",
     "fix": [
       "Cambia el nombre del clúster."
     ]
@@ -1864,6 +2039,27 @@
     "fix": [
       "Corrige el valor como necesita su clave.",
       "Para un host que necesite más, como un puerto, un usuario con el que iniciar sesión, un host de salto o una dirección IPv6, nombra un alias que defina tu ssh_config."
+    ]
+  },
+  "workflow_mapping_key_invalid": {
+    "title": "Asignación de algo que no es un flujo de trabajo que guarda una plataforma",
+    "why": "Cada clave de los workflows de sources.yaml es un uses: que nombra un flujo de trabajo que guarda una plataforma: marketplace/<slug>/<versión>, una versión de un flujo de trabajo del marketplace; marketplace/<slug>/{version}, cada versión de su slug que ninguna clave propia asigna; o workflow/<nombre>, un flujo de trabajo guardado. Una plantilla de versión es la versión entera, y ninguna otra parte de una clave lleva una llave.",
+    "fix": [
+      "Escribe la clave como la escribe un uses:, como marketplace/tools/v1.2, marketplace/tools/{version} o workflow/nightly."
+    ]
+  },
+  "workflow_mapping_repeated": {
+    "title": "Dos asignaciones de un mismo flujo de trabajo",
+    "why": "Dos claves de los workflows de sources.yaml nombran el mismo flujo de trabajo, como el formato 1 lee un uses:: marketplace/<slug>@<versión> y marketplace/<slug>/<versión> son uno, y también lo son marketplace/<slug> y marketplace/<slug>/latest. No está claro cuál de sus asignaciones leería una ejecución.",
+    "fix": [
+      "Quédate con una de las dos."
+    ]
+  },
+  "workflow_mapping_invalid": {
+    "title": "Asignación a algo que no es un flujo de trabajo en Git",
+    "why": "Cada asignación de los workflows de sources.yaml nombra un flujo de trabajo de un repositorio Git como lo hace el uses: de un paso: uses, como github/<propietario>/<repositorio>[@<revisión>] o gitlab/<grupo>/<proyecto>[@<revisión>]; yaml, su archivo, workflow.yaml si no nombra otro; y host, el servidor de un proyecto de GitLab, que gitlab-servers debe registrar. Git lo alcanza con tus credenciales, como para cualquier uses:, así que no puede nombrar otro flujo de trabajo que guarde una plataforma, ni una URL. Solo la clave de un slug, marketplace/<slug>/{version}, puede escribir la versión en su asignación, como {version}, en su yaml y tras la @ de su uses.",
+    "fix": [
+      "Escribe la asignación como un paso nombra un flujo de trabajo en Git, como {uses: github/acme/flows@main, yaml: flows/tools.yaml}."
     ]
   },
   "key_file_invalid": {
@@ -2314,6 +2510,94 @@
       "Ejecuta el trabajo en un miembro cuyos hosts ejecuten Linux, macOS o FreeBSD."
     ]
   },
+  "session_unreachable": {
+    "title": "El servicio de la sesión no responde",
+    "why": "Meridian sirve una sesión pasando cada petición a la dirección a la que la apuntó el flujo de trabajo: por SSH, a través del host de su clúster, o en esta máquina. Esa dirección no respondió: el servicio aún no ha empezado, se ha detenido, escucha en otra dirección, o el host no quiso conectar con ella.",
+    "fix": [
+      "Espera a que empiece el servicio, y vuelve a cargar la página.",
+      "Revisa la ejecución, con meridian status y meridian logs."
+    ]
+  },
+  "session_busy": {
+    "title": "Sesión con tantas conexiones a su servicio como puede tener",
+    "why": "Una sesión tiene a la vez como mucho tantas conexiones con su servicio abiertas, o abriéndose, una cuarta parte de las que Meridian abre por su conexión con el host del servicio, para que las páginas de una sesión, o un navegador que reintenta un servicio que no responde, no tomen lo que necesitan las demás sesiones del host. Una petición espera diez segundos como mucho por una. Cada página de la sesión que mantiene una conexión abierta, como un WebSocket, ocupa una mientras está abierta.",
+    "fix": [
+      "Cierra las páginas de la sesión que no usas, y vuelve a cargar la página.",
+      "Comprueba que el servicio de la sesión responde, con meridian status y meridian logs: las conexiones a uno que no responde ocupan su sitio hasta que desisten."
+    ]
+  },
+  "session_unauthorized": {
+    "title": "Sesión pedida sin un enlace de Meridian",
+    "why": "Cualquiera en esta máquina puede conectar con su dirección de bucle local, así que Meridian sirve una sesión solo a un navegador que abrió un enlace que hizo para ti. El enlace lleva un código que funciona una vez, dentro de diez minutos, y que da al navegador una cookie de la sesión, que funciona hasta que termina la ejecución, o hasta meridian session reset. Este navegador no tiene esa cookie: su enlace ya se usó, o caducó, o no abrió ninguno.",
+    "fix": [
+      "Ejecuta meridian session url con la ejecución y la clave de la sesión, tal como las da el mensaje, y abre el enlace que muestra, en el navegador con el que usas la sesión."
+    ]
+  },
+  "session_cross_origin": {
+    "title": "Petición a una sesión desde otra página",
+    "why": "Para un navegador, todos los puertos de 127.0.0.1 son un mismo sitio, así que una página que sirve otro programa en esta máquina podría, si no, enviar a la aplicación de esta sesión peticiones que llevan tu cookie para ella, ya que las conexiones WebSocket tampoco se limitan al origen de una página. Así que para una conexión WebSocket, y una petición que no sea GET, HEAD u OPTIONS, Meridian comprueba que viene de las propias páginas de la sesión, por sus cabeceras Origin y Sec-Fetch-Site, y rechaza cualquier otra.",
+    "fix": [
+      "Usa la aplicación desde las propias páginas de la sesión."
+    ]
+  },
+  "session_not_here": {
+    "title": "Ninguna sesión en esta ruta",
+    "why": "Meridian sirve cada sesión en un puerto propio de 127.0.0.1, bajo la ruta /me/session/<usuario>/<nombre>/, como la plataforma del formato 1 la sirve bajo esa ruta, que los flujos de trabajo dan a una aplicación como su ruta base. Nada más en el puerto es de la sesión.",
+    "fix": [
+      "Abre el enlace de la sesión, que muestra meridian session url."
+    ]
+  },
+  "session_host_refused": {
+    "title": "Sesión pedida en otro nombre de host",
+    "why": "Cada sesión se sirve en un nombre de host propio, <etiqueta>.localhost, cuya etiqueta son 128 bits aleatorios, que un navegador resuelve a la dirección de bucle local de esta máquina. Un navegador envía una cookie solo a su host, sea cual sea el puerto, así que ninguna petición a otro nombre, como 127.0.0.1, localhost o el de otra sesión, lleva la cookie de la sesión, y el almacenamiento de sus páginas es solo de la sesión; y el puerto de la sesión escucha en las dos direcciones de bucle local de esta máquina, 127.0.0.1 y [::1], donde tiene IPv6, así que ningún otro programa puede responder en el nombre y el puerto de la sesión. Meridian solo responde a peticiones dirigidas a ese nombre: rechaza una a 127.0.0.1, a localhost, o a un nombre que se hizo resolver a 127.0.0.1 (DNS rebinding). Chrome y Firefox resuelven por sí mismos cualquier nombre bajo localhost a esta máquina, y también curl y el resolvedor de systemd; un navegador que no lo hace no puede abrir la sesión, y Meridian no la sirve en 127.0.0.1 en su lugar.",
+    "fix": [
+      "Abre la sesión en la dirección que muestra meridian session url, en un navegador que resuelva los nombres bajo localhost, como Chrome y Firefox, o a través de ssh -L hacia ella."
+    ]
+  },
+  "session_service_foreign": {
+    "title": "Servicio de la sesión en el que escucha otro usuario",
+    "why": "Una sesión que apunta a un servicio de esta máquina se sirve pasando cada petición al puerto que dio el flujo de trabajo, en la dirección de bucle local de esta máquina, donde cualquier usuario de la máquina puede escuchar mientras el servicio no lo hace, como mientras empieza, o después de detenerse, y recibiría las peticiones de la sesión, con tus cookies y contraseñas de su aplicación. Así que, antes de enviar una petición, Meridian pregunta al sistema quién tiene el otro extremo de su conexión, y solo pasa la petición si lo tienes tú; o, en Linux, root, donde el sistema dice quién aceptó la conexión, y un proceso de root podría tomar cualquier conexión de todos modos. macOS y FreeBSD dicen quién creó el oyente, no quién acepta en él, y un oyente que creó root puede haberse pasado al programa de cualquier usuario, así que allí el oyente de root es también de otro usuario. Un oyente de otro usuario tenía esta conexión, así que Meridian la cerró sin enviar nada, y lo dijo una vez en el registro de la ejecución, con el usuario.",
+    "fix": [
+      "Busca el programa que escucha en el puerto, como muestran ss -ltnp o lsof -nP -iTCP, y haz que lo detengan.",
+      "Vuelve a iniciar el servicio de la sesión cuando el puerto esté libre, o apunta la sesión a un puerto en el que nadie más escuche."
+    ]
+  },
+  "session_service_owner_unknown": {
+    "title": "Conexión al servicio de una sesión cuyo usuario Meridian no puede saber",
+    "why": "Una sesión que apunta a un servicio de esta máquina se sirve pasando cada petición al puerto que dio el flujo de trabajo, en la dirección de bucle local de esta máquina, donde cualquier usuario de la máquina puede escuchar mientras el servicio no lo hace, como mientras empieza, o después de detenerse, y recibiría las peticiones de la sesión, con tus cookies y contraseñas de su aplicación. Así que, antes de enviar una petición, Meridian pregunta al sistema quién tiene el otro extremo de su conexión, y solo pasa la petición si lo tienes tú, o, en Linux, root. De esta conexión, Meridian no pudo saber quién la tiene: como cuando el sistema no muestra el otro extremo, ni siquiera tras un segundo, como el de un puerto publicado desde otro espacio de nombres de red mediante DNAT, como lo publica docker sin su proxy de usuario, o podman con root, que Meridian rechaza, o, en FreeBSD, un socket de otro usuario, que security.bsd.see_other_uids oculta; cuando lo muestra en un estado cuyo dueño no dice, como una conexión que el servicio cerró en cuanto la aceptó; o cuando Meridian no pudo preguntar, o leer la respuesta, como cuando no le queda ningún descriptor de archivo, la respuesta no llega, o la lista tiene lo que Meridian no lee, o dos sockets en ese extremo. Meridian cerró la conexión sin enviar nada; el registro de la ejecución dice, una vez, lo que dijo el sistema.",
+    "fix": [
+      "Haz que el servicio escuche en la dirección de bucle local de esta máquina, en el propio espacio de nombres de red de Meridian: publica el puerto de un contenedor mediante un proxy, como el proxy de usuario de docker, o el de podman sin root, en lugar de mediante DNAT.",
+      "Revisa el registro de meridian run, que dice lo que dijo el sistema de la conexión."
+    ]
+  },
+  "session_key_unknown": {
+    "title": "Ejecución sin esa sesión",
+    "why": "meridian session encuentra la sesión de una ejecución por su clave en las sessions: del flujo de trabajo, entre las de la llamada de la ejecución en su árbol que no han terminado: una sesión termina con la ejecución de arriba de su árbol. El mensaje lista las claves que tiene la ejecución.",
+    "fix": [
+      "Da la clave de una de las sesiones de la ejecución, como la dice la salida de la ejecución al servir la sesión."
+    ]
+  },
+  "session_not_ready": {
+    "title": "Sesión que aún no se sirve",
+    "why": "Una sesión se sirve una vez que un paso que usa parallelworks/update-session la apunta a un servicio, y el proceso que la sirve, que la toma, escucha en un puerto para ella; solo entonces tiene un enlace.",
+    "fix": [
+      "Espera al paso, que muestra meridian run, y vuelve a pedirlo."
+    ]
+  },
+  "session_not_served": {
+    "title": "Sesión que ningún proceso sirve",
+    "why": "Una sesión la sirve el meridian run, resume o cancel que la tomó, mientras ese proceso vive. Ese proceso canjea el código de un solo uso de su enlace, así que meridian session url no crea ninguno mientras ningún proceso sirve la sesión, pues nada lo canjearía.",
+    "fix": [
+      "Ejecuta meridian resume con la ejecución de arriba del árbol de la sesión, que vuelve a servir sus sesiones, y después pide un enlace."
+    ]
+  },
+  "login_name_unknown": {
+    "title": "Sin nombre de inicio de sesión para quien ejecuta meridian",
+    "why": "La ruta de una sesión es /me/session/<usuario>/<nombre>/, donde <usuario> es el nombre de inicio de sesión del usuario que ejecuta Meridian, como lo leen los flujos de trabajo de PW_USER. Meridian lo lee de la base de datos de usuarios del sistema, o si no de $USER, y no encontró ninguno.",
+    "fix": [
+      "Ejecuta meridian como un usuario que tenga la base de datos de usuarios del sistema, o pon USER al nombre de inicio de sesión."
+    ]
+  },
   "source_server_unknown": {
     "title": "Servidor de GitLab no registrado",
     "why": "El with: $host de un paso nombra el servidor de GitLab que contiene el flujo de trabajo que nombra su uses:. Git llega a un servidor con la configuración y las credenciales del propio usuario, así que Meridian solo llega a gitlab.com y a los servidores que el usuario registró, y no a cualquiera que nombre un flujo de trabajo: localmente, los que sources.yaml, en el directorio de configuración, enumera en gitlab-servers.",
@@ -2674,6 +2958,29 @@
     "fix": [
       "Pide a los administradores del host que permitan reenviar sockets Unix: AllowStreamLocalForwarding yes, o all, en sshd_config.",
       "Comprueba que ssh -R <ruta>:/dev/null <host> true puede reenviar un socket allí, desde la misma máquina y como el mismo usuario."
+    ]
+  },
+  "ssh_tcp_forwarding_refused": {
+    "title": "Host que no conecta con una dirección para Meridian",
+    "why": "Meridian llega a una dirección a través de un host como lo hacen ssh -L y ssh -W: por su conexión SSH con el host, pide al sshd del host que conecte con la dirección, y lleva esa conexión (direct-tcpip). Meridian no abre ningún puerto en el host. sshd se negó: no reenvía conexiones TCP de sus clientes, como con AllowTcpForwarding no o remote, o DisableForwarding yes, en sshd_config; un PermitOpen allí no permite la dirección; o la clave con la que Meridian inicia sesión tiene no-port-forwarding, o restrict, en authorized_keys.",
+    "fix": [
+      "Pide a los administradores del host que permitan reenviar conexiones TCP a la dirección: AllowTcpForwarding yes, o local, en sshd_config, con un PermitOpen que la permita, si hay uno.",
+      "Comprueba que ssh -W <dirección> <host> conecta, desde la misma máquina y como el mismo usuario."
+    ]
+  },
+  "ssh_tcp_connect_failed": {
+    "title": "Host que no pudo conectar con una dirección para Meridian",
+    "why": "Meridian llega a una dirección a través de un host como lo hacen ssh -L y ssh -W: por su conexión SSH con el host, pide al sshd del host que conecte con la dirección (direct-tcpip). sshd lo intentó y no pudo: nada escucha en la dirección, su nombre no se resuelve en el host, el host no llega a ella, o sshd no puede abrir otra conexión ahora. El mensaje muestra lo que dijo sshd.",
+    "fix": [
+      "Comprueba que lo que debería escuchar en la dirección se está ejecutando, y escucha en la dirección y el puerto que dio el flujo de trabajo, tal como los ve el host.",
+      "Comprueba que ssh -W <dirección> <host> conecta, desde la misma máquina y como el mismo usuario."
+    ]
+  },
+  "ssh_tcp_address_invalid": {
+    "title": "Dirección con la que Meridian no pide a un host que conecte",
+    "why": "Meridian llega a una dirección a través de un host pidiendo al sshd del host que conecte con ella (direct-tcpip, como hace ssh -L). La dirección viene de un flujo de trabajo, como el remoteHost y el remotePort de una sesión, así que Meridian solo la pide en una forma que el host no pueda leer como algo más que una dirección: el nombre de un host, de letras, dígitos, -, _ y puntos, que no empiece por -, o una dirección IPv4 o IPv6 sin corchetes; y un puerto de 1 a 65535. El mensaje muestra el valor con sus caracteres de control escapados, como \\n.",
+    "fix": [
+      "Da solo el nombre o la dirección del host, sin puerto ni corchetes, y su puerto como un número de 1 a 65535, como espera el flujo de trabajo."
     ]
   },
   "ssh_host_release_mismatch": {

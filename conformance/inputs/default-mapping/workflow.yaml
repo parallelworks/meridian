@@ -5,12 +5,12 @@ on:
         type: string
         default: web
       cluster:
-        type: compute-clusters
+        type: kubernetes-clusters
         default:
           name: ${{ inputs.name }}
           labels: ["${{ inputs.name }}", fixed]
       auth:
-        type: compute-clusters
+        type: kubernetes-clusters
         default:
           token: ${{ vars.TOKEN }}
           user: ${{ inputs.name }}

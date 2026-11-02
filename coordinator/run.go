@@ -24,6 +24,7 @@ import (
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
+	"github.com/parallelworks/meridian/workerapi"
 )
 
 // The coordinator's Keys are the seal package's.
@@ -76,6 +77,17 @@ type Options struct {
 	Variables compile.Variables
 	Inputs    compile.InputResolver
 	Sessions  compile.Sessions
+	// SessionHost serves the store's sessions where the coordinator runs.
+	// With one, and no Sessions, a coordinator that may write the store
+	// provides Sessions itself, keeping the sessions in the store, which
+	// ServeSessions has the host serve. Nil means none.
+	SessionHost SessionHost
+	// Env are the variables a platform gives every job's steps, by name,
+	// as format 1's PW_USER, which each claim gives the worker
+	// (workerapi.Claim.Env), in every run the coordinator works, whoever
+	// created it. The coordinator doesn't change them. Nil means none, as
+	// without a platform.
+	Env map[string]workerapi.EnvVar
 	// Groups gives the execution groups jobs run in. CreateRun checks a
 	// run's default group with it. Nil means it isn't checked, and that no
 	// job can be placed.
@@ -185,6 +197,22 @@ type Coordinator struct {
 	store  *store.Store
 	sealer *seal.Sealer
 	plans  *planCache
+	// sessionsWake tells ServeSessions that the store's sessions may have
+	// changed in this process.
+	sessionsWake chan struct{}
+	// sessionHolds are the sessions this process serves, while
+	// ServeSessions runs, or nil, each with what lets go of its hold
+	// (store.Store.HoldSession). sessionsMu guards them, and is held from
+	// when a session is read to when its host has been asked to serve it,
+	// so that the host serves it as the store has it once taken
+	// (holdSession).
+	sessionsMu   sync.Mutex
+	sessionHolds map[string]func()
+	// sessionsSeen are the IDs of the store's sessions that hadn't ended
+	// as ServeSessions last looked, and sessionsOpened what those sealed
+	// opened to, by ID, which sessionsMu guards too.
+	sessionsSeen   map[string]bool
+	sessionsOpened map[string]openedSession
 	// inserter inserts runs' workflows, and served works their jobs while
 	// Serve runs.
 	inserter *hopper.Client[*sql.Tx]
@@ -195,6 +223,9 @@ type Coordinator struct {
 	supervision  supervision
 	startTimeout time.Duration
 	pollInterval time.Duration
+	// sessionsPoll is how often ServeSessions looks at the store's
+	// sessions, for changes another process made.
+	sessionsPoll time.Duration
 	stopTimeout  time.Duration
 	followEvery  time.Duration
 	followHold   time.Duration
@@ -337,9 +368,12 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	*c = Coordinator{
 		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
-		startTimeout: 5 * time.Minute, pollInterval: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
+		startTimeout: 5 * time.Minute, pollInterval: time.Second, sessionsPoll: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, seenFailed: map[string]int{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
-		outlives: map[string]bool{}, checkoutWaits: checkoutWaits,
+		outlives: map[string]bool{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
+	}
+	if opts.SessionHost != nil && opts.Sessions == nil && !opts.ReadOnly {
+		c.opts.Sessions = sessionProvider{c: c}
 	}
 	c.wakersCtx, c.stopWakers = context.WithCancel(context.WithoutCancel(ctx))
 	if opts.ReadOnly {
@@ -415,8 +449,8 @@ func (c *Coordinator) lastTry(tx *store.Tx, attempt string, step, try int) bool 
 // background, and waits for them (wakeLaterGo); closes what members'
 // drivers set up for their workers to reach the coordinator, and the
 // drivers that are io.Closers; releases its holds on runs' Starts; and
-// closes the coordinator's store. Serve, ServeWorkers and ServeMembers
-// must have returned.
+// closes the coordinator's store. Serve, ServeWorkers, ServeMembers and
+// ServeSessions must have returned.
 func (c *Coordinator) Close() error {
 	c.wakersMu.Lock()
 	c.stopWakers()
@@ -534,55 +568,13 @@ func (c *Coordinator) insertRun(ctx context.Context, tx *store.Tx, id string, cr
 	if err != nil {
 		return err
 	}
-	wf := hopper.NewWorkflow("meridian run "+id, nil)
-	start := wf.Add(startArgs{Run: id}, &hopper.StepOpts{Insert: &hopper.InsertOpts{Queue: queue, MaxAttempts: c.retry.attempts}})
-	// A job needed on any instance of it has a marker, which waits for
-	// one, and which the jobs that need it so wait for in its place.
-	anys := anyNeeded(jobs)
-	marker := map[string]hopper.Step{}
-	for _, name := range anys {
-		marker[name] = wf.Add(anyArgs{Run: id, Job: name}, &hopper.StepOpts{
-			After: []hopper.Step{start}, OnDependencyFailure: hopper.DependencyIgnore,
-			Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
-		})
-	}
-	// Each job's supervisor runs after Start and its needs' supervisors,
-	// whatever became of them: Ready decides what their outcomes mean.
-	after := map[string]hopper.Step{}
-	for _, j := range jobs {
-		deps := []hopper.Step{start}
-		for _, n := range j.Needs {
-			if n.Any {
-				deps = append(deps, marker[n.Job])
-			} else {
-				deps = append(deps, after[n.Job])
-			}
-		}
-		after[j.Name] = wf.Add(jobArgs{Run: id, Key: j.Name}, &hopper.StepOpts{
-			After: deps, OnDependencyFailure: hopper.DependencyIgnore,
-			Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
-		})
-	}
-	deps := []hopper.Step{start}
-	for _, name := range anys {
-		deps = append(deps, marker[name])
-	}
-	for _, j := range jobs {
-		deps = append(deps, after[j.Name])
-	}
-	wf.Add(finishArgs{Run: id}, &hopper.StepOpts{
-		After: deps, OnDependencyFailure: hopper.DependencyIgnore,
-		Insert: &hopper.InsertOpts{Queue: sharedQueue, Await: true},
-	})
-	res, err := c.inserter.InsertWorkflowTx(ctx, tx.SQL(), wf)
+	wf, err := c.insertWorkflow(ctx, tx, id, queue, jobs)
 	if err != nil {
 		return err
 	}
-	// The finisher is the workflow's last job, which the end of a run of a
-	// root's tree wakes once the root's waits for them.
 	if err := tx.InsertRun(store.NewRun{
-		ID: id, Plan: created.Plan, DefaultGroup: group, RunDir: dir, WorkflowID: res.ID,
-		FinisherID: res.Jobs[len(res.Jobs)-1].Job.ID, Parent: link,
+		ID: id, Plan: created.Plan, DefaultGroup: group, RunDir: dir, WorkflowID: wf.id,
+		FinisherID: wf.finisher, Parent: link,
 	}); err != nil {
 		return err
 	}
@@ -591,19 +583,88 @@ func (c *Coordinator) insertRun(ctx context.Context, tx *store.Tx, id string, cr
 	if err := tx.KeepTexts(id, created.Texts); err != nil {
 		return err
 	}
-	// The workflow's jobs are in the order of its steps: Start, the
-	// markers, then the supervisors.
-	for i, name := range anys {
-		if err := tx.InsertAny(id, name, res.Jobs[1+i].Job.ID); err != nil {
+	for i, name := range wf.anys {
+		if err := tx.InsertAny(id, name, wf.markers[i]); err != nil {
 			return err
 		}
 	}
 	for i, j := range jobs {
-		if err := tx.InsertJob(store.NewJob{Run: id, Name: j.Name, Key: j.Name, SupervisorID: res.Jobs[1+len(anys)+i].Job.ID}); err != nil {
+		if err := tx.InsertJob(store.NewJob{Run: id, Name: j.Name, Key: j.Name, SupervisorID: wf.supervisors[i]}); err != nil {
 			return err
 		}
 	}
 	return tx.InsertRecord(id, gen, sealed.Key, sealed.Record)
+}
+
+// An insertedWorkflow is a run's hopper workflow, as insertWorkflow
+// stored it: its ID; its finisher's; anys, the jobs needed on any
+// instance of them, and markers, each one's marker; and supervisors, the
+// supervisors of its jobs, in the order insertWorkflow was given them.
+type insertedWorkflow struct {
+	id, finisher         hopper.JobID
+	anys                 []string
+	markers, supervisors []hopper.JobID
+}
+
+// insertWorkflow stores, in tx, the hopper workflow of the run id, whose
+// jobs are jobs, each after the jobs it needs: its Start, in queue; a
+// marker for each job needed on any instance of it (anyNeeded), which
+// waits for one, and which the jobs that need it so wait for in its place;
+// each job's supervisor, after Start and its needs' supervisors, or their
+// markers, whatever became of them, as Ready decides what their outcomes
+// mean; and its finisher, after them all, which the end of a run of a
+// root's tree wakes once the root's waits for them.
+func (c *Coordinator) insertWorkflow(ctx context.Context, tx *store.Tx, id, queue string, jobs []*plan.Job) (*insertedWorkflow, error) {
+	after := func(deps ...hopper.Step) *hopper.StepOpts {
+		return &hopper.StepOpts{
+			After: deps, OnDependencyFailure: hopper.DependencyIgnore,
+			Insert: &hopper.InsertOpts{Queue: sharedQueue, MaxAttempts: c.retry.attempts},
+		}
+	}
+	wf := hopper.NewWorkflow("meridian run "+id, nil)
+	start := wf.Add(startArgs{Run: id}, &hopper.StepOpts{Insert: &hopper.InsertOpts{Queue: queue, MaxAttempts: c.retry.attempts}})
+	anys := anyNeeded(jobs)
+	marker := map[string]hopper.Step{}
+	for _, name := range anys {
+		marker[name] = wf.Add(anyArgs{Run: id, Job: name}, after(start))
+	}
+	supervisor := map[string]hopper.Step{}
+	for _, j := range jobs {
+		deps := []hopper.Step{start}
+		for _, n := range j.Needs {
+			if n.Any {
+				deps = append(deps, marker[n.Job])
+			} else {
+				deps = append(deps, supervisor[n.Job])
+			}
+		}
+		supervisor[j.Name] = wf.Add(jobArgs{Run: id, Key: j.Name}, after(deps...))
+	}
+	deps := []hopper.Step{start}
+	for _, name := range anys {
+		deps = append(deps, marker[name])
+	}
+	for _, j := range jobs {
+		deps = append(deps, supervisor[j.Name])
+	}
+	wf.Add(finishArgs{Run: id}, &hopper.StepOpts{
+		After: deps, OnDependencyFailure: hopper.DependencyIgnore,
+		Insert: &hopper.InsertOpts{Queue: sharedQueue, Await: true},
+	})
+	res, err := c.inserter.InsertWorkflowTx(ctx, tx.SQL(), wf)
+	if err != nil {
+		return nil, err
+	}
+	// Its hopper jobs are in the order of its steps: Start, the markers,
+	// the supervisors, then the finisher.
+	ids := make([]hopper.JobID, len(res.Jobs))
+	for i, j := range res.Jobs {
+		ids[i] = j.Job.ID
+	}
+	return &insertedWorkflow{
+		id: res.ID, finisher: ids[len(ids)-1], anys: anys,
+		markers: ids[1 : 1+len(anys)], supervisors: ids[1+len(anys) : len(ids)-1],
+	}, nil
 }
 
 // startQueue is the hopper queue the Start of the run id goes in.
