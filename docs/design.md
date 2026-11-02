@@ -517,6 +517,32 @@ the SHA-256 hash of its content: 218 files.
   workflows have a `compute-resources` input, and all 7 read its
   details: whether it is a Kubernetes cluster, its `ip` and its
   `schedulerType`. None reads it as a name.
+- **A list's default rows are read as rows given to it**: a list given no
+  value takes its `default:` rows, whose inputs take their template's
+  defaults, and in them a cluster's or a bucket's URI becomes its details
+  and a value of the wrong shape is refused, as in rows given. ACTIVATE's
+  run creation checked and resolved only rows given, so a URI in a
+  default row reached the run as text. Its form sends a list's default
+  rows as given ones, so this was only for a run that its API or its CLI
+  started without the list. ACTIVATE takes the same fix, and with it
+  resolves the defaults of a run sent no inputs at all, as it did for one
+  sent an empty mapping, and those of a group given no value or null, as
+  it did for a group given. Outside a list's rows, ACTIVATE gives a group
+  given anything but a mapping, `""` among them, its inputs' defaults too,
+  where Meridian refuses it (`input_group_not_mapping`); in a row,
+  ACTIVATE keeps such a value, where Meridian gives a group given text, a
+  number or a boolean its inputs' defaults, as null, and keeps a list. As it does for these inputs elsewhere,
+  ACTIVATE refuses a default row's value that is an expression, which
+  Meridian evaluates (above).
+  None of the 21 lists of the known workflows has a `default:`. Four
+  known workflows have a cluster input whose default is `workspace`, two
+  at the top and two in a group, which ACTIVATE now gives a run sent no
+  inputs, or no value for the group, as the workspace's details, as
+  Meridian already did. Each reads the input's `ip` as its jobs' `ssh`
+  `remoteHost`, and passes the input to a called workflow, which reads
+  its `ip` and `schedulerType`, and for two of them its `provider`; none
+  compares it with a name. The text's `ip` was null, and a run can't
+  start with a null `remoteHost`.
 - **A `parallelworks/cancel-jobs` of a job that hasn't started yet is
   kept**: the job ends cancelled where it waits, on the jobs it needs or
   to be placed, and never starts

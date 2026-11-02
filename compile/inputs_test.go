@@ -189,6 +189,111 @@ jobs:
 	}
 }
 
+// A list given no value reads its default rows as it reads rows given to
+// it: each row's inputs take their template's defaults, the Inputs resolver
+// is asked for each platform input among them, and refuses a value of the
+// wrong shape there. So a cluster's URI in a default row is resolved, as one
+// in a submitted row is, and never reaches the run as text.
+func TestPlatformInputsInDefaultRows(t *testing.T) {
+	clusters := resolverFunc(func(_ context.Context, _ string, _ map[string]any, v any) (any, error) {
+		uri, ok := v.(string)
+		if !ok {
+			return nil, problems.InputNotText.InputProblem(problems.Params{"value": problems.Show(v)})
+		}
+		return map[string]any{"uri": uri}, nil
+	})
+	resolved := func(uri string) any { return map[string]any{"uri": uri} }
+	for _, tc := range []struct {
+		name, list string
+		rows       []any
+		want       []any
+	}{
+		{
+			"a URI", "{type: list, template: {c: {type: compute-clusters}}, default: [{c: pw://alice/a}]}",
+			[]any{map[string]any{"c": "pw://alice/a"}},
+			[]any{map[string]any{"c": resolved("pw://alice/a")}},
+		},
+		{
+			"a row's input left out or null, which takes the template's default",
+			"{type: list, template: {c: {type: compute-clusters, default: pw://alice/t}}, default: [{}, {c: null}]}",
+			[]any{map[string]any{}, map[string]any{"c": nil}},
+			[]any{map[string]any{"c": resolved("pw://alice/t")}, map[string]any{"c": resolved("pw://alice/t")}},
+		},
+		{
+			"a group in a row", "{type: list, template: {g: {type: group, items: {c: {type: compute-clusters}}}}, default: [{g: {c: pw://alice/g}}]}",
+			[]any{map[string]any{"g": map[string]any{"c": "pw://alice/g"}}},
+			[]any{map[string]any{"g": map[string]any{"c": resolved("pw://alice/g")}}},
+		},
+		{
+			"a list in a row, which takes its own default rows",
+			"{type: list, template: {m: {type: list, template: {c: {type: compute-clusters}}, default: [{c: pw://alice/m}]}}, default: [{}]}",
+			[]any{map[string]any{}},
+			[]any{map[string]any{"m": []any{map[string]any{"c": resolved("pw://alice/m")}}}},
+		},
+		// Meridian evaluates a platform input's default that is an
+		// expression and resolves what it gives (docs/design.md).
+		{
+			"the template's default, an expression", "{type: list, template: {c: {type: compute-clusters, default: '${{ inputs.n }}'}}, default: [{}]}",
+			[]any{map[string]any{}},
+			[]any{map[string]any{"c": resolved("pw://alice/n")}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := load(t, "on:\n  execute:\n    inputs:\n      n: {type: string, default: pw://alice/n}\n      l: "+tc.list+"\njobs:\n  main:\n    steps:\n      - run: echo ok\n")
+			for _, submitted := range []map[string]any{nil, {"l": tc.rows}} {
+				inputs, diags := resolveInputs(t, doc, submitted, compile.Options{Inputs: clusters})
+				if len(diags) != 0 {
+					t.Fatalf("given %v: %v", submitted, diags)
+				}
+				if !reflect.DeepEqual(inputs.Values["l"], tc.want) {
+					t.Errorf("given %v, l = %v, want %v", submitted, inputs.Values["l"], tc.want)
+				}
+			}
+		})
+	}
+
+	// A value of the wrong shape in a default row is refused as one in a
+	// submitted row is, at the same input.
+	doc := load(t, "on:\n  execute:\n    inputs:\n      l: {type: list, template: {c: {type: compute-clusters}}, default: [{c: [pw://alice/a]}]}\njobs:\n  main:\n    steps:\n      - run: echo ok\n")
+	for _, submitted := range []map[string]any{nil, {"l": []any{map[string]any{"c": []any{"pw://alice/a"}}}}} {
+		_, diags := resolveInputs(t, doc, submitted, compile.Options{Inputs: clusters})
+		if len(diags) != 1 || diags[0].Code != problems.InputNotText.Code() || diags[0].Params["input"] != "l.0.c" {
+			t.Errorf("given %v: %v, want input_not_text for l.0.c", submitted, diags)
+		}
+	}
+
+	// A group given no value, or null, at the top or in a row, takes its
+	// inputs' defaults, which are resolved as a given group's are: a
+	// cluster's, and a list's default rows.
+	group := "{type: group, items: {c: {type: compute-clusters, default: workspace}, l: {type: list, template: {c: {type: compute-clusters}}, default: [{c: pw://alice/a}]}}}"
+	doc = load(t, "on:\n  execute:\n    inputs:\n      g: "+group+"\n      rows: {type: list, template: {g: "+group+"}}\njobs:\n  main:\n    steps:\n      - run: echo ok\n")
+	want := map[string]any{"c": resolved("workspace"), "l": []any{map[string]any{"c": resolved("pw://alice/a")}}}
+	for _, submitted := range []map[string]any{
+		{"rows": []any{map[string]any{}}},
+		{"g": nil, "rows": []any{map[string]any{"g": nil}}},
+	} {
+		inputs, diags := resolveInputs(t, doc, submitted, compile.Options{Inputs: clusters})
+		if len(diags) != 0 {
+			t.Fatalf("given %v: %v", submitted, diags)
+		}
+		if row := inputs.Values["rows"].([]any)[0].(map[string]any); !reflect.DeepEqual(inputs.Values["g"], want) || !reflect.DeepEqual(row["g"], want) {
+			t.Errorf("given %v, g = %v and the row's g = %v, want %v", submitted, inputs.Values["g"], row["g"], want)
+		}
+	}
+
+	// A group given "" is refused outside a row, where a group's value
+	// is a mapping of its inputs' values, and in a row is no value, as
+	// null is.
+	_, diags := resolveInputs(t, doc, map[string]any{"g": "", "rows": []any{}}, compile.Options{Inputs: clusters})
+	if len(diags) != 1 || diags[0].Code != problems.InputGroupNotMapping.Code() || diags[0].Path() != "/on/execute/inputs/g" {
+		t.Errorf("a group given \"\": %v, want input_group_not_mapping", diags)
+	}
+	inputs, diags := resolveInputs(t, doc, map[string]any{"g": nil, "rows": []any{map[string]any{"g": ""}}}, compile.Options{Inputs: clusters})
+	if row := inputs.Values["rows"].([]any)[0].(map[string]any); len(diags) != 0 || !reflect.DeepEqual(row["g"], want) {
+		t.Errorf("a row's group given \"\" = %v, want %v: %v", row["g"], want, diags)
+	}
+}
+
 // A refusal of a value in a group or a list whose condition reads a
 // variable or a password, which the plan holds out of its values, doesn't
 // show it, as one of an input whose own condition reads one doesn't.
