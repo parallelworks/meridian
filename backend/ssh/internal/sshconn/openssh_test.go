@@ -14,6 +14,7 @@ import (
 	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/internal/leaktest"
 	"github.com/parallelworks/meridian/internal/opensshtest"
+	"github.com/parallelworks/meridian/internal/porttest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -149,7 +150,7 @@ func TestOpenSSHDialTCP(t *testing.T) {
 	for _, tc := range []struct {
 		host string
 		port int
-	}{{"127.0.0.1", closedPort(t)}, {"no-such-host.invalid", port}} {
+	}{{"127.0.0.1", porttest.Refusing(t)}, {"no-such-host.invalid", port}} {
 		_, err := c.DialTCP(t.Context(), tc.host, tc.port)
 		if te, ok := errors.AsType[*sshconn.TCPError](err); !ok || te.Refused || !errors.Is(err, sshconn.ErrTCPConnectFailed) {
 			t.Errorf("%s port %d gave %v, want ErrTCPConnectFailed", tc.host, tc.port, err)

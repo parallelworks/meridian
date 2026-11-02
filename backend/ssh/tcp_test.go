@@ -17,6 +17,7 @@ import (
 
 	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/internal/leaktest"
+	"github.com/parallelworks/meridian/internal/porttest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -132,12 +133,7 @@ func TestDialTCPRefused(t *testing.T) {
 	}
 
 	open := connectRig(t)
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closedPort := ln.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // a TCP listener's
-	_ = ln.Close()
+	closedPort := porttest.Refusing(t)
 	_, err = open.d.DialTCP(t.Context(), open.m, "127.0.0.1", closedPort)
 	p = kindtest.Want(t, err, problems.SSHTCPConnectFailed).Params
 	reason, _ := p["reason"].(string)
