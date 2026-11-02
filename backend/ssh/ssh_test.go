@@ -120,17 +120,20 @@ func build(dir string) {
 
 // A rig is a host, the test's own machine through a test SSH server, whose
 // home is a directory of the test's, and a Driver that reaches it as the
-// member m.
+// member m, as the user whose home is client, with the key key.
 type rig struct {
 	t      *testing.T
 	home   string
 	server *sshtest.Server
 	d      *Driver
 	m      *backend.Member
+	client string
+	key    ssh.PublicKey
 }
 
 // newRig starts a host, and a Driver that reaches it, whose connections
-// find a host that stopped answering within a second and a half.
+// find a host that stopped answering within a second and a half, and which
+// puts meridian, built from this tree, on it.
 func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	t.Helper()
 	built.once.Do(func() { build(buildDir) })
@@ -140,6 +143,15 @@ func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	case built.err != nil:
 		t.Fatal(built.err)
 	}
+	r := connectRig(t, with...)
+	r.d.Binaries = &hostbin.Binaries{Version: built.version, Dir: built.dir, Self: func() (string, string, error) { return built.path, built.digest, nil }}
+	return r
+}
+
+// connectRig is newRig for a test that only connects to the host, whose
+// Driver has no binaries to put there.
+func connectRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
+	t.Helper()
 	r := &rig{t: t, home: t.TempDir()}
 	// The user's runtime directory, short enough for the host's sockets.
 	runtimeDir, err := os.MkdirTemp("", "msh")
@@ -148,10 +160,12 @@ func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
 	client := t.TempDir()
+	r.client = client
 	if err := os.Mkdir(filepath.Join(client, ".ssh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	keyFile, signer := sshtest.NewKeyFile(t)
+	r.key = signer.PublicKey()
 	write(t, filepath.Join(client, ".ssh", "id_ecdsa"), keyFile)
 	opts := sshtest.Options{Authorized: []ssh.PublicKey{signer.PublicKey()}, Env: []string{
 		"HOME=" + r.home, "XDG_RUNTIME_DIR=" + runtimeDir,
@@ -171,11 +185,7 @@ func newRig(t *testing.T, with ...func(*sshtest.Options)) *rig {
 	t.Cleanup(func() { _ = pool.Close() })
 	key := make([]byte, MinKeyLen)
 	_, _ = rand.Read(key)
-	r.d = &Driver{
-		Pool:     pool,
-		Binaries: &hostbin.Binaries{Version: built.version, Dir: built.dir, Self: func() (string, string, error) { return built.path, built.digest, nil }},
-		Store:    "teststore", Key: key,
-	}
+	r.d = &Driver{Pool: pool, Store: "teststore", Key: key}
 	r.m = member(t, "ssh", map[string]any{"remoteHost": r.server.Addr()})
 	return r
 }
@@ -631,6 +641,76 @@ func TestHello(t *testing.T) {
 	}
 	r.d.hello = nil
 	r.probe()
+}
+
+// heldSh runs sh as the test's server runs it, /bin/sh -s, with the script
+// it reads first; but for meridian host find, it holds the request it reads
+// next, once it has added it to $HELD_LOG, until $HELD_RELEASE is there.
+const heldSh = `#!/bin/sh
+IFS= read -r script
+case $script in
+*" host find")
+	{
+		printf '%s\n' "$script"
+		IFS= read -r req
+		printf '%s\n' "$req" >>"$HELD_LOG"
+		while [ ! -e "$HELD_RELEASE" ]; do sleep 0.05; done
+		printf '%s\n' "$req"
+		cat
+	} | /bin/sh "$@"
+	;;
+*)
+	{
+		printf '%s\n' "$script"
+		cat
+	} | /bin/sh "$@"
+	;;
+esac
+`
+
+// TestSentOnce checks that a request the driver has sent is never sent
+// again, over the connection made again, though the connection drops
+// before its answer, as one whose host restarted its sshd: the host may
+// have done what it asked, and a second request could do it twice. run
+// gives the error, which isn't one of a request unsent.
+func TestSentOnce(t *testing.T) {
+	dir := t.TempDir()
+	sh, held, release := filepath.Join(dir, "sh"), filepath.Join(dir, "held"), filepath.Join(dir, "release")
+	if err := os.WriteFile(sh, []byte(heldSh), 0o700); err != nil { //nolint:gosec // a shell, which runs
+		t.Fatal(err)
+	}
+	r := newRig(t, func(o *sshtest.Options) {
+		o.Sh = sh
+		o.Env = append(o.Env, "HELD_LOG="+held, "HELD_RELEASE="+release)
+	})
+	t.Cleanup(func() { write(t, release, nil) })
+	r.probe()
+	// The connection drops once the host has read find's request, before
+	// it can answer.
+	dropped := make(chan struct{})
+	go func() {
+		defer close(dropped)
+		for {
+			if data, _ := os.ReadFile(held); len(data) > 0 {
+				r.server.Drop()
+				return
+			}
+			select {
+			case <-t.Context().Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	_, _, err := r.d.Find(ctx(t, 15*time.Second), r.m, "attempt-1")
+	<-dropped
+	if _, unsent := errors.AsType[*unsentError](err); err == nil || unsent {
+		t.Errorf("find, dropped once its request was sent, gives %v", err)
+	}
+	data, _ := os.ReadFile(held)
+	if n := strings.Count(string(data), "\n"); n != 1 {
+		t.Errorf("the host read %d requests to find, want 1:\n%s", n, data)
+	}
 }
 
 // TestOutage checks that over a connection that drops, stalls, or whose

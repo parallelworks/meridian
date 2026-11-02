@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/parallelworks/meridian/expr"
+	"github.com/parallelworks/meridian/internal/scaletest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -254,37 +256,60 @@ func isTooLarge(err error) bool {
 }
 
 // A Masker takes many values one at a time, and masks text with them in
-// one pass.
+// one pass: n Adds and a Mask grow with n, and Adds between Masks rebuild
+// what matches only now and then. Each is timed against other work in the
+// same run (scaletest.Within), not against a clock, since a runner slowed
+// by load or the race detector slows both.
 func TestMaskerManyValues(t *testing.T) {
+	const n = 32000
 	r := rand.New(rand.NewPCG(3, 4))
-	const n = 50000
 	values := make([]string, n)
 	for i := range values {
 		values[i] = fmt.Sprintf("value-%08d", r.IntN(1<<30))
 	}
-	m := plan.NewMasker()
-	start := time.Now()
-	for _, v := range values {
-		m.Add(v)
-	}
-	text := strings.Repeat("x", 1<<16) + values[n-1] + strings.Repeat("y", 10)
-	if got := m.Mask(text); !strings.HasSuffix(got, "x***yyyyyyyyyy") {
-		t.Errorf("not masked: ...%s", got[len(got)-30:])
-	}
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Errorf("%d Adds and a Mask took %v", n, elapsed)
-	}
-	// Adds between masks rebuild what matches only now and then.
-	m = plan.NewMasker()
-	start = time.Now()
-	for i, v := range values {
-		m.Add(v)
-		if i%100 == 0 && m.Mask(v) != "***" {
-			t.Fatalf("%q isn't masked", v)
+	// addThenMask adds the first k values, then masks text with the last
+	// of them in it.
+	addThenMask := func(k int) func() {
+		text := strings.Repeat("x", 1<<16) + values[k-1] + strings.Repeat("y", 10)
+		return func() {
+			m := plan.NewMasker()
+			for _, v := range values[:k] {
+				m.Add(v)
+			}
+			if got := m.Mask(text); !strings.HasSuffix(got, "x***yyyyyyyyyy") {
+				t.Fatalf("not masked: ...%s", got[len(got)-30:])
+			}
 		}
 	}
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Errorf("%d Adds with a Mask each 100 took %v", n, elapsed)
+	small := n / scaletest.Factor
+	bound := scaletest.Bound(scaletest.Factor)
+	if times, ok := scaletest.Within(bound, addThenMask(small), addThenMask(n)); !ok {
+		t.Errorf("%d Adds and a Mask take %v, and %d, %v: %.1f times as long, more than %.1f",
+			small, times[0], n, times[1], float64(times[1])/float64(times[0]), bound)
+	}
+	// A Mask builds the values added since the Mask before it into a level
+	// of what matches, and merges the last two levels while the older is no
+	// larger, so each value is built once a level, about log2(masks) times.
+	// Rebuilding all of them on each Mask builds each masks/2 times, on
+	// average. The bound is the geometric mean of the two, as
+	// scaletest.Bound is of linear and quadratic growth: 41.6 at 400 Masks,
+	// where a Masker takes about 10 times as long as Adds and a Mask, and
+	// one that rebuilt on each Mask took 180.
+	const added, every = 2000, 5
+	masks := float64(added / every)
+	bound = math.Sqrt(math.Log2(masks) * masks / 2)
+	maskBetween := func() {
+		m := plan.NewMasker()
+		for i, v := range values[:added] {
+			m.Add(v)
+			if i%every == 0 && m.Mask(v) != "***" {
+				t.Fatalf("%q isn't masked", v)
+			}
+		}
+	}
+	if times, ok := scaletest.Within(bound, addThenMask(added), maskBetween); !ok {
+		t.Errorf("%d Adds and a Mask take %v, and with a Mask each %d, %v: %.1f times as long, more than %.1f",
+			added, times[0], every, times[1], float64(times[1])/float64(times[0]), bound)
 	}
 }
 

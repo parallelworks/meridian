@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/parallelworks/foundation/problem"
 
@@ -179,6 +182,12 @@ type SessionUpdate struct {
 	// text: as sessions.<key> reads one of a run's sessions (Check), or
 	// any other.
 	Name string
+	// SessionKey is the key of the session of the run's own sessions:
+	// whose name the step's with: writes its name as, ${{ sessions.<key> }}
+	// and nothing else (SessionKeyNamed), or "": format 1 gives such a step
+	// the type that the session's sessions: gives it, where it gives one,
+	// whatever the step's with: says.
+	SessionKey string
 	// With is the rest of the step's with:, as it was evaluated: where the
 	// session points, as url, or remoteHost and remotePort.
 	With map[string]any
@@ -190,8 +199,9 @@ type SessionUpdate struct {
 // asks, through s, which is nil where nothing provides sessions: u is
 // what it asks, but for its Name and With, which UpdateSession takes from
 // with, the step's with: as it was evaluated, its name, read as text, and
-// the rest; and path is the step's in the workflow, at which its problems
-// are. It returns them: none when the session was updated;
+// the rest, each key as format 1 reads it, case aside (foldKeys); and path
+// is the step's in the workflow, at which its problems are. It returns
+// them: none when the session was updated;
 // resolver_missing where s is nil, as a feature whose interface is
 // missing fails, but only as the step runs, which an if: may skip; and a
 // refusal of s's, as Update gives it, as of a session the run may not
@@ -211,8 +221,12 @@ func UpdateSession(ctx context.Context, s Sessions, u SessionUpdate, path string
 	if s == nil {
 		return problems.Diagnostics{problems.ResolverMissing.At("", problems.Position{}, path+"/uses", problems.Params{"key": "uses", "interface": "Sessions"})}, nil
 	}
+	with = foldKeys(with, updateSessionKeys)
+	if info, ok := with["targetInfo"].(map[string]any); ok {
+		with["targetInfo"] = foldKeys(info, targetInfoKeys)
+	}
 	u.Name = expr.Text(with["name"])
-	u.With = maps.Clone(with)
+	u.With = with
 	delete(u.With, "name")
 	err := s.Update(ctx, u)
 	switch {
@@ -228,6 +242,53 @@ func UpdateSession(ctx context.Context, s Sessions, u SessionUpdate, path string
 		return nil, &sessionNotUpdated{ctx: contextEnd(err)}
 	}
 	return nil, err
+}
+
+// sessionNamed is how format 1 tells a step that names one of its
+// workflow's sessions by its key, as its with:'s name is written.
+var sessionNamed = regexp.MustCompile(`^\$\{\{\s*sessions\.([-\w]+)\s*\}\}$`)
+
+// SessionKeyNamed returns the key of the workflow's session whose name
+// with, a step's with: as the workflow writes it (plan.Value.Written),
+// gives as its name, as format 1 reads it: a name written as
+// ${{ sessions.<key> }} and nothing else, under the key name exactly; or
+// "" for any other.
+func SessionKeyNamed(with any) string {
+	m, _ := with.(map[string]any)
+	name, _ := m["name"].(string)
+	if match := sessionNamed.FindStringSubmatch(name); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
+// updateSessionKeys are the keys of parallelworks/update-session's with:,
+// as format 1 reads them, and as its schema defines them, and
+// targetInfoKeys those of its targetInfo.
+var (
+	updateSessionKeys = []string{
+		"name", "status", "type", "url", "target", "slug",
+		"remoteHost", "remotePort", "localPort", "targetInfo", "openAI", "apiKey",
+	}
+	targetInfoKeys = []string{"name", "namespace", "resourceType", "resourceName"}
+)
+
+// foldKeys returns a copy of with in which each key that is one of keys,
+// but for case, is that key, as format 1 reads them, decoding the object
+// as encoding/json decodes one into a struct: a key matches its field
+// exactly or case-insensitively, and where several keys match one field,
+// the last in byte order wins, as json.Marshal orders a map's keys before
+// format 1 decodes it. Other keys are kept as they are.
+func foldKeys(with map[string]any, keys []string) map[string]any {
+	out := make(map[string]any, len(with))
+	for _, k := range slices.Sorted(maps.Keys(with)) {
+		key := k
+		if i := slices.IndexFunc(keys, func(f string) bool { return strings.EqualFold(f, k) }); i >= 0 {
+			key = keys[i]
+		}
+		out[key] = with[k]
+	}
+	return out
 }
 
 // sessionNotUpdated is the error of a session provider that couldn't

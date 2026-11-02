@@ -326,14 +326,19 @@ expect:
   from one run to the next: a case prints what it checks of one, such as
   its last name, rather than the path.
 - `repositories` names the repositories whose workflows the case's steps
-  call, each as `github/<owner>/<repository>`. Each holds the files of the
-  case's directory, at a commit of its default branch, `main`, which a
-  step's `uses:` names with no revision, or as `@main`, and its `with:`'s
-  `$yaml` names one of:
+  call, or which they check out, each as `github/<owner>/<repository>`.
+  Each holds the files of the case's directory, at a commit of its default
+  branch, `main`, which a step's `uses:` names with no revision, or as
+  `@main`, and its `with:`'s `$yaml` names one of:
 
   ```yaml
   repositories: [github/conformance/calls]
   ```
+
+  A `parallelworks/checkout` step's `repo:` names one as
+  `https://github.com/<owner>/<repository>`, with or without `.git`, and
+  its `branch:` as `main`: it checks out the case's directory's files, the
+  repository's tree there.
 
   A run a step calls is a run of its own, whose jobs aren't among
   `expect.run.jobs`. A job's `calls` lists every run its steps called, of
@@ -349,6 +354,24 @@ expect:
         jobs:
           greet: {outcome: success}
   ```
+
+- `hosts` names the hosts a job's or a step's `ssh:` names by its
+  `remoteHost`, each a machine of its own, which runs what is placed on it
+  as the user, in its own copy of the run's directory, under its user's
+  home: its own, or the one of another host that `home` names, as a
+  cluster's login nodes share one:
+
+  ```yaml
+  hosts:
+    farm: {}
+    farm2: {home: farm}
+  ```
+
+  A step whose `ssh:` names a host other than its job's runs there; what
+  it prints is checked through what it writes to `$OUTPUTS`, which a later
+  step reads, rather than its log, which an implementation may keep
+  elsewhere than the step's, as Meridian keeps it with a run of the step's
+  own, which isn't among a job's `calls`.
 
 ## Expressions
 

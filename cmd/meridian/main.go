@@ -87,6 +87,9 @@ type cli struct {
 	// standard input and error are a terminal.
 	signals     chan os.Signal
 	interactive *bool
+	// terminal is whether standard output is a person's terminal, which a
+	// test gives meridian run, nil for whether it is (stdoutTerminal).
+	terminal *bool
 	// stopped is what a test has meridian cancel do once it has stored
 	// the run's stop, before it reads the run back; nil for nothing.
 	stopped func()
@@ -99,8 +102,10 @@ type cli struct {
 	serveMembers func(*coordinator.Coordinator, context.Context, coordinator.Logs) error
 	// sources is what a test gives in place of the user's Git
 	// repositories (cacheSources) for the workflows a workflow's steps
-	// call, nil for theirs.
+	// call, nil for theirs; and trees for the trees its checkout steps
+	// check out, which those pinned.
 	sources compile.Sources
+	trees   coordinator.Trees
 }
 
 // getenv reads an environment variable, or "" if it isn't set.
@@ -175,6 +180,7 @@ func init() {
 		{name: "logs", args: "<run> [job]", summary: "Shows or follows logs.", run: runLogs},
 		{name: "cancel", args: "<run>", summary: "Cancels a run.", about: cancelAbout, run: runCancel},
 		{name: "resume", args: "<run>", summary: "Picks up a run whose coordinator stopped.", about: resumeAbout, run: runResume},
+		{name: "session", args: "url|reset <run> <key>", summary: "Prints a link to a run's session, or signs everyone out of it.", about: sessionAbout, run: runSession},
 		{name: "rerun", args: "<run>", summary: "Runs a run again, or only its failed jobs."},
 		{name: "serve", summary: "Runs a coordinator that keeps running."},
 		{name: "worker", summary: "Runs one attempt of a job. Started by backends, not by people.", run: runWorker},

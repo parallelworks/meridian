@@ -264,3 +264,50 @@ func BenchmarkLoad(b *testing.B) {
 		}
 	}
 }
+
+// TestUpdateSessionKeysFolded checks that a key of update-session's with:,
+// or of its targetInfo, but for case, isn't unknown, as format 1 reads it
+// as that key, decoding the object as encoding/json does: it is kept, and
+// counts as a key the object requires. A key that isn't one but for case,
+// as local_port, is still unknown, and so is a key but for case of another
+// action's with:, which format 1 doesn't read so.
+func TestUpdateSessionKeysFolded(t *testing.T) {
+	doc, diags := format.Load("workflow.yaml", []byte(`jobs:
+  main:
+    steps:
+      - uses: parallelworks/update-session
+        with:
+          Name: desktop
+          REMOTEPORT: 8080
+          local_port: 1
+      - uses: parallelworks/update-session
+        with:
+          name: dashboard
+          targetInfo:
+            NAME: k8s
+            resourcetype: pods
+      - uses: parallelworks/checkout
+        with:
+          repo: https://example.com/app.git
+          branch: main
+          Path: app
+`))
+	if doc == nil || diags.HasErrors() {
+		t.Fatalf("Load = %v", diags)
+	}
+	var unknown []string
+	for _, d := range diags {
+		if d.Code == problems.UnknownKey.Code() {
+			unknown = append(unknown, d.Path())
+		}
+	}
+	if want := []string{"/jobs/main/steps/0/with/local_port", "/jobs/main/steps/2/with/Path"}; !reflect.DeepEqual(unknown, want) || len(diags) != len(want) {
+		t.Errorf("diagnostics %v, want unknown_key at %v", diags, want)
+	}
+	steps := doc.Value["jobs"].(map[string]any)["main"].(map[string]any)["steps"].([]any)
+	with := steps[0].(map[string]any)["with"].(map[string]any)
+	info := steps[1].(map[string]any)["with"].(map[string]any)["targetInfo"].(map[string]any)
+	if with["Name"] != "desktop" || with["REMOTEPORT"] != int64(8080) || info["NAME"] != "k8s" || info["resourcetype"] != "pods" {
+		t.Errorf("the with: kept is %v, and its targetInfo %v", with, info)
+	}
+}

@@ -150,6 +150,31 @@ func NoRemoteHost(ssh map[string]any) bool {
 	return given && (host == nil || host == "")
 }
 
+// loginKeys are the keys of a format 1 ssh: that say which host, and which
+// login on it, a job or a step runs on, by which ACTIVATE keys the
+// connections it keeps, and reuses a job's for a step whose are the same.
+// Its others, such as disconnect-timeout, don't change where the step
+// runs. remoteHost is as written: ACTIVATE reads host:22 apart from host,
+// as host:port is where it connects, and host an alias its ssh_config can
+// resolve.
+var loginKeys = []string{"remoteHost", "remoteUser", "jumpNodeHost", "jumpNodeUser"}
+
+// SameLogin reports whether a and b, two format 1 ssh: mappings, as a
+// step's and its job's, name the same host and login (loginKeys), each as
+// text, as ACTIVATE reads them, in which null, and a key that isn't there,
+// are "". The worker runs a step whose ssh: is its job's so in its job,
+// and the coordinator makes no step run of it.
+func SameLogin(a, b Data) bool {
+	am, _ := a.Get().(map[string]any)
+	bm, _ := b.Get().(map[string]any)
+	for _, k := range loginKeys {
+		if expr.Text(am[k]) != expr.Text(bm[k]) {
+			return false
+		}
+	}
+	return true
+}
+
 // inline reads a format 1 ssh:, v, as evaluated at pointer: the group of
 // one member it makes, on the host it names.
 func (e *evaluation) inline(v any, pointer string) *Inline {

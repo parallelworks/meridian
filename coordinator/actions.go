@@ -61,6 +61,7 @@ func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.Acti
 			return workerapi.ActionAnswer{}, err
 		}
 		u.Read = expr.Read{Private: call.Request.Private, Marked: call.Request.Secret}
+		u.SessionKey = compile.SessionKeyNamed(step.With.Written())
 		with, _ := call.Request.With.Get().(map[string]any)
 		diags, err := compile.UpdateSession(ctx, c.opts.Sessions, u, step.Path, with)
 		if err != nil {
@@ -81,15 +82,9 @@ func (c *Coordinator) updateSession(ctx context.Context, call *workerapisrv.Acti
 // so a workflow a step calls that asks for more than its root did is given
 // none of it.
 func (c *Coordinator) sessionRun(ctx context.Context, run *store.Run) (compile.SessionUpdate, error) {
-	root := run
-	if run.Parent != nil {
-		if err := c.store.View(ctx, func(tx *store.Tx) error {
-			var err error
-			root, err = tx.Run(run.Parent.Root)
-			return err
-		}); err != nil {
-			return compile.SessionUpdate{}, err
-		}
+	root, err := c.rootOf(ctx, run)
+	if err != nil {
+		return compile.SessionUpdate{}, err
 	}
 	p, err := c.plans.get(root)
 	if err != nil {
@@ -115,7 +110,7 @@ func (r actions) Tree(ctx context.Context, call *workerapisrv.ActionCall, w io.W
 // the run's plan has it: an error that wraps workerapisrv.ErrNotAction if
 // the job has no such step.
 func (c *Coordinator) actionStep(call *workerapisrv.ActionCall) (*plan.Step, error) {
-	_, step, err := c.planStep(call.Run, call.Attempt, call.Request.Step)
+	_, _, step, err := c.planStep(call.Run, call.Attempt, call.Request.Step)
 	if err == nil && step == nil {
 		err = fmt.Errorf("%w: job %q has no step %d", workerapisrv.ErrNotAction, call.Attempt.Job, call.Request.Step)
 	}

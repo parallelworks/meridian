@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -20,11 +21,13 @@ import (
 // the worker API's server readies it: the job, with the private output of
 // the job it needs, which that job's part of the run's secret record holds,
 // and only the part of the run's values and of its needs' results that the
-// job reads; and how many steps it has.
+// job reads; the variables the platform gives every job's steps
+// (Options.Env); and how many steps it has.
 func TestClaimReadier(t *testing.T) {
 	parallel(t)
 	vars := conformancetest.Variables{"vars.SHOWN": {Value: "yes"}, "vars.OTHER": {Value: "no"}}
-	c := open(t, Options{Variables: vars})
+	env := map[string]workerapi.EnvVar{"PW_USER": {Value: "alice"}, "PW_API_KEY": {Value: "k3y", Secret: true}}
+	c := open(t, Options{Variables: vars, Env: env})
 	driverOf(c).set(func(d *testDriver) {
 		d.worker = func(req backend.PlaceRequest) testEnd {
 			if strings.HasSuffix(req.Name, "-prep") {
@@ -92,6 +95,9 @@ jobs:
 	}
 	if ready.Run.Vars["SHOWN"] != "yes" || len(ready.Run.Vars) != 1 {
 		t.Errorf("the run's values the job reads are %+v", ready.Run)
+	}
+	if !maps.Equal(ready.Env, env) {
+		t.Errorf("the claim's variables are %v, want %v", ready.Env, env)
 	}
 	prep := ready.Needs["prep"]
 	if prep.Outcome != plan.OutcomeSuccess || prep.Outputs["x"] != "private-x" || !slices.Equal(prep.Private, []string{"x"}) {

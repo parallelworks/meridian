@@ -121,3 +121,38 @@ func TestChildEndRechecked(t *testing.T) {
 		t.Errorf("a poll for a child another process ended was answered %d, %v, %+v, after %v: %s", status, err, child, time.Since(start), answer)
 	}
 }
+
+// A poll for a child's end waits for it before it reads the store, so that
+// an end stored just after the read, which the server is told of, answers
+// it at once, rather than at the store's next read or after the hold.
+func TestChildEndWaitsBeforeRead(t *testing.T) {
+	parallel(t)
+	ending := make(chan func(), 1)
+	r := newRig(t, rigOptions{hold: 5 * time.Second, configure: func(s *workerapisrv.Server) {
+		workerapisrv.SetChildRecheck(s, time.Hour)
+		workerapisrv.SetAfterEndRead(s, func() {
+			select {
+			case end := <-ending:
+				end()
+			default:
+			}
+		})
+	}})
+	c := newClient(t, r.socket)
+	a, _, credential := r.claimed(c, placed{})
+	body, err := workerapi.Marshal(workerapi.ChildRequest{With: plan.DataOf(map[string]any{"$yaml": "w.yaml"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, answer, err := c.send(http.MethodPost, workerapi.PathChild, body, credential); err != nil || status != http.StatusOK {
+		t.Fatalf("the ask for a child was answered %d, %v: %s", status, err, answer)
+	}
+	ending <- func() { r.children.end(a.ID, 0, 0, plan.OutcomeSuccess) }
+	start := time.Now()
+	q := url.Values{workerapi.QueryStep: {"0"}, workerapi.QueryTry: {"0"}}
+	status, answer, err := c.send(http.MethodGet, workerapi.PathChildEnd+"?"+q.Encode(), nil, credential)
+	var child workerapi.Child
+	if err != nil || status != http.StatusOK || workerapi.Unmarshal(answer, &child) != nil || !child.Ended || time.Since(start) > 4*time.Second {
+		t.Errorf("a poll for a child that ended just after its read was answered %d, %v, %+v, after %v: %s", status, err, child, time.Since(start), answer)
+	}
+}

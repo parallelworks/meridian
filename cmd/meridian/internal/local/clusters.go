@@ -4,6 +4,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 
@@ -41,6 +42,12 @@ const (
 	workspaceShortName = "workspace"
 )
 
+// localhostName is the name no cluster can have besides the workspace's:
+// a cluster's name is its id (cluster.value), and format 1's
+// update-session reads the target localhost as the workspace, as it reads
+// user-workspace.
+const localhostName = "localhost"
+
 // loadClusters reads the clusters file at path: each cluster by its name,
 // with its host, and its scheduler, if it gives one. Other users may read
 // it, as they may the groups file, which names hosts too, but not change
@@ -61,7 +68,7 @@ func (c *Config) loadClusters(path string) error {
 	}
 	for _, p := range clusters {
 		name := p.key.Value
-		if !groupNamePattern.MatchString(name) || name == workspaceName || name == workspaceShortName {
+		if !groupNamePattern.MatchString(name) || name == workspaceName || name == workspaceShortName || name == localhostName {
 			return f.problem(problems.ClusterNameInvalid, p.key, problems.Params{"cluster": name})
 		}
 		cl, err := f.cluster(name, p.key, p.value)
@@ -113,77 +120,162 @@ func (f configFile) cluster(name string, key, n *yaml.Node) (cluster, error) {
 // order.
 func (c *Config) ClusterNames() []string { return slices.Sorted(maps.Keys(c.clusters)) }
 
-// resolveClusters gives the value of a compute-clusters input as format 1
-// resolves one: the workspace's name, or a cluster's of the clusters file,
-// or each of a list of them, becomes its details, whatever the input's
-// definition says, as its include-workspace, provider and csp only choose
-// what a form lists. "", and any other value, as the details a run passes
-// to a workflow it calls, are kept as they are, in a list too, since only
-// a name is resolved. Another name is problems.ClusterUnknown, which lists
-// the clusters, or problems.ClustersNone when the file has none.
-func (c *Config) resolveClusters(value any) (any, error) {
-	switch v := value.(type) {
-	case string:
-		return c.resolveCluster(v)
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			name, ok := item.(string)
-			if !ok {
-				out[i] = item
-				continue
+// ClusterHost returns the host of the clusters file's cluster named name,
+// which is its id too, and whether the file has it.
+func (c *Config) ClusterHost(name string) (string, bool) {
+	cl, ok := c.clusters[name]
+	return cl.host, ok
+}
+
+// resolveClusters gives the value of a compute-clusters input, or a
+// compute-resources one, whose definition is def, as format 1 resolves
+// one: a cluster's pw:// URI (resolveCluster), or with multi true, each of
+// a list of them, of the shape the bug fix to format 1 checks
+// (resolveEach), becomes the cluster's details, whatever the input's
+// include-workspace, provider and csp say, as they only choose what a form
+// lists. "" is no value, and is kept. A called workflow's input, called,
+// also takes a cluster's details, a mapping, as its caller passes those it
+// has, which are kept as they are, and an item of a list that is "" or
+// null; a run's own takes only the URI, as a platform's form gives it, so
+// a mapping there, or any other item of a list, "" and null among them,
+// as ACTIVATE refuses them, is problems.ClusterURIRequired.
+func (c *Config) resolveClusters(def map[string]any, value any, called bool) (any, error) {
+	return resolveEach(value, def["multi"] == true, func(v any) (any, error) {
+		// An item of a list that is "" or null; the input's own "" is kept
+		// before (resolveEach).
+		empty := v == nil || v == ""
+		switch v := v.(type) {
+		case string:
+			if !empty {
+				return c.resolveCluster(v)
 			}
-			r, err := c.resolveCluster(name)
-			if err != nil {
-				return nil, err
+		case map[string]any:
+			if called {
+				return v, nil
 			}
-			out[i] = r
+			name, _ := v["name"].(string)
+			return nil, c.uriRequired(v, name)
 		}
-		return out, nil
-	}
-	return value, nil
+		if empty && called {
+			return v, nil
+		}
+		return nil, c.uriRequired(v, "")
+	})
 }
 
-// resolveCluster gives the details of the cluster name names, or "" for "".
-func (c *Config) resolveCluster(name string) (any, error) {
-	switch cl, ok := c.clusters[name]; {
-	case name == "":
-		return name, nil
-	case name == workspaceName || name == workspaceShortName:
-		return workspaceValue(), nil
-	case ok:
-		return cl.value(name), nil
-	case len(c.clusters) == 0:
-		return nil, problems.ClustersNone.InputProblem(problems.Params{"value": problems.Show(name)})
+// resolveCluster gives the details of the cluster ref names, by its URI:
+// pw://, the login name of the user who runs meridian, a slash and a
+// cluster's name in the clusters file, as pw://alice/hpc. The workspace,
+// this machine, is pw://<login>/user-workspace, and keeps the reserved
+// names format 1 resolves it by (isWorkspace). A name alone, and
+// pw://name, which a platform reads as an organization's cluster, which a
+// run here has none of, are problems.ClusterURIRequired, which gives the
+// URI to name the cluster by.
+// Another user's URI, or one of no cluster, is problems.ClusterUnknown,
+// which lists the clusters' URIs, or problems.ClustersNone when the file
+// has none.
+func (c *Config) resolveCluster(ref string) (any, error) {
+	login, err := c.loginName()
+	if err != nil {
+		return nil, err
 	}
-	return nil, problems.ClusterUnknown.InputProblem(problems.Params{"value": problems.Show(name), "clusters": problems.QuoteAll(c.ClusterNames())})
+	rest, isURI := strings.CutPrefix(ref, pwPrefix)
+	owner, name, userScoped := strings.Cut(rest, "/")
+	switch {
+	case isWorkspace(ref), isURI && !userScoped && isWorkspace(rest), isURI && owner == login && isWorkspace(name):
+		return workspaceValue(login), nil
+	case !isURI && groupNamePattern.MatchString(ref):
+		return nil, c.uriRequired(ref, ref)
+	case isURI && !userScoped && groupNamePattern.MatchString(rest):
+		return nil, c.uriRequired(ref, rest)
+	case isURI && owner == login:
+		if cl, ok := c.clusters[name]; ok {
+			return cl.value(login, name), nil
+		}
+	}
+	if len(c.clusters) == 0 {
+		return nil, problems.ClustersNone.InputProblem(problems.Params{"value": problems.Show(ref)})
+	}
+	uris := make([]string, 0, len(c.clusters))
+	for _, name := range c.ClusterNames() {
+		uris = append(uris, clusterURI(login, name))
+	}
+	return nil, problems.ClusterUnknown.InputProblem(problems.Params{"value": problems.Show(ref), "clusters": problems.QuoteAll(uris)})
 }
 
-// value returns the details of the cluster named name, as format 1 gives
-// an existing cluster's, for what a cluster of the clusters file can know
-// of them: its name; its host as its ip, which a job's ssh: reads as its
-// remoteHost; its scheduler as its schedulerType, "" for none, as format 1
-// writes a cluster's that has none; and existing as its type and its
-// provider, as format 1 names a cluster that a platform reaches but didn't
-// make. What names a platform's own record of it, its id and its pw:// uri,
-// and its owner's platform account, its user and its namespace, it has none
-// of, and leaves out.
-func (cl cluster) value(name string) map[string]any {
+// isWorkspace reports whether name is one of the workspace's reserved
+// names, workspace and user-workspace, by which format 1 resolves the
+// workspace alone, as pw://name, and as pw://<user>/name, where here
+// <user> is the login name.
+func isWorkspace(name string) bool { return name == workspaceName || name == workspaceShortName }
+
+// uriRequired is problems.ClusterURIRequired of v, a value that names a
+// cluster otherwise than by its URI, with the URI of the cluster named
+// name, the workspace's for its reserved names, or a URI with <name> in
+// the name's place, for none.
+func (c *Config) uriRequired(v any, name string) error {
+	login, err := c.loginName()
+	if err != nil {
+		return err
+	}
+	switch name {
+	case workspaceShortName:
+		name = workspaceName
+	case "":
+		name = "<name>"
+	}
+	return problems.ClusterURIRequired.InputProblem(problems.Params{"value": problems.Show(v), "uri": clusterURI(login, name)})
+}
+
+// clusterURI returns the URI of the cluster named name, of the user whose
+// login name is login.
+func clusterURI(login, name string) string { return pwPrefix + login + "/" + name }
+
+// loginName returns the login name of the user who runs meridian, which
+// names their clusters' URIs; or, for a user who has none,
+// problems.ClusterLoginUnknown, which says why, as no later try changes
+// it.
+func (c *Config) loginName() (string, error) {
+	if c.user.Err != nil {
+		return "", problems.ClusterLoginUnknown.InputProblem(problems.Params{"reason": c.user.Err.Error()})
+	}
+	return c.user.Name, nil
+}
+
+// value returns the details of the cluster named name, of the user whose
+// login name is login, as format 1 gives an existing cluster's, for what a
+// cluster of the clusters file can know of them: its name, which is also
+// its id, as the workspace's is, and which a session's target reads
+// (parallelworks/update-session's target: ${{ inputs.<cluster>.id }}); its
+// host as its ip, which a job's ssh: reads as its remoteHost; its
+// scheduler as its schedulerType, "" for none, as format 1 writes a
+// cluster's that has none; existing as its type and its provider, as
+// format 1 names a cluster that a platform reaches but didn't make; and
+// its URI, and the login name as its user and its namespace, as format 1
+// gives the owner's account on the platform.
+func (cl cluster) value(login, name string) map[string]any {
 	return map[string]any{
 		"$type":         "computeResource",
 		"type":          "existing",
 		"provider":      "existing",
+		"id":            name,
 		"name":          name,
 		"ip":            cl.host,
 		"schedulerType": cl.scheduler,
+		"uri":           clusterURI(login, name),
+		"user":          login,
+		"namespace":     login,
 	}
 }
 
-// workspaceValue returns the details of the workspace, as format 1 gives
-// them: the machine the run starts on, this one, whose ip is "", with
-// which format 1 runs a job whose ssh: reads it as its remoteHost there,
-// without SSH. It leaves out the user, the namespace and the uri, which
-// name the person's account on a platform, which a run here has none of.
-func workspaceValue() map[string]any {
-	return map[string]any{"type": "computeResource", "id": workspaceName, "name": workspaceName, "ip": ""}
+// workspaceValue returns the details of the workspace, of the user whose
+// login name is login, as format 1 gives them: the machine the run starts
+// on, this one, whose ip is "", with which format 1 runs a job whose ssh:
+// reads it as its remoteHost there, without SSH; and its URI, and the
+// login name as its user and its namespace.
+func workspaceValue(login string) map[string]any {
+	return map[string]any{
+		"type": "computeResource", "id": workspaceName, "name": workspaceName, "ip": "",
+		"uri": clusterURI(login, workspaceName), "user": login, "namespace": login,
+	}
 }

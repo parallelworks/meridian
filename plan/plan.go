@@ -332,6 +332,10 @@ type SourceRef struct {
 // names when its $yaml names none.
 const DefaultSourcePath = "workflow.yaml"
 
+// LatestVersion is the version of a marketplace workflow that a uses: names
+// when it names none: the item's latest, as its platform decides it.
+const LatestVersion = "latest"
+
 // Normal returns r as format 1 reads it, as ACTIVATE does, so that two
 // references that name the same workflow are equal. For a Git repository's,
 // one whose uses: starts with github/ or gitlab/: its uses: without the
@@ -342,12 +346,38 @@ const DefaultSourcePath = "workflow.yaml"
 // before it on GitHub, and without one on GitLab; and its Host in lower case
 // without the space around it, gitlab.com if that leaves none, for a
 // GitLab project's, and none for a GitHub repository's, whose server a
-// $host doesn't name. Any other is r. Normal doesn't check what it reads:
-// one it reads that isn't well formed names no workflow.
+// $host doesn't name.
+//
+// For a workflow a platform stores, one whose uses: starts with
+// marketplace/ or workflow/, which a $yaml or a $host doesn't name, as
+// ACTIVATE ignores them, its uses: alone: for a marketplace workflow,
+// marketplace/<slug>/<version>, where, as ACTIVATE reads it, what follows
+// marketplace/ is split at its first slash, or, without one, at its first
+// @, into the item's slug and its version, LatestVersion if that is empty;
+// and for a saved workflow, workflow/<name>, as it is written, name and
+// all. Normal names the same item ACTIVATE does: it reads
+// marketplace/<slug>/<version> back as the same slug and version. Any
+// other reference is r. Normal doesn't check what it reads: one it reads
+// that isn't well formed names no workflow.
 func (r SourceRef) Normal() SourceRef {
 	var rest string
 	out := SourceRef{Path: r.Path}
 	switch {
+	case strings.HasPrefix(r.Uses, "marketplace/"):
+		item := strings.TrimPrefix(r.Uses, "marketplace/")
+		if item == "" {
+			return SourceRef{Uses: r.Uses}
+		}
+		slug, version, ok := strings.Cut(item, "/")
+		if !ok {
+			slug, version, _ = strings.Cut(item, "@")
+		}
+		if version == "" {
+			version = LatestVersion
+		}
+		return SourceRef{Uses: "marketplace/" + slug + "/" + version}
+	case strings.HasPrefix(r.Uses, "workflow/"):
+		return SourceRef{Uses: r.Uses}
 	case strings.HasPrefix(r.Uses, "github/"):
 		out.Uses = "github/"
 		rest = strings.TrimPrefix(strings.TrimSpace(r.Uses), "github/")

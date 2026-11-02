@@ -293,3 +293,24 @@ func TestUnmarshalRefuses(t *testing.T) {
 		t.Error("a member twice is read")
 	}
 }
+
+// TestStepRunResults checks that a job's steps' results read back as they
+// were from a StepRunState, each member of each, and that none are nil, as
+// a state without steps leaves them out.
+func TestStepRunResults(t *testing.T) {
+	t.Parallel()
+	steps := []plan.StepResult{
+		{Outcome: plan.OutcomeSuccess, Outputs: map[string]string{"a": "1"}, CleanupOutcome: plan.OutcomeFailure, CleanupOutputs: map[string]string{"b": "2"}},
+		{Outcome: plan.OutcomeSkipped},
+	}
+	st := workerapi.StepRunState{Steps: workerapi.StepRunResults(steps)}
+	if got := st.PlanSteps(); !reflect.DeepEqual(got, steps) {
+		t.Errorf("the steps read back as %+v, want %+v", got, steps)
+	}
+	if got := workerapi.StepRunResults([]plan.StepResult{}); got != nil {
+		t.Errorf("no steps are %#v, want nil", got)
+	}
+	if got := (workerapi.StepRunState{}).PlanSteps(); len(got) != 0 {
+		t.Errorf("a state without steps has %+v", got)
+	}
+}

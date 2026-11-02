@@ -55,7 +55,7 @@ var testServers = []string{"git.example.com"}
 
 func sourcesFrom(t *testing.T, origins string) *Sources {
 	t.Helper()
-	s := NewSources(t.TempDir(), testServers)
+	s := NewSources(t.TempDir(), testServers, nil)
 	s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
 	// The test's repositories are directories.
 	s.protocols = append(s.protocols, "file")
@@ -304,6 +304,140 @@ func TestSourcesReadRefuses(t *testing.T) {
 		_, err := s.Read(t.Context(), src)
 		if p, ok := errors.AsType[*problem.Problem](err); !ok || p.Code != problems.SourceNotPinned.Code() {
 			t.Errorf("Read of a source with %s: %v", name, err)
+		}
+	}
+}
+
+// TestSourcesMapped checks that a workflow a platform stores is read as
+// the workflow in Git the user maps it to (Workflows), however a uses:
+// writes it, as Normal reads it: pinned to its commit and its text's
+// digest, and named by both, the one the uses: names first; that a slug's
+// mapping maps each version but the latest, which only a key of its own
+// maps; and that a pin is read again by its mapping, while it still maps
+// the workflow to the text it was pinned to.
+func TestSourcesMapped(t *testing.T) {
+	origins, s := newOrigins(t)
+	o := newOrigin(t, origins, "github.com", "acme/flows")
+	main := o.commit(map[string]string{"tools.yaml": "tools\n", "nightly.yaml": "nightly\n"})
+	v2 := o.commit(map[string]string{"flows/v2/tools.yaml": "tools 2\n"})
+	o.git("tag", "release-v2")
+	o.git("reset", "--quiet", "--hard", main)
+	s.workflows = Workflows{
+		"marketplace/tools/v1.2":      {Uses: "github/acme/flows@main", Path: "tools.yaml"},
+		"marketplace/tools/latest":    {Uses: "github/acme/flows@main", Path: "nightly.yaml"},
+		"marketplace/tools/{version}": {Uses: "github/acme/flows@release-{version}", Path: "flows/{version}/tools.yaml"},
+		"workflow/nightly":            {Uses: "github/acme/flows", Path: "nightly.yaml"},
+	}
+	remote := func(branch, yaml string) map[string]string {
+		r := map[string]string{"repo": "https://github.com/acme/flows", "yaml": yaml}
+		if branch != "" {
+			r["branch"] = branch
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		uses, location, commit, text string
+		remote                       map[string]string
+	}{
+		{"marketplace/tools/v1.2", "marketplace/tools/v1.2 → github.com/acme/flows@main:tools.yaml", main, "tools\n", remote("main", "tools.yaml")},
+		{"marketplace/tools@v1.2", "marketplace/tools/v1.2 → github.com/acme/flows@main:tools.yaml", main, "tools\n", remote("main", "tools.yaml")},
+		{"marketplace/tools", "marketplace/tools/latest → github.com/acme/flows@main:nightly.yaml", main, "nightly\n", remote("main", "nightly.yaml")},
+		{"marketplace/tools/v2", "marketplace/tools/v2 → github.com/acme/flows@release-v2:flows/v2/tools.yaml", v2, "tools 2\n", remote("release-v2", "flows/v2/tools.yaml")},
+		{"marketplace/tools@v2", "marketplace/tools/v2 → github.com/acme/flows@release-v2:flows/v2/tools.yaml", v2, "tools 2\n", remote("release-v2", "flows/v2/tools.yaml")},
+		{"workflow/nightly", "workflow/nightly → github.com/acme/flows:nightly.yaml", main, "nightly\n", remote("", "nightly.yaml")},
+	} {
+		// A $yaml or a $host of the step's is ACTIVATE's to ignore.
+		ref := plan.SourceRef{Uses: tc.uses, Path: "other.yaml", Host: "git.example.com"}
+		w, err := s.Resolve(t.Context(), ref)
+		if err != nil {
+			t.Errorf("Resolve(%s): %v", tc.uses, err)
+			continue
+		}
+		want := plan.Source{Location: tc.location, Revision: tc.commit, Digest: digest([]byte(tc.text)), Ref: ref}
+		if !reflect.DeepEqual(w.Source, want) || string(w.Text) != tc.text || !reflect.DeepEqual(w.Remote, tc.remote) {
+			t.Errorf("Resolve(%s) = %+v, %q, %v, want %+v, %q, %v", tc.uses, w.Source, w.Text, w.Remote, want, tc.text, tc.remote)
+		}
+	}
+
+	// Read again by its pin, through its mapping, whatever its revision
+	// names by then.
+	pinned, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "marketplace/tools@v1.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.commit(map[string]string{"tools.yaml": "moved on\n"})
+	if w, err := s.Read(t.Context(), pinned.Source); err != nil || string(w.Text) != "tools\n" {
+		t.Errorf("Read of a mapped pin = %v, %v", w, err)
+	}
+	// A mapping since changed to the same file, written otherwise, reads it
+	// with the remote context it was pinned with, which the plan records
+	// beside its pin, not the mapping's now.
+	recorded := pinned.Source
+	recorded.Remote = pinned.Remote
+	respelled := sourcesFrom(t, origins)
+	respelled.workflows = Workflows{"marketplace/tools/v1.2": {Uses: "github/acme/flows", Path: "tools.yaml"}}
+	if w, err := respelled.Read(t.Context(), recorded); err != nil || string(w.Text) != "tools\n" || !reflect.DeepEqual(w.Remote, pinned.Remote) {
+		t.Errorf("Read of a pin whose mapping was written otherwise = %v, %v, want the remote %v", w, err, pinned.Remote)
+	}
+	// A mapping since changed to another file is that file, which isn't
+	// the pinned text; and one since removed maps nothing.
+	moved := sourcesFrom(t, origins)
+	moved.workflows = Workflows{"marketplace/tools/v1.2": {Uses: "github/acme/flows@main", Path: "nightly.yaml"}}
+	if _, err := moved.Read(t.Context(), pinned.Source); err == nil {
+		t.Error("Read of a pin whose mapping names another file gave its text")
+	} else {
+		kindtest.Want(t, err, problems.SourceChanged)
+	}
+	if _, err := sourcesFrom(t, origins).Read(t.Context(), pinned.Source); !errors.Is(err, compile.ErrNotFound) {
+		t.Errorf("Read of a pin whose mapping is gone: %v", err)
+	} else {
+		kindtest.Want(t, err, problems.SourceOnPlatform)
+	}
+}
+
+// TestSourcesMappedRefuses checks what names no workflow through the
+// mappings: a workflow a platform stores that none maps; the latest version
+// through a slug's mapping, whose problem names the key that would map it;
+// and a version that the slug's mapping can't take, as it is the
+// workflow's text, refused before git runs: here, none can.
+func TestSourcesMappedRefuses(t *testing.T) {
+	s := NewSources(t.TempDir(), nil, Workflows{
+		"marketplace/tools/{version}": {Uses: "github/acme/flows@release-{version}", Path: "flows/{version}/tools.yaml"},
+		"marketplace/file/{version}":  {Uses: "github/acme/flows", Path: "{version}"},
+	})
+	s.git = filepath.Join(t.TempDir(), "no-git")
+	for _, tc := range []struct {
+		uses   string
+		kind   *problems.Kind
+		params problems.Params
+	}{
+		{"marketplace/other/v1", problems.SourceOnPlatform, problems.Params{"ref": "marketplace/other/v1"}},
+		{"workflow/nightly", problems.SourceOnPlatform, problems.Params{"ref": "workflow/nightly"}},
+		{"marketplace/tools", problems.SourceLatestNotMapped, problems.Params{"ref": "marketplace/tools", "key": "marketplace/tools/latest"}},
+		{"marketplace/tools@latest", problems.SourceLatestNotMapped, problems.Params{"ref": "marketplace/tools@latest", "key": "marketplace/tools/latest"}},
+		{"marketplace/tools/../../x", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/../../x", "version": "../../x"}},
+		{"marketplace/file/..", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/file/..", "version": ".."}},
+		{"marketplace/tools/.hidden", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/.hidden", "version": ".hidden"}},
+		{"marketplace/tools/-upload-pack=x", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/-upload-pack=x", "version": "-upload-pack=x"}},
+		{"marketplace/tools/v1\x01", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v1\x01", "version": "v1\x01"}},
+		{"marketplace/tools/v1\n", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v1\n", "version": "v1\n"}},
+		{"marketplace/tools/v 1", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v 1", "version": "v 1"}},
+		// Letters, digits and dots, which the revision it gives can't be.
+		{"marketplace/tools/v1..2", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v1..2", "version": "v1..2"}},
+		{"marketplace/tools/v1.", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v1.", "version": "v1."}},
+		{"marketplace/tools/v1.lock", problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/v1.lock", "version": "v1.lock"}},
+		// Past 255 bytes, which git's command line could be too long for.
+		{"marketplace/tools/" + strings.Repeat("v", 256), problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/" + strings.Repeat("v", 256), "version": strings.Repeat("v", 256)}},
+		{"marketplace/tools/" + strings.Repeat("v", 200000), problems.SourceVersionInvalid, problems.Params{"ref": "marketplace/tools/" + strings.Repeat("v", 200000), "version": strings.Repeat("v", 200000)}},
+	} {
+		_, err := s.Resolve(t.Context(), plan.SourceRef{Uses: tc.uses})
+		if !errors.Is(err, compile.ErrNotFound) {
+			t.Errorf("Resolve(%q): %v, want ErrNotFound", tc.uses, err)
+			continue
+		}
+		p := kindtest.Want(t, err, tc.kind)
+		if !reflect.DeepEqual(p.Params, tc.params) {
+			t.Errorf("Resolve(%q): %v, want params %v", tc.uses, p.Params, tc.params)
 		}
 	}
 }
@@ -706,7 +840,7 @@ func TestSourcesProcessesShareCache(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Go(func() {
-			s := NewSources(cache, nil)
+			s := NewSources(cache, nil, nil)
 			s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
 			s.protocols = append(s.protocols, "file")
 			var w *compile.Workflow
@@ -722,7 +856,7 @@ func TestSourcesProcessesShareCache(t *testing.T) {
 			t.Errorf("Resolve %d: %v", i, err)
 		}
 	}
-	s := NewSources(cache, nil)
+	s := NewSources(cache, nil, nil)
 	s.remote = func(host, repo string) string { return filepath.Join(origins, host, repo) }
 	s.protocols = append(s.protocols, "file")
 	if _, err := s.Resolve(t.Context(), plan.SourceRef{Uses: "github/acme/flows@main"}); err != nil {

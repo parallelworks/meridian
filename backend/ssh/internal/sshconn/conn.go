@@ -52,8 +52,10 @@ type Conn struct {
 	notes   []*problem.Problem
 	// timeout is how long the host has to answer a keepalive.
 	timeout time.Duration
-	// sessions has a value for each session open.
+	// sessions has a value for each session open, and tcp for each
+	// connection to an address open (DialTCP).
 	sessions chan struct{}
+	tcp      chan struct{}
 	// done is closed once the connection is, and err says why.
 	done     chan struct{}
 	doneOnce sync.Once
@@ -63,7 +65,7 @@ type Conn struct {
 func newConn(client *ssh.Client, closers []func(), notes []*problem.Problem, interval, timeout time.Duration, sessions int) *Conn {
 	c := &Conn{
 		client: client, closers: closers, notes: notes, timeout: timeout,
-		sessions: make(chan struct{}, sessions), done: make(chan struct{}),
+		sessions: make(chan struct{}, sessions), tcp: make(chan struct{}, MaxTCPConns), done: make(chan struct{}),
 	}
 	go func() {
 		err := client.Wait()
@@ -186,7 +188,7 @@ func (c *Conn) newSession(ctx context.Context) (*Session, error) {
 		if err == nil {
 			return &Session{Session: s, release: release}, nil
 		}
-		if errors.Is(err, errOpenAbandoned) {
+		if errors.Is(err, errAbandoned) {
 			// The place is given back once the open the host may still
 			// answer has ended (open).
 			if ctx.Err() != nil {
@@ -214,60 +216,73 @@ func (c *Conn) newSession(ctx context.Context) (*Session, error) {
 	}
 }
 
-// errOpenAbandoned is open's error for a session it stopped waiting for.
-var errOpenAbandoned = errors.New("sshconn: stopped waiting for the host to open a session")
+// errAbandoned is await's error for an answer it stopped waiting for.
+var errAbandoned = errors.New("sshconn: stopped waiting for the host to answer")
 
-// open asks the host for a session, as x/crypto/ssh's Client.NewSession
-// does, but waits for it only until ctx is done, or the connection closes:
-// then it is errOpenAbandoned, and the call that asks closes a session the
-// host opens after, and only then calls release, which gives the
-// session's place on the connection back, so that the connection never
-// has more open than its limit. Where the connection has closed, the
-// place is given back at once: nothing opens on it again, and the call
-// can wait for ever, as x/crypto/ssh's can on a connection that closed as
-// it asked.
-func (c *Conn) open(ctx context.Context, release func()) (*ssh.Session, error) {
-	type opened struct {
-		s   *ssh.Session
+// await calls ask, which asks the host for what x/crypto/ssh waits for its
+// answer to with no bound, and for ever where the connection closed as it
+// asked, and returns what ask returns, or errAbandoned once ctx is done,
+// or the connection closes, first: then what ask returns after is given to
+// abandon, once it has, to close.
+func await[T any](ctx context.Context, c *Conn, ask func() (T, error), abandon func(T)) (T, error) {
+	type answer struct {
+		v   T
 		err error
 	}
 	var (
 		mu        sync.Mutex
 		abandoned bool
 	)
-	ch := make(chan opened, 1)
+	ch := make(chan answer, 1)
 	go func() {
-		s, err := c.client.NewSession()
+		v, err := ask()
 		mu.Lock()
 		defer mu.Unlock()
 		if !abandoned {
-			ch <- opened{s, err}
+			ch <- answer{v, err}
 			return
 		}
-		if s != nil {
-			_ = s.Close()
-		}
-		release()
+		abandon(v)
 	}()
 	select {
-	case o := <-ch:
-		return o.s, o.err
+	case a := <-ch:
+		return a.v, a.err
 	case <-ctx.Done():
 	case <-c.done:
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	select {
-	case o := <-ch:
+	case a := <-ch:
 		// Answered as it was given up on.
-		return o.s, o.err
+		return a.v, a.err
 	default:
 	}
 	abandoned = true
-	if c.Err() != nil {
+	var none T
+	return none, errAbandoned
+}
+
+// open asks the host for a session, as x/crypto/ssh's Client.NewSession
+// does, but waits for it only until ctx is done, or the connection closes
+// (await): then it is errAbandoned, and the call that asks closes a session
+// the host opens after, and only then calls release, which gives the
+// session's place on the connection back, so that the connection never
+// has more open than its limit. Where the connection has closed, the
+// place is given back at once: nothing opens on it again, and the call
+// can wait for ever, as x/crypto/ssh's can on a connection that closed as
+// it asked.
+func (c *Conn) open(ctx context.Context, release func()) (*ssh.Session, error) {
+	s, err := await(ctx, c, c.client.NewSession, func(s *ssh.Session) {
+		if s != nil {
+			_ = s.Close()
+		}
+		release()
+	})
+	if errors.Is(err, errAbandoned) && c.Err() != nil {
 		release()
 	}
-	return nil, errOpenAbandoned
+	return s, err
 }
 
 // ListenUnix asks the host to listen on a Unix socket at path, and to

@@ -31,6 +31,12 @@ const PurposeJobRecord Purpose = "meridian/job-record/1"
 // part's ID.
 const PurposePlacement Purpose = "meridian/placement/1"
 
+// PurposeSession is what a session is, and where it points, once what gave
+// it read a variable or a password: the session's data, as the store keeps
+// it, whose ID is the session's, sealed under the data key of the root of
+// the tree that made it, which owns it.
+const PurposeSession Purpose = "meridian/session/1"
+
 // A PartID names a part of a run's secrets sealed apart from its record:
 // what it is for, its ID among the run's parts of that purpose, as a job's
 // key, which is UTF-8, not empty, and holds no NUL, and its generation,

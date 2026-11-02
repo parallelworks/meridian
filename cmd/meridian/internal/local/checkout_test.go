@@ -69,7 +69,7 @@ func TestSourcesPinTransports(t *testing.T) {
 	origins, _ := newOrigins(t)
 	o := newOrigin(t, origins, "example.com", "acme/app")
 	o.commit(map[string]string{"README.md": "read me\n"})
-	s := NewSources(t.TempDir(), nil)
+	s := NewSources(t.TempDir(), nil, nil)
 	s.repoURL = func(string) string { return o.dir }
 	_, err := s.Pin(t.Context(), "https://example.com/acme/app.git", "main")
 	if err == nil || !strings.Contains(err.Error(), "not allowed") {
@@ -80,7 +80,7 @@ func TestSourcesPinTransports(t *testing.T) {
 // TestSourcesPinRefuses checks that Pin refuses what plan.CheckRepo does,
 // before it runs git.
 func TestSourcesPinRefuses(t *testing.T) {
-	s := NewSources(t.TempDir(), nil)
+	s := NewSources(t.TempDir(), nil, nil)
 	s.git = filepath.Join(t.TempDir(), "no-git")
 	for _, repo := range []string{"file:///srv/app.git", "https://u:t@github.com/acme/app.git", "/srv/app.git"} {
 		_, err := s.Pin(t.Context(), repo, "main")

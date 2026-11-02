@@ -1,0 +1,16 @@
+jobs:
+  main:
+    steps:
+      - name: Point the session
+        uses: parallelworks/update-session
+        with:
+          Name: s
+          RemotePort: 8080
+          localport: 9090
+          local_port: 9091
+          targetInfo:
+            NAME: k8s
+            resourcetype: pods
+'on':
+  execute:
+    inputs: {}

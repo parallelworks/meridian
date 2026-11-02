@@ -60,14 +60,14 @@ func TestStepRunPaths(t *testing.T) {
 	if cleanup == try {
 		t.Error("the step's cleanup's step run is its try's")
 	}
-	many := make([]string, workerapi.MaxStepRunMasks+1)
+	many := make([]string, workerapi.MaxMasks+1)
 	for i := range many {
 		many[i] = strconv.Itoa(i)
 	}
 	for name, req := range map[string]workerapi.StepRunRequest{
 		"a step that can't have one": {Step: 1},
 		"a cleanup of a try":         {Cleanup: true, Try: 1},
-		"too much to mask":           {Masked: []string{strings.Repeat("x", workerapi.MaxStepRunMasked+1)}},
+		"too much to mask":           {Masked: []string{strings.Repeat("x", workerapi.MaxMaskedBytes+1)}},
 		"too many to mask":           {Masked: many},
 	} {
 		if status, answer := ask(req); status != http.StatusBadRequest {
@@ -84,6 +84,32 @@ func TestStepRunPaths(t *testing.T) {
 	}
 	if status, answer, err := c.send(http.MethodPost, workerapi.PathChild, body, credential); err != nil || status != http.StatusOK {
 		t.Fatalf("the ask for a child was answered %d, %v: %s", status, err, answer)
+	}
+	// A child's request masks no more than a step run's may.
+	for name, req := range map[string]workerapi.ChildRequest{
+		"too much to mask": {Try: 2, Masked: []string{strings.Repeat("x", workerapi.MaxMaskedBytes+1)}},
+		"too many to mask": {Try: 2, Masked: many},
+	} {
+		body, err := workerapi.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status, answer, err := c.send(http.MethodPost, workerapi.PathChild, body, credential); err != nil || status != http.StatusBadRequest {
+			t.Errorf("a child's request with %s was answered %d, %v: %s", name, status, err, answer)
+		}
+	}
+	// A child's paths reach only a workflow its step calls: the step run
+	// of try 0 is none.
+	q := url.Values{workerapi.QueryStep: {"0"}, workerapi.QueryTry: {"0"}}
+	if status, answer, err := c.send(http.MethodGet, workerapi.PathChildEnd+"?"+q.Encode(), nil, credential); err != nil || status != http.StatusNotFound {
+		t.Errorf("a poll for the end of a child that is a step run was answered %d, %v: %s", status, err, answer)
+	}
+	childStop, err := workerapi.Marshal(workerapi.ChildStop{Reason: plan.ReasonCancelled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, answer, err := c.send(http.MethodPost, workerapi.PathChildStop, childStop, credential); err != nil || status != http.StatusNotFound {
+		t.Errorf("a child's stop of a step run was answered %d, %v: %s", status, err, answer)
 	}
 
 	poll := func(credential string, q url.Values) (int, []byte) {

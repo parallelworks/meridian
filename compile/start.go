@@ -1075,7 +1075,8 @@ func (st *starter) expand(res *StartResult, scope expr.Scope) error {
 // sessions returns the workflow's sessions:, evaluated in scope, the run's,
 // for the session provider, and what evaluating them read; or nil if it has
 // none, or there is no session provider (resolver_missing), or evaluating
-// them failed, which it reports as it reports what env: gives.
+// them failed, which it reports as it reports what env: gives, or more
+// than one of them redirects (session_redirect_twice).
 func (st *starter) sessions(scope expr.Scope) (map[string]any, expr.Read) {
 	if m, _ := st.p.Run.Sessions.Written().(map[string]any); len(m) == 0 {
 		return nil, expr.Read{}
@@ -1090,6 +1091,12 @@ func (st *starter) sessions(scope expr.Scope) (map[string]any, expr.Read) {
 		return nil, read
 	}
 	m, _ := out.(map[string]any)
+	// What the workflow wrote, Create checked (compiler.checkRedirects);
+	// a redirect: an expression gives is known now.
+	if keys := redirected(m); len(keys) > 1 {
+		st.report(problems.SessionRedirectTwice, "/sessions", problems.Params{"keys": problems.QuoteAll(keys)})
+		return nil, read
+	}
 	return m, read
 }
 

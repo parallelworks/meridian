@@ -54,6 +54,9 @@ type Options struct {
 	// (direct-tcpip), as a jump host that stalls once its handshake is
 	// done.
 	HoldForwards bool
+	// RefuseForwards refuses to forward TCP connections (direct-tcpip),
+	// as sshd's AllowTcpForwarding no does: administratively prohibited.
+	RefuseForwards bool
 	// Sh runs a command that starts with /bin/sh in its place, as on a
 	// host whose sh is another, or the system's for "".
 	Sh string
@@ -85,7 +88,10 @@ type Server struct {
 	// env is added to the environment of exec requests after
 	// Options.Env (SetEnv).
 	env []string
-	wg  sync.WaitGroup
+	// forwards are the addresses of the connections it forwarded
+	// (direct-tcpip), in order (Forwards).
+	forwards []string
+	wg       sync.WaitGroup
 }
 
 // New starts a server, which stops when the test ends.
@@ -196,6 +202,14 @@ func (s *Server) Scripts() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.scripts...)
+}
+
+// Forwards returns the addresses, host:port, of the connections the
+// server forwarded (direct-tcpip), as a jump host does, in order.
+func (s *Server) Forwards() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.forwards...)
 }
 
 // OpenSessions is how many sessions are open, of every connection's: those
@@ -364,7 +378,11 @@ func (s *Server) serve(c net.Conn) {
 				s.session(ch, reqs)
 			})
 		case "direct-tcpip":
-			if s.opts.HoldForwards {
+			switch {
+			case s.opts.HoldForwards:
+				continue
+			case s.opts.RefuseForwards:
+				_ = nc.Reject(ssh.Prohibited, "open failed")
 				continue
 			}
 			var p struct {
@@ -377,11 +395,15 @@ func (s *Server) serve(c net.Conn) {
 				_ = nc.Reject(ssh.ConnectionFailed, "sshtest: bad request")
 				continue
 			}
-			to, err := (&net.Dialer{}).DialContext(s.t.Context(), "tcp", net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port))))
+			addr := net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port)))
+			to, err := (&net.Dialer{}).DialContext(s.t.Context(), "tcp", addr)
 			if err != nil {
 				_ = nc.Reject(ssh.ConnectionFailed, err.Error())
 				continue
 			}
+			s.mu.Lock()
+			s.forwards = append(s.forwards, addr)
+			s.mu.Unlock()
 			ch, reqs, err := nc.Accept()
 			if err != nil {
 				_ = to.Close()
@@ -612,4 +634,60 @@ func (c *faultConn) Write(b []byte) (int, error) {
 		<-g
 	}
 	return c.Conn.Write(b)
+}
+
+// Echo listens on a port of the loopback interface's IPv4 address,
+// 127.0.0.1, and sends back what each connection to it sends, until the
+// test ends: an address for a server to forward connections to
+// (direct-tcpip). It returns the port.
+func Echo(t testing.TB) int {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		wg sync.WaitGroup
+		mu sync.Mutex
+		// conns are the connections open, until ended is set.
+		conns = map[net.Conn]bool{}
+		ended bool
+	)
+	wg.Go(func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			if ended {
+				mu.Unlock()
+				_ = c.Close()
+				return
+			}
+			conns[c] = true
+			mu.Unlock()
+			wg.Go(func() {
+				defer func() {
+					mu.Lock()
+					delete(conns, c)
+					mu.Unlock()
+					_ = c.Close()
+				}()
+				_, _ = io.Copy(c, c)
+			})
+		}
+	})
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		ended = true
+		for c := range conns {
+			_ = c.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
+	})
+	tcp, _ := ln.Addr().(*net.TCPAddr)
+	return tcp.Port
 }

@@ -364,7 +364,7 @@ func (r *inputResolver) askPlatform(f *field, v any) (any, finding) {
 		// isn't made, so none is asked again.
 		return v, finding{}
 	}
-	out, err := r.opts.Inputs.ResolveInput(r.ctx, f.typ, f.def, v)
+	out, err := r.opts.Inputs.ResolveInput(r.ctx, f.typ, f.def, v, r.opts.Parent != nil)
 	switch {
 	case errors.Is(err, ErrInputType):
 		return wrong(problems.PlatformInput, problems.Params{"type": f.typ})

@@ -56,7 +56,7 @@ jobs:
 // platform resolves clusters by name, and provides no other type.
 type platform struct{}
 
-func (platform) ResolveInput(_ context.Context, typ string, _ map[string]any, v any) (any, error) {
+func (platform) ResolveInput(_ context.Context, typ string, _ map[string]any, v any, _ bool) (any, error) {
 	if typ != "compute-clusters" {
 		return nil, compile.ErrInputType
 	}
@@ -85,6 +85,107 @@ func TestPlatformInputs(t *testing.T) {
 	_, diags = resolveInputs(t, doc, map[string]any{"cluster": "debug"}, compile.Options{Inputs: platform{}})
 	if len(diags) != 1 || diags[0].Code != problems.PlatformInput.Code() {
 		t.Errorf("a type the platform doesn't provide: %v", diags)
+	}
+}
+
+// calledInputs resolves every value to whether it was asked for a called
+// workflow's input.
+type calledInputs struct{}
+
+func (calledInputs) ResolveInput(_ context.Context, _ string, _ map[string]any, _ any, called bool) (any, error) {
+	return called, nil
+}
+
+// TestPlatformInputCalled checks that the Inputs resolver is told whether
+// it resolves a called workflow's input, one of a run whose Create has a
+// step that calls it (Options.Parent), or a run's own.
+func TestPlatformInputCalled(t *testing.T) {
+	doc := load(t, clusterWorkflow)
+	for _, parent := range []*compile.Parent{nil, {Run: "1", Job: "main", Root: "1", Depth: 1}} {
+		inputs, diags := resolveInputs(t, doc, map[string]any{"cluster": "pw://alice/hpc"}, compile.Options{Inputs: calledInputs{}, Parent: parent})
+		if len(diags) != 0 || inputs.Values["cluster"] != (parent != nil) {
+			t.Errorf("with the parent %v, the resolver was told called %v, %v", parent, inputs.Values["cluster"], diags)
+		}
+	}
+}
+
+// TestNullTakesPlatformDefault checks that a null submitted for a
+// cluster's or a bucket's input of a run no step calls takes the input's
+// default, when that is text but "", as ACTIVATE's run creation gives it,
+// and as "" does; and that another type's null, one whose default is "" or
+// an expression, which ACTIVATE leaves no value, and a called workflow's
+// stay null.
+func TestNullTakesPlatformDefault(t *testing.T) {
+	doc := load(t, `on:
+  execute:
+    inputs:
+      cluster:
+        type: compute-clusters
+        default: lab
+      resources:
+        type: compute-resources
+        default: lab
+      bucket:
+        type: bucket
+        default: pw://alice/data
+      blank:
+        type: compute-clusters
+        default: ""
+      computed:
+        type: compute-clusters
+        default: ${{ 'pw://alice/lab' }}
+      many:
+        type: compute-clusters
+        multi: true
+        default: ${{ 'pw://alice/lab' }}
+      group:
+        type: group
+        items:
+          computed:
+            type: compute-clusters
+            default: ${{ 'pw://alice/lab' }}
+      part:
+        type: slurm-partitions
+        resource: ${{ inputs.cluster }}
+        default: ${{ 'debug' }}
+jobs:
+  main:
+    steps:
+      - run: echo ok
+`)
+	details := resolverFunc(func(_ context.Context, typ string, _ map[string]any, v any) (any, error) {
+		return map[string]any{"type": typ, "name": v}, nil
+	})
+	nulls := map[string]any{"cluster": nil, "resources": nil, "bucket": nil, "blank": nil, "computed": nil, "many": nil, "group": map[string]any{"computed": nil}, "part": nil}
+	inputs, diags := resolveInputs(t, doc, nulls, compile.Options{Inputs: details})
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	want := map[string]any{
+		"cluster":   map[string]any{"type": "compute-clusters", "name": "lab"},
+		"resources": map[string]any{"type": "compute-resources", "name": "lab"},
+		"bucket":    map[string]any{"type": "bucket", "name": "pw://alice/data"},
+		"blank":     nil,
+		"computed":  nil,
+		"many":      nil,
+		"group":     map[string]any{"computed": nil},
+		"part":      nil,
+	}
+	if !reflect.DeepEqual(inputs.Values, want) {
+		t.Errorf("at a run no step calls, the nulls give %v, want %v", inputs.Values, want)
+	}
+	inputs, diags = resolveInputs(t, doc, map[string]any{"cluster": ""}, compile.Options{Inputs: details})
+	if len(diags) != 0 || !reflect.DeepEqual(inputs.Values["cluster"], want["cluster"]) {
+		t.Errorf("a cluster's \"\" gives %v, %v", inputs.Values["cluster"], diags)
+	}
+	inputs, diags = resolveInputs(t, doc, nulls, compile.Options{Inputs: details, Parent: &compile.Parent{Run: "1", Job: "main", Root: "1", Depth: 1}})
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	for _, name := range []string{"cluster", "resources", "bucket"} {
+		if v, ok := inputs.Values[name]; !ok || v != nil {
+			t.Errorf("a called workflow's null %s gives %v", name, v)
+		}
 	}
 }
 
@@ -149,7 +250,7 @@ func TestRowConditionsNotApplied(t *testing.T) {
 // rejects is a platform that rejects every value with err.
 type rejects struct{ err error }
 
-func (r rejects) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
+func (r rejects) ResolveInput(context.Context, string, map[string]any, any, bool) (any, error) {
 	return nil, r.err
 }
 
@@ -209,7 +310,7 @@ func TestPlatformInputProblem(t *testing.T) {
 // returns is a platform whose value for every input is v.
 type returns struct{ v any }
 
-func (r returns) ResolveInput(context.Context, string, map[string]any, any) (any, error) {
+func (r returns) ResolveInput(context.Context, string, map[string]any, any, bool) (any, error) {
 	return r.v, nil
 }
 
