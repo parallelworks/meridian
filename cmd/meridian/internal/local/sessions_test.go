@@ -24,6 +24,7 @@ import (
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/expr"
 	"github.com/parallelworks/meridian/internal/leaktest"
+	"github.com/parallelworks/meridian/internal/porttest"
 	"github.com/parallelworks/meridian/internal/sessionproxy"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -518,9 +519,7 @@ func TestSessionHostServesAgain(t *testing.T) {
 	link.Point = []byte(`{"type":"link","url":"https://example.com/a"}`)
 	// One whose port is free still: served there, which the store, which
 	// forgot it as the process took it over, keeps again.
-	free := listenOn(t, "tcp4", "127.0.0.1", 0)
-	freePort := free.Addr().(*net.TCPAddr).Port
-	_ = free.Close()
+	freePort := porttest.Refusing(t)
 	same := testSession(map[string]any{})
 	same.ID, same.Key, same.Name = "same", "same", "same-1"
 	same.Point, same.Port = []byte(`{"type":"tunnel","remoteHost":"localhost","remotePort":1}`), freePort
@@ -698,9 +697,7 @@ func TestSessionDialer(t *testing.T) {
 	if got := read(h.dialer("web-1", sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})); got != "the service" {
 		t.Errorf("a session of this machine's service reached %q", got)
 	}
-	free := listenOn(t, "tcp4", "127.0.0.1", 0)
-	alone := free.Addr().(*net.TCPAddr).Port
-	_ = free.Close()
+	alone := porttest.Refusing(t)
 	serveText(t, listenOn(t, "tcp6", "::1", alone), "a service on [::1]")
 	if got := read(h.dialer("web-1", sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: alone})); got != "a service on [::1]" {
 		t.Errorf("a session of a service on [::1] alone reached %q", got)
@@ -808,9 +805,7 @@ func answerOf(t *testing.T, dial sessionproxy.DialFunc) string {
 func TestSessionDialerPinned(t *testing.T) {
 	t.Parallel()
 	h, _, _ := newTestSessionHost(t)
-	free := listenOn(t, "tcp4", "127.0.0.1", 0)
-	port := free.Addr().(*net.TCPAddr).Port
-	_ = free.Close()
+	port := porttest.Refusing(t)
 	serveText(t, listenOn(t, "tcp6", "::1", port), "another program")
 	dial := h.dialer("web-1", sessionPoint{Type: "tunnel", RemoteHost: "localhost", RemotePort: port})
 	for range 2 {

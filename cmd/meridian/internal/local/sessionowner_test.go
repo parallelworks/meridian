@@ -20,6 +20,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator"
 	"github.com/parallelworks/meridian/internal/kindtest"
+	"github.com/parallelworks/meridian/internal/porttest"
 	"github.com/parallelworks/meridian/internal/sessionproxy"
 	"github.com/parallelworks/meridian/internal/sockowner"
 	"github.com/parallelworks/meridian/internal/sockownertest"
@@ -134,10 +135,7 @@ func TestSessionDialerChecksOwner(t *testing.T) {
 					service = countBytes(t, "tcp4", "127.0.0.1", 0)
 				} else {
 					// A port 127.0.0.1 refuses at, which [::1] listens at.
-					free := listenOn(t, "tcp4", "127.0.0.1", 0)
-					port := free.Addr().(*net.TCPAddr).Port
-					_ = free.Close()
-					service = countBytes(t, "tcp6", "::1", port)
+					service = countBytes(t, "tcp6", "::1", porttest.Refusing(t))
 				}
 				var a asked
 				h.owner = ownerSays(service.port(), tc.uid, tc.err, &a)

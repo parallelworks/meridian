@@ -12,6 +12,7 @@ import (
 
 	"github.com/parallelworks/meridian/backend/ssh/internal/sshconn"
 	"github.com/parallelworks/meridian/internal/leaktest"
+	"github.com/parallelworks/meridian/internal/porttest"
 	"github.com/parallelworks/meridian/internal/sshtest"
 )
 
@@ -44,19 +45,6 @@ func waitClosed(t *testing.T, conn net.Conn, why string) {
 	case <-time.After(10 * time.Second):
 		t.Fatalf("%s, the connection didn't close", why)
 	}
-}
-
-// closedPort returns a port of the loopback interface that nothing
-// listens on.
-func closedPort(t *testing.T) int {
-	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // a TCP listener's
-	_ = ln.Close()
-	return port
 }
 
 // TestDialTCP checks that a host connects to an address for the
@@ -96,7 +84,7 @@ func TestDialTCP(t *testing.T) {
 		for _, tc := range []struct {
 			host string
 			port int
-		}{{"127.0.0.1", closedPort(t)}, {"no-such-host.invalid", port}} {
+		}{{"127.0.0.1", porttest.Refusing(t)}, {"no-such-host.invalid", port}} {
 			_, err := c.DialTCP(t.Context(), tc.host, tc.port)
 			te, ok := errors.AsType[*sshconn.TCPError](err)
 			if !ok || te.Refused || te.Said == "" || !errors.Is(err, sshconn.ErrTCPConnectFailed) || errors.Is(err, sshconn.ErrTCPForwardingRefused) {
