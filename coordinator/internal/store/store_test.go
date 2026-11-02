@@ -245,7 +245,8 @@ func TestOpen(t *testing.T) {
 
 // TestOpenWhileBusy checks that Open tries again while SQLite reports the
 // database busy as it opens it, as it does when another process holds it
-// to turn its write-ahead log on, and gives up once its context ends.
+// to turn its write-ahead log on, and gives up once its context ends,
+// with an error that is both the context's and SQLite's.
 func TestOpenWhileBusy(t *testing.T) {
 	// lock holds the database at path exclusively until the function it
 	// returns is called.
@@ -294,6 +295,38 @@ func TestOpenWhileBusy(t *testing.T) {
 		}
 		if !errors.Is(err, context.DeadlineExceeded) || !busy(err) {
 			t.Errorf("Open gave %v, not its context's end and SQLite's busy", err)
+		}
+	})
+	// SQLite's driver ends a wait for a lock once the statement's context
+	// ends, with the context's error alone: Open says the database was
+	// busy as clearly when its context ends during a try as between two.
+	t.Run("gives up during a try", func(t *testing.T) {
+		path := filepath.Join(coordtest.PrivateDir(t), "meridian.db")
+		writeFile(t, path, 0o600)
+		defer lock(t, path)()
+		// The second try begins half hoppersqlite's busy_timeout, 50 ms,
+		// before the context ends, which it does while SQLite waits for
+		// the database, or, should the sleep run over, before the try's
+		// first statement.
+		was := openSQLite
+		t.Cleanup(func() { openSQLite = was })
+		var tries int
+		openSQLite = func(ctx context.Context, path string, cfg *hoppersqlite.Config) (*hoppersqlite.Driver, error) {
+			if tries++; tries == 2 {
+				deadline, _ := ctx.Deadline()
+				time.Sleep(time.Until(deadline) - 25*time.Millisecond) //nolint:forbidigo // the try that the context ends in, as the test asks
+			}
+			return was(ctx, path, cfg)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		defer cancel()
+		s, err := Open(ctx, path, nil)
+		if err == nil {
+			_ = s.Close()
+			t.Fatal("Open opened a database another connection held")
+		}
+		if !errors.Is(err, context.DeadlineExceeded) || !busy(err) || tries != 2 {
+			t.Errorf("Open gave %v after %d tries, not its context's end during the second and SQLite's busy", err, tries)
 		}
 	})
 }

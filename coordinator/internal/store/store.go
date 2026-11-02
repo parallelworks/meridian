@@ -243,7 +243,9 @@ var openSQLite = hoppersqlite.OpenContext
 // do at once. It waits for another process that holds the database for as
 // long as ctx allows, and while SQLite reports the database busy as it
 // opens it or migrates it, as it can when processes open a new database at
-// once, for up to openBusyFor.
+// once, for up to openBusyFor. Once ctx ends after SQLite reported the
+// database busy, the error is both ctx's and SQLite's, whether ctx ended
+// between tries or during one.
 //
 // Whoever can write the database can claim an attempt, and with it the
 // private values its job reads, so Open trusts nothing at path that
@@ -278,6 +280,12 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 		return nil, err
 	}
 	start, wait := time.Now(), openBusyFirstWait
+	gaveUp := func(err error) error {
+		return fmt.Errorf("store: the database was busy for %s as it opened: %w", time.Since(start).Round(time.Millisecond), err)
+	}
+	// lastBusy is the error of the last try that SQLite reported the
+	// database busy.
+	var lastBusy error
 	for {
 		s, err := openOnce(ctx, path, log, opts, readOnly)
 		switch {
@@ -286,17 +294,23 @@ func Open(ctx context.Context, path string, opts *Options) (*Store, error) {
 				_ = os.Remove(path) //nolint:gosec // the empty file Open made just now
 			}
 			return nil, networkFilesystem(path, err)
+		case lastBusy != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()):
+			// ctx ended during the try: SQLite's driver ends a wait for
+			// a lock then with the context's error alone, which says
+			// nothing of the database's being held.
+			return nil, gaveUp(errors.Join(err, lastBusy))
 		case !busy(err):
 			return s, err
 		case time.Since(start)+wait > openBusyFor:
-			return nil, fmt.Errorf("store: the database was busy for %s as it opened: %w", time.Since(start).Round(time.Millisecond), err)
+			return nil, gaveUp(err)
 		}
+		lastBusy = err
 		log.DebugContext(ctx, "store: the database is busy as it opens; trying again", "error", err, "after", wait)
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return nil, fmt.Errorf("store: the database was busy for %s as it opened: %w", time.Since(start).Round(time.Millisecond), errors.Join(ctx.Err(), err))
+			return nil, gaveUp(errors.Join(ctx.Err(), err))
 		case <-t.C:
 		}
 		wait = min(2*wait, openBusyMaxWait)
