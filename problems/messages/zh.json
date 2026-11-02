@@ -73,6 +73,7 @@
   "needed_job_no_step": "作业“{job}”中没有 id 为“{id}”的步骤。",
   "needs_unknown_key": "needs.{job} 中没有键“{key}”，它只有 outputs、result 和 steps，因此这里读作其本身的文本 needs.{job}.{key}。",
   "needs_read_whole": "格式 1 只通过 result 或按名称读取的输出（例如 needs.{job}.outputs.<name>）读取所需的作业，因此 {text} 读作其本身的文本。",
+  "needs_every_job": "格式 1 拒绝 {text}，因为它会读取此作业所需的每个作业：请按名称读取每个作业，例如 needs.<job>.outputs.<name>。",
   "step_not_earlier": "步骤“{id}”不会在此步骤之前运行，因此此处无法知道它的输出。",
   "undefined_step": "作业“{job}”中没有 id 为“{id}”的先前步骤。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
   "output_undefined_step": "作业“{job}”中没有 id 为“{id}”的步骤，因此当其步骤都成功时，此输出会使作业失败；当有步骤失败或被取消时，此输出为空。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",

@@ -521,6 +521,13 @@
       "按名称读取每个输出：needs.<job>.outputs.<name>。"
     ]
   },
+  "needs_every_job": {
+    "title": "读取所有所需作业",
+    "why": "引用中的 * 会读取其所在位置的每个值，就像 vars.* 读取每个变量一样，但格式 1 不允许在 needs 中用它代替作业的名称：一个作业只能按名称读取另一个作业，例如 needs.<job>.result、needs.<job>.outputs.<name> 或 needs.<job>.steps.<id>.outputs.<name>。因此，needs.* 以及从它继续的引用（例如 needs.*.outputs.path）都是错误，在 ACTIVATE 中也是如此。",
+    "fix": [
+      "按名称读取每个作业：needs.<job>.outputs.<name>。"
+    ]
+  },
   "step_not_earlier": {
     "title": "该步骤不在此步骤之前运行",
     "why": "步骤可以读取它之前的步骤的输出，而这个步骤在后面。",

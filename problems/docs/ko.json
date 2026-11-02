@@ -521,6 +521,13 @@
       "각 출력을 이름으로 읽으세요: needs.<job>.outputs.<name>."
     ]
   },
+  "needs_every_job": {
+    "title": "필요한 모든 작업 읽기",
+    "why": "참조의 *는 vars.*가 모든 변수를 읽듯이 그 자리의 값을 하나씩 읽지만, 형식 1은 needs에서 작업 이름 자리에 쓰인 *를 거부합니다. 작업은 다른 작업을 needs.<job>.result, needs.<job>.outputs.<name>, needs.<job>.steps.<id>.outputs.<name>처럼 이름으로만 읽습니다. 따라서 needs.*와, needs.*.outputs.path처럼 그 뒤로 이어지는 참조는 오류이며, ACTIVATE에서도 마찬가지입니다.",
+    "fix": [
+      "각 작업을 이름으로 읽으세요: needs.<job>.outputs.<name>."
+    ]
+  },
   "step_not_earlier": {
     "title": "이 단계보다 먼저 실행되지 않는 단계",
     "why": "단계는 앞선 단계의 출력을 읽을 수 있는데, 이 단계는 뒤에 있습니다.",

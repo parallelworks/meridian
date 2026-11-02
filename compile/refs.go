@@ -136,7 +136,16 @@ func (c *compiler) checkRef(r expr.Ref, ph plan.Phase, job *jobInfo, in *spot, a
 	}
 	c.recordSecret(r)
 	path := r.Path
-	if unnamed(path) {
+	every := len(path) > 0 && path[0] == "*"
+	switch {
+	case r.Context == "needs" && every:
+		// needs.* would read every job this one needs, which format 1
+		// refuses: a job reads another only by its name.
+		c.reportIn(in, at, problems.NeedsEveryJob, problems.Params{"text": "needs." + strings.Join(path, ".")})
+		return false
+	case unnamed(path) && (r.Context != "steps" || !every):
+		// steps.* is checked as steps.<id> is, since it reads as its own
+		// text as that does, but for steps.*.outputs.<name>.
 		return true
 	}
 	var f finding
@@ -474,9 +483,10 @@ func (c *compiler) checkEnvRef(name string, ph plan.Phase, job *jobInfo, in *spo
 }
 
 // checkStepRef checks that steps.<path> names an output of an earlier step
-// of the job, as steps.<id>.outputs.<name>. Any other reference to steps,
-// such as steps.<id> or steps.<id>.result, is a warning, as format 1 reads
-// it as its own text. In one of the job's outputs, which are read once its
+// of the job, as steps.<id>.outputs.<name>, or of each, as
+// steps.*.outputs.<name>. Any other reference to steps, such as steps.<id>,
+// steps.* or steps.<id>.result, is a warning, as format 1 reads it as its
+// own text. In one of the job's outputs, which are read once its
 // steps have run, a step that isn't there is a warning, as the output is
 // empty, and so it is in a step's cleanup:, which runs once every step
 // has, its own and later ones among them.
@@ -500,6 +510,10 @@ func (c *compiler) checkStepRef(path []string, job *jobInfo, output bool) findin
 		return finding{unknownKey, problems.Params{"id": id, "key": path[1]}}
 	case len(path) < 3:
 		return finding{problems.StepsReadWhole, problems.Params{"id": id, "text": "steps." + strings.Join(path, ".")}}
+	case id == "*":
+		// steps.*.outputs.<name> reads that output of each step that has
+		// run, whichever they are.
+		return finding{}
 	}
 	i, ok := job.stepIDs[id]
 	if !ok || i >= reach {

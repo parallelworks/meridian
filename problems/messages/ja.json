@@ -73,6 +73,7 @@
   "needed_job_no_step": "ジョブ「{job}」に id が「{id}」のステップはありません。",
   "needs_unknown_key": "needs.{job} にキー「{key}」はありません。needs.{job} にあるのは outputs、result、steps なので、これはそれ自体のテキスト needs.{job}.{key} として読み取られます。",
   "needs_read_whole": "形式 1 は必要なジョブを result か、needs.{job}.outputs.<name> のように名前で指定した出力でしか読み取らないため、{text} はそれ自体のテキストとして読み取られます。",
+  "needs_every_job": "{text} はこのジョブが必要とするすべてのジョブを読み取ることになるため、形式 1 では認められません。needs.<job>.outputs.<name> のように、各ジョブを名前で読み取ってください。",
   "step_not_earlier": "ステップ「{id}」はこのステップより前に実行されないため、その出力はここではわかりません。",
   "undefined_step": "ジョブ「{job}」のこれより前のステップに、id が「{id}」のものはありません。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",
   "output_undefined_step": "ジョブ「{job}」に id が「{id}」のステップがないため、この出力は、ステップがすべて成功するとジョブを失敗させ、いずれかが失敗またはキャンセルされると空になります。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",

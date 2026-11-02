@@ -1,0 +1,39 @@
+description: >-
+  A * that reads a secret reads it as a read by its name does: what an
+  expression makes of vars.*, of env.* where env holds a secret
+  variable's value, or of steps.*.outputs.<name> or steps.<id>.outputs.*
+  where a step's output holds a secret's text, is a secret, so a job
+  output made from it is private and a secret. One whose path leads to no
+  secret, as steps.*.outputs.ZONE doesn't, isn't.
+source: Meridian
+contexts:
+  vars: {token: s3cret, region: eu}
+secret-variables: [token]
+jobs:
+  main:
+    steps:
+      - {outcome: success, outputs: {KEY: key-s3cret}}
+      - {outcome: success, outputs: {ZONE: b}}
+      - {outcome: success}
+expect:
+  values:
+    /jobs/main/steps/2/run: echo eu,s3cret
+    /jobs/main/outputs/vars: eu,s3cret
+    /jobs/main/outputs/env: eu,s3cret
+    /jobs/main/outputs/keys: key-s3cret
+    /jobs/main/outputs/login: key-s3cret
+    /jobs/main/outputs/zones: b
+    /jobs/main/outputs/count: "2"
+  private-outputs:
+    - /jobs/main/outputs/count
+    - /jobs/main/outputs/env
+    - /jobs/main/outputs/keys
+    - /jobs/main/outputs/login
+    - /jobs/main/outputs/vars
+  secret-outputs:
+    - /jobs/main/outputs/count
+    - /jobs/main/outputs/env
+    - /jobs/main/outputs/keys
+    - /jobs/main/outputs/login
+    - /jobs/main/outputs/vars
+    - /jobs/main/steps/0/outputs/KEY

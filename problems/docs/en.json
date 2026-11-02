@@ -447,6 +447,12 @@
       "Read each output by its name: needs.<job>.outputs.<name>."
     ]
   },
+  "needs_every_job": {
+    "why": "A * in a reference reads each value where it is, as vars.* reads every variable, but format 1 refuses one in place of a job's name in needs: a job reads another only by its name, as needs.<job>.result, needs.<job>.outputs.<name> or needs.<job>.steps.<id>.outputs.<name>. So needs.*, and a reference that goes on from it, such as needs.*.outputs.path, is an error, as it is in ACTIVATE.",
+    "fix": [
+      "Read each job by its name: needs.<job>.outputs.<name>."
+    ]
+  },
   "step_not_earlier": {
     "why": "A step can read the outputs of the steps before it, and this one comes later.",
     "fix": [

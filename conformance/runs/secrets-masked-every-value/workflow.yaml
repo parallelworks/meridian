@@ -1,0 +1,19 @@
+jobs:
+  main:
+    env:
+      TOKEN: ${{ vars.token }}
+    steps:
+      - id: login
+        run: |
+          echo "vars ${{ join(vars.*, ' ') }}"
+          echo "env ${{ join(env.*, ' ') }}"
+          echo "KEY=key-$TOKEN" >> $OUTPUTS
+      - run: |
+          echo "keys ${{ join(steps.*.outputs.KEY, ' ') }}"
+          echo "outputs ${{ join(steps.login.outputs.*, ' ') }}"
+    outputs:
+      key: ${{ steps.login.outputs.KEY }}
+  use:
+    needs: [main]
+    steps:
+      - run: echo "needs ${{ join(needs.main.outputs.*, ' ') }}"

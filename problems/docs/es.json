@@ -521,6 +521,13 @@
       "Lee cada salida por su nombre: needs.<job>.outputs.<name>."
     ]
   },
+  "needs_every_job": {
+    "title": "Todos los trabajos necesarios leídos",
+    "why": "Un * en una referencia lee cada valor donde está, como vars.* lee todas las variables, pero el formato 1 lo rechaza en lugar del nombre de un trabajo en needs: un trabajo lee otro solo por su nombre, como needs.<job>.result, needs.<job>.outputs.<name> o needs.<job>.steps.<id>.outputs.<name>. Así que needs.*, y una referencia que sigue a partir de él, como needs.*.outputs.path, es un error, igual que en ACTIVATE.",
+    "fix": [
+      "Lee cada trabajo por su nombre: needs.<job>.outputs.<name>."
+    ]
+  },
   "step_not_earlier": {
     "title": "El paso no se ejecuta antes que este",
     "why": "Un paso puede leer las salidas de los pasos anteriores, y este viene después.",

@@ -1,0 +1,14 @@
+jobs:
+  build:
+    steps:
+      - id: compile
+        run: make >> $OUTPUTS
+  test:
+    needs: [build]
+    if: ${{ needs.*.result }}
+    steps:
+      - run: echo ${{ needs.* }} ${{ needs['*'] }}
+      - run: echo ${{ join(needs.*.outputs.binary, ' ') }}
+    outputs:
+      all: ${{ toJSON(needs[*]) }}
+      build: ${{ needs.build.outputs.binary }}

@@ -221,6 +221,19 @@ cases:
     value: [h, orgValue]
   - expr: "join(org.*, ',')"
     value: h,orgValue
+  # So do env.*, matrix.*, remote.* and sessions.*, which format 1 read as
+  # "", as their own text or as null before, and an output's * (below).
+  # needs.*, which format 1 refuses, and steps.*, which reads as its own text
+  # as steps.<id> does, are the compiler's and a run's to read:
+  # compile/needs-every-job and contexts/every-value.
+  - expr: env.*
+    value: [bar, "1", e]
+  - expr: matrix.*
+    value: [2, linux]
+  - expr: remote.*
+    value: [main, "https://example.com/workflows"]
+  - expr: sessions.*
+    value: [helloworld, s]
   - expr: remote.branch
     value: main
   - expr: remote.missing
@@ -256,6 +269,20 @@ cases:
     value: dashed
   - expr: "steps.build.outputs.path == '/out/bin'"
     value: true
+  # A * in place of an output's name reads each output, in the order of
+  # their names, with the rest of the path read from each, as a * after a
+  # context's name reads each of its values. Format 1 read an output named *
+  # before, or the reference's own text.
+  - expr: needs.build.outputs.*
+    value: ['{"k": "v"}', /out/bin]
+  - expr: needs.build.outputs.*.k
+    value: [v]
+  - expr: "join(needs['prep-model'].outputs.*, ',')"
+    value: /models/x
+  - expr: steps.build.outputs.*
+    value: [/out/bin]
+  - expr: "steps['my-step'].outputs['*']"
+    value: [dashed]
   - expr: inputs.field20 get env.IDX
     value: world
   - template: "${{ inputs.name }}-${{ jobs.x }}"

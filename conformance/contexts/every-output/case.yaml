@@ -1,0 +1,43 @@
+description: >-
+  A * in place of an output's name reads each output, as a * after a
+  context's name reads each of its values: a list of the outputs, in the
+  order of their names, with the rest of the path read from each, and
+  those it leads nowhere from left out. steps.<id>.outputs.* reads those
+  of a step of the job that has had its turn, none for one that wrote none
+  or was skipped, needs.<job>.outputs.* those of a job this one needs,
+  none for one that was skipped, and needs.<job>.steps.<id>.outputs.*
+  those of a step of a job it needs, where one that wrote none isn't
+  there, so that it reads as "" as a missing output does, here in a step
+  whose if: is the word always, and fails anywhere else. Format 1 read an output named * before, or
+  the reference's own text, and takes this as a bug fix.
+source: Meridian
+jobs:
+  test:
+    needs:
+      build:
+        result: success
+        outputs: {B: '{"k": "v"}', A: a}
+        steps:
+          c: {X: "1", W: w}
+      skipped:
+        result: skipped
+    steps:
+      - {outcome: skipped}
+      - {outcome: success}
+      - {outcome: success, outputs: {Z: z, Y: '{"k": "y"}'}}
+      - {outcome: success}
+      - {outcome: success}
+      - {outcome: success}
+expect:
+  diagnostics:
+    - severity: warning
+      code: older_always
+      path: /jobs/test/steps/5/if
+  skipped:
+    - /jobs/skipped
+    - /jobs/test/steps/0
+  values:
+    /jobs/test/steps/3/run: '[] | [] | ["{\"k\": \"y\"}","z"] | ["y"]'
+    /jobs/test/steps/4/run: '["a","{\"k\": \"v\"}"] | ["v"] | []'
+    /jobs/test/steps/5/run: '["w","1"] | []'
+    /jobs/test/outputs/w: '["{\"k\": \"y\"}","z"]'

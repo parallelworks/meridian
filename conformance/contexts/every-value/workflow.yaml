@@ -1,0 +1,30 @@
+env:
+  B: two
+  A: '{"k": "one"}'
+sessions:
+  desktop:
+    useTLS: false
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [linux]
+        cfg:
+          - {cores: 4}
+    env:
+      B: ${{ join(env.*, ' + ') }}
+      C: c
+    steps:
+      - id: first
+        run: echo A=1 >> $OUTPUTS
+      - id: second
+        run: echo B=2 >> $OUTPUTS
+      - run: ${{ env.S }}
+        env:
+          S: ${{ join(env.*, ' | ') }}
+          K: ${{ join(env.*.k, ' | ') }}
+      - run: ${{ env.*.k }} ${{ matrix.* }} ${{ matrix.*.cores }}
+      - run: ${{ remote.* }} ${{ sessions.* }}
+      - run: ${{ steps.*.outputs.A }} ${{ steps.*.outputs.* }} ${{ steps.* }} ${{ steps.*.outputs }}
+    outputs:
+      a: ${{ steps.*.outputs.A }}

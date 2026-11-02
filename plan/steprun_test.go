@@ -78,7 +78,7 @@ jobs:
       - run: echo own
         ssh: {remoteHost: "${{ needs.build.outputs.host }}"}
       - run: echo index
-        ssh: {remoteHost: "${{ join(needs.*.outputs.host, '') }}"}
+        ssh: {remoteHost: "${{ needs[index].outputs.host }}"}
       - run: echo env
         ssh: {remoteHost: "${{ env.HOST }}"}
       - run: echo literal

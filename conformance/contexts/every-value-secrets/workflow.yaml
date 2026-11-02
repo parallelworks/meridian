@@ -1,0 +1,18 @@
+jobs:
+  main:
+    env:
+      TOKEN: ${{ vars.token }}
+      REGION: ${{ vars.region }}
+    steps:
+      - id: login
+        run: echo KEY=key-${{ env.TOKEN }} >> $OUTPUTS
+      - id: zone
+        run: echo ZONE=b >> $OUTPUTS
+      - run: echo ${{ join(env.*, ',') }}
+    outputs:
+      vars: ${{ join(vars.*, ',') }}
+      env: ${{ join(env.*, ',') }}
+      keys: ${{ join(steps.*.outputs.KEY, ',') }}
+      login: ${{ join(steps.login.outputs.*, ',') }}
+      zones: ${{ join(steps.*.outputs.ZONE, ',') }}
+      count: ${{ length(env.*) }}
