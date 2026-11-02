@@ -5849,9 +5849,16 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
   as:
   - **On Linux,** the kernel says who owns a socket only once a process
     has accepted it, and then the user of the process that did; before,
-    it gives root, whoever listens, which isn't trusted, but waited for,
-    five seconds at most, after which the service doesn't answer
-    (`session_unreachable`). The user who runs Meridian is trusted, and
+    it gives root, or since Linux 6.17 the listener's owner, whoever
+    listens, which isn't trusted, but waited for, five seconds at most,
+    after which the service doesn't answer (`session_unreachable`). The
+    kernel reads a socket's owner, and then its inode, apart as it
+    answers, and a process can accept the socket between the two: that
+    answer has the accepted socket's inode with the owner from before the
+    accept, root's or the listener's, whoever accepted it. So once an
+    answer says the socket is accepted, Meridian asks again, and takes
+    the owner from the second answer, of the same inode, which the kernel
+    reads after the accept. The user who runs Meridian is trusted, and
     root, whose process could take any connection anyway: a rootful
     `docker -p 127.0.0.1:P:P` publishes a port through root's
     `docker-proxy`, and a user of the `docker` group, who could publish
@@ -5860,7 +5867,9 @@ coordinate, serve the store's sessions (`coordinator.ServeSessions`, with
     credential of whoever made the listener, not of whoever accepts on
     it, and a listener root made may have been passed to any user's
     program: so only the user who runs Meridian is trusted, and root's
-    listener is another user's there. A connection in FreeBSD's
+    listener is another user's there. The lists give that credential in
+    the socket's own record, and an accept doesn't change it, so one
+    read says it. A connection in FreeBSD's
     syncache, whose socket the kernel makes as the handshake's last
     packet comes, is waited for, as on Linux one no process has
     accepted.
