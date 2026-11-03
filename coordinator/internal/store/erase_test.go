@@ -500,10 +500,15 @@ func TestEraseRetryWaitsForNoOne(t *testing.T) {
 		defer mu.Unlock()
 		timeouts = append(timeouts, timeout)
 	}
+	ended := make(chan struct{})
+	r.s.erased = sync.OnceFunc(func() { close(ended) })
 	release := r.hold()
 	r.end(r.id)
 	// Two connections at most from here: the reader's, and the one each
-	// try takes, which the check after takes again.
+	// try takes, which the check after takes again. The bound is the
+	// test's alone (TestConnectionsUnbounded): a transaction that runs a
+	// statement new to the store prepares it on a second connection
+	// (Tx.stmt).
 	r.s.db.SetMaxOpenConns(2)
 	// The goroutine that tries again has tried, past the first, held up.
 	deadline := time.Now().Add(30 * time.Second)
@@ -523,6 +528,18 @@ func TestEraseRetryWaitsForNoOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.waitErased(3 * time.Second)
+	// The checks wait for the goroutine to end first. It counts the
+	// truncation (eraseCovered) after the log is truncated, and then
+	// truncates the log of that write, a try whose busy timeout is checked
+	// too. And it counts it in a transaction that holds one connection and
+	// prepares its statement on the other: a check that held one of them
+	// then waited for the transaction's, and the transaction for the
+	// check's, forever.
+	select {
+	case <-ended:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the goroutine that tries again didn't end once it had truncated the log")
+	}
 	mu.Lock()
 	for _, timeout := range timeouts {
 		if timeout != 0 {
@@ -530,13 +547,15 @@ func TestEraseRetryWaitsForNoOne(t *testing.T) {
 		}
 	}
 	mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 	for range 2 {
-		conn, err := r.s.db.Conn(t.Context())
+		conn, err := r.s.db.Conn(ctx)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("take a connection of the store's: %v", err)
 		}
 		var timeout int64
-		if err := conn.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&timeout); err != nil {
 			t.Fatal(err)
 		}
 		if timeout == 0 {
