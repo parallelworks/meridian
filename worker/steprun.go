@@ -15,8 +15,9 @@ import (
 // step run, a run of its own (docs/design.md, Steps on another host). Its
 // job's worker, the caller, asks the coordinator for it, waits for its end,
 // stops it as the step is stopped, and ends the try as it ended, appending
-// what its step wrote to $OUTPUTS there to the file the step would have
-// written here; the step run's worker evaluates and runs that one step,
+// what its step wrote to $OUTPUTS there, however it ended, to the file the
+// step would have written here; the step run's worker evaluates and runs
+// that one step,
 // with its own variables, over what the caller's job passes between its
 // steps, and reports what it wrote.
 
@@ -101,10 +102,11 @@ func (a *attempt) heedNotMade(reason plan.Reason) stopCause {
 // runStepRunTry runs t, a try of a step whose ssh: puts it elsewhere, as a
 // step run, in state, its job's as the step was evaluated, as runOwnTry
 // runs a command: its exit status and its outcome are its step run's, and
-// what its step wrote to $OUTPUTS there, once it succeeded, is appended to
-// the file the step would have written here (takeOutputs), which is read
-// as a command's. It returns how the step ended, from end, and whether to
-// try it again; or that it was cut short, if the job was halted.
+// what its step wrote to $OUTPUTS there, however the try ended, is
+// appended to the file the step would have written here (takeOutputs),
+// which is read as a command's. It returns how the step ended, from end,
+// and whether to try it again; or that it was cut short, if the job was
+// halted.
 func (a *attempt) runStepRunTry(ctx context.Context, t *startedTry, state plan.JobState, end stepEnd) (stepEnd, bool) {
 	e := a.runElsewhere(ctx, t.key, a.stepRunRequest(t.rs, t.try, false, state, t.first), t.s, t.note)
 	if a.halted.fired() || e.cause == stopHalted {
@@ -117,19 +119,18 @@ func (a *attempt) runStepRunTry(ctx context.Context, t *startedTry, state plan.J
 
 // endedElsewhere returns, of a step run that ended as e, its step's exit
 // status, or -1 for none, whether it succeeded, and the problems of the
-// try: e's own, and those of what its step wrote to $OUTPUTS, which, once
-// it succeeded, it appends to f, the file the step, at path, would have
-// written here (takeOutputs).
+// try: e's own, and those of what its step wrote to $OUTPUTS, which it
+// appends to f, the file the step, at path, would have written here
+// (takeOutputs), however the try ended, as a command's try keeps what it
+// wrote: failed, stopped, or past a timeout. A step run whose worker
+// reported no end, as one lost, or stopped before its step started, wrote
+// none.
 func (a *attempt) endedElsewhere(e elsewhere, f outputsFile, path string) (int, bool, problems.Diagnostics) {
 	if e.end == nil {
 		return -1, false, e.tryDiags
 	}
 	succeeded := e.cause == noStop && e.end.Outcome == plan.OutcomeSuccess
-	tryDiags := e.tryDiags
-	if succeeded {
-		tryDiags = append(tryDiags, a.takeOutputs(f, path, e.end)...)
-	}
-	return e.end.ExitCode, succeeded, tryDiags
+	return e.end.ExitCode, succeeded, append(e.tryDiags, a.takeOutputs(f, path, e.end)...)
 }
 
 // takeOutputs makes what a step run's step wrote to $OUTPUTS, end's, its

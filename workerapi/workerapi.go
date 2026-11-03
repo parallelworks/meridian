@@ -1073,11 +1073,12 @@ type StepRunRequest struct {
 // A StepRun is the step run of a step's try, or of its cleanup:, as it is
 // (PathStepRun, PathStepRunEnd): its ID, or "" for one that wasn't made,
 // with why in Diagnostics; once it has ended, Ended, with its outcome and
-// why, its step's exit status, or -1 for none, and, for one that
-// succeeded, what its step wrote to $OUTPUTS, which the step's worker
-// appends to the file the step would have written, as escaped name=value
-// lines, with which of them are private and which hold a secret; and its
-// problems. Every member is of version 3.
+// why, its step's exit status, or -1 for none, and, however it ended, what
+// its step wrote to $OUTPUTS, as its worker reported it, none for one
+// whose worker reported no end, which the step's worker appends to the
+// file the step would have written, as escaped name=value lines, with
+// which of them are private and which hold a secret; and its problems.
+// Every member is of version 3.
 type StepRun struct {
 	Run         string               `json:"run,omitzero"`
 	Ended       bool                 `json:"ended,omitzero"`

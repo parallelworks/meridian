@@ -719,7 +719,7 @@
           "maximum": 2147483647
         },
         "outputs": {
-          "description": "Added in worker API version 3. What its step wrote to $OUTPUTS, for one that succeeded, by name.",
+          "description": "Added in worker API version 3. What its step wrote to $OUTPUTS, however it ended, by name.",
           "type": "object",
           "additionalProperties": {"type": "string"}
         },

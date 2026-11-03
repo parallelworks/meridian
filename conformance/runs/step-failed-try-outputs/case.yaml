@@ -1,9 +1,8 @@
 description: >-
   What a step on another host than its job's wrote to $OUTPUTS there, in a
-  try that failed, isn't its job's, as format 1 copies the file back only
-  after a try that succeeded, though its ignore-errors: lets the step
-  succeed. A step whose if: is the word always reads the output that
-  nothing wrote as empty.
+  try that failed, is its job's, as what a try where its job runs wrote is,
+  and its ignore-errors: lets the step succeed: a later step, whose if: is
+  the word always, reads it.
 source: ACTIVATE's executor, and Meridian
 hosts:
   farm: {}
@@ -14,4 +13,4 @@ expect:
       main:
         outcome: success
         logs:
-          - {step: 1, text: "[]\n"}
+          - {step: 1, text: "[written]\n"}

@@ -619,6 +619,47 @@ the SHA-256 hash of its content: 218 files.
   and none reads `vars`. A `*` in place of a step's id under
   `needs.<job>.steps` isn't part of this fix, and still runs otherwise than
   in ACTIVATE ([The workflow format](#the-workflow-format)).
+- **A step on a host keeps what a try wrote to `$OUTPUTS` however the try
+  ended**, as a step where its job runs does, whose tries append to one
+  file, and as GitHub Actions keeps a failed step's outputs. Format 1
+  copied the host's file back over the step's own only after a try that
+  succeeded, so a try that failed, timed out or was cancelled lost what it
+  wrote, for every step it ran on a host, through its job's `ssh:` or its
+  own: its `retry:`'s next try, its `ignore-errors:`, a later step whose
+  `if:` reads `failure()` or `always()`, the cleanups, the job's
+  `outputs:` and the jobs that need it read the step as though that try
+  had written nothing, so that what a step's outputs were depended on
+  where it ran. A Meridian job on a host keeps them already, as its
+  worker runs there. A step on another host than its job's, a step run,
+  now does too: its worker reports what the step wrote however it ended,
+  and its caller's worker appends it to the step's file as for a try that
+  succeeded; one whose worker is lost, or that is stopped before its step
+  starts, gives none, as nothing reported them ([Steps on another
+  host](#steps-on-another-host)). ACTIVATE takes the same fix by copying
+  the host's file back after each try whose file reached the host,
+  however it ended: after a try that succeeded, first, as before, failing
+  it if the copy fails; after any other, once it has fetched the step's
+  summary, within the 10 seconds it gives to both, and a copy that fails
+  then fails nothing more, and leaves the step's file as it was. Of the
+  218 known workflows, 176 run 1,193 steps on a host with a file of
+  outputs there, which a step that calls a workflow has none of: 1,156
+  through their job's `ssh:`, and 37 through their own, 36 of them on
+  another host than their job's. None has an
+  `ignore-errors:`. The 7 with a `retry:` all run through their job's
+  `ssh:`, and the 6 of them that write `$OUTPUTS` write it only where
+  nothing after it fails their try. Once a step fails its job, only its
+  cleanups, and a later step or a job that needs it whose `if:` reads a
+  status, run: of the 12 steps whose `if:` reads one, the 3 in a job with
+  no step on a host aside, each comes after only a step that calls a
+  workflow; the 8 steps on a
+  host whose outputs a cleanup reads write them as their last command,
+  after the check that fails them; and 16 steps on a host, in 10
+  workflows, write outputs of a job that a job whose `if:` is `always()`
+  needs, which reads those of only one of them, and that one only prints
+  once it has written them. So a known workflow reads what it didn't
+  before only when a cancel or a timeout stops a step on a host after it
+  wrote `$OUTPUTS` and before it ended, and then reads what the step
+  wrote, as it would where the run started.
 
 ## Phases
 
@@ -2789,8 +2830,12 @@ defines, `PW_JOB_DIR`, `PW_PARENT_JOB_DIR`, `OUTPUTS` and
 `PW_STEP_SUMMARY`, naming the host's paths: the host's copy of the job's
 directory, and a job's `working-directory:` under the runs' directory
 made the host's too. It copies the file the step writes its outputs to,
-the job's shared one for a step without an `id`, to the host before the
-step, and back over its own after it, only after a try that succeeded. A
+the job's shared one for a step without an `id`, to the host before each
+try, and back over its own after a try it sent it for, however the try
+ended ([Bug fixes to format 1](#bug-fixes-to-format-1)): after one that
+succeeded, first, failing the try if it can't; after any other, once it
+has fetched the step's summary from the host, within the 10 seconds it
+gives to both, failing nothing more if it can't. A
 step's `cleanup:` is a copy of the step, its `ssh:` with it, which is
 evaluated again as the cleanup runs, and which outlives its job's cancel.
 
@@ -2892,10 +2937,18 @@ does, whatever the version, a step that calls a workflow.
   give. A value's escaping can make its line longer than format 1 reads
   one, which would keep the whole file from being read: then none of them
   is appended, and the step fails (`step_run_output_line_too_long`). A
-  try that fails gives none, as in format 1. Of the caller's job,
-  its worker gives only what format 1 passes between steps, the earlier
-  steps' outcomes and outputs, whether the job is being cancelled, the
-  step's retry counter, and whether its `if:` gave the word `always`,
+  try gives what its step wrote however it ended, as a try in its job
+  does ([Bug fixes to format 1](#bug-fixes-to-format-1)): one that
+  failed, timed out or was stopped once its step had started, as its
+  worker reports it, so that its `retry:`'s next try, its
+  `ignore-errors:`, a later step whose `if:` reads `failure()`, the
+  cleanups and the job's `outputs:` read it as they would a step's of
+  the job's own; and none for one whose worker is lost, or that is
+  stopped before its step starts, which reported nothing. Of the
+  caller's job, its worker gives only what format 1 passes between
+  steps, the earlier steps' outcomes and outputs, whether the job is
+  being cancelled, the step's retry counter, and whether its `if:` gave
+  the word `always`,
   which reads an output nothing wrote as empty, never a variable of the
   environment or a path; and the coordinator keeps of the outputs only
   those the step reads, as the plan says, since one can hold what was
@@ -2937,10 +2990,16 @@ Where format 1 does otherwise, none of it in the known workflows:
   reached fails the job as it is placed, before a step's `retry:` could
   try another. It needs every step's `ssh:` known at Ready, as all the
   known ones are.
-- **`OUTPUTS` starts empty on the host**, so the step doesn't read what
-  its job's earlier steps wrote there, and a step that writes it with
-  `>` doesn't erase that, as format 1's copy back does. All 9 of the
-  known steps' writes to it append.
+- **`OUTPUTS` starts empty on the host**, for each try, so the step
+  doesn't read what its job's earlier steps wrote there, nor what its own
+  earlier tries did, and a step that writes it with `>` doesn't erase
+  that, as format 1's copy back does. All 9 of the known steps' writes to
+  it append, and none has a `retry:`. Each try's lines are appended on
+  lines of their own, so a try stopped as it wrote a line, whose step run
+  reads that line as it stands, doesn't run on into the first line the
+  next try writes, as it does in format 1's file, and in a step's own
+  where its job runs: a cut line joined to the next would read as a value
+  neither try wrote.
 - **A calling step's own `ssh:`** is refused ([Workflows a step
   calls](#workflows-a-step-calls)).
 - **Its log** is the step run's, which its calling step's shows, as a
@@ -4127,7 +4186,7 @@ and a platform that embeds Meridian serve the same API.
   worker masks for the step, 10,000 of them, of 1 MiB in all, at most,
   which a repeat answers with the same step run, and one that wasn't made
   ended, with why; wait for its end (`/v1/steprun/end`), as for a child's, with how
-  it ended, its step's exit status and, once it succeeded, what its step
+  it ended, its step's exit status and, however it ended, what its step
   wrote to `OUTPUTS`, 1 MiB of it at most, as a worker reads, which the
   coordinator refuses more of as the step run's attempt ends; and stop it
   (`/v1/steprun/stop`). Each

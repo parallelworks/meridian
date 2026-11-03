@@ -375,10 +375,11 @@ func stepRunJob(run *store.Run, rec *plan.Record, rj *plan.ReadyJob) (*plan.Read
 // the file the step would have written, with which of them are private
 // and which hold a secret. Those are its job's result's outputs, as the
 // step run's worker reports them, joined with its secret record's part of
-// them, and only for a step run that succeeded: format 1 copies the file
-// back from the host only after a try that succeeded. The server refuses
-// an end of a step run's attempt with more of them than a worker reads
-// (workerapi.MaxOutputs).
+// them, however it ended, as a step's try keeps what it wrote whether it
+// succeeded, failed or was stopped (docs/design.md, Bug fixes to format
+// 1); one whose worker reported no end, as one lost, or stopped before it
+// was placed, has none. The server refuses an end of a step run's attempt
+// with more of them than a worker reads (workerapi.MaxOutputs).
 func (c *Coordinator) stepRunEnd(ctx context.Context, id string) (*workerapi.StepRun, error) {
 	var (
 		run    *store.Run
@@ -399,7 +400,7 @@ func (c *Coordinator) stepRunEnd(ctx context.Context, id string) (*workerapi.Ste
 		if job, err = tx.Job(id, name); err != nil {
 			return err
 		}
-		if job.Outcome == plan.OutcomeSuccess && job.Result != nil {
+		if job.Result != nil {
 			// What of its outputs is private is its job's part of its
 			// secret record, which its caller's end deletes.
 			if stored, err = tx.Record(id); err != nil {
@@ -431,7 +432,7 @@ func (c *Coordinator) stepRunEnd(ctx context.Context, id string) (*workerapi.Ste
 			end.ExitCode = e.ExitCode
 		}
 	}
-	if run.Outcome != plan.OutcomeSuccess || stored == nil {
+	if stored == nil {
 		return end, nil
 	}
 	jobs, err := c.openJobRecords(ctx, id, stored.WrappedKey, parts)

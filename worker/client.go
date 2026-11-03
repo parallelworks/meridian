@@ -635,8 +635,9 @@ func (c *client) stepRun(ctx context.Context, req *workerapi.StepRunRequest) (*w
 // stepRunAnswered returns the problem of an answer of path, sr, that no
 // step run can be: one that has ended with an outcome no run ends with,
 // or one not made that succeeded; one that hasn't ended that is no run;
-// and one that gives outputs but for a success, or one whose name no
-// line of $OUTPUTS can hold, with an = or a newline in it.
+// and one that gives outputs before it has ended, or that wasn't made, or
+// one whose name no line of $OUTPUTS can hold, with an = or a newline in
+// it. One that ended gives what its step wrote however it ended.
 func stepRunAnswered(path string, sr *workerapi.StepRun) error {
 	switch o := sr.Outcome; {
 	case sr.Ended && o != plan.OutcomeSuccess && o != plan.OutcomeFailure && o != plan.OutcomeCancelled,
@@ -644,7 +645,7 @@ func stepRunAnswered(path string, sr *workerapi.StepRun) error {
 		return answerInvalidAt(path, http.StatusOK, "/outcome")
 	case !sr.Ended && sr.Run == "":
 		return answerInvalidAt(path, http.StatusOK, "/run")
-	case len(sr.Outputs) > 0 && o != plan.OutcomeSuccess:
+	case len(sr.Outputs) > 0 && (!sr.Ended || sr.Run == ""):
 		return answerInvalidAt(path, http.StatusOK, "/outputs")
 	}
 	for name := range sr.Outputs {
