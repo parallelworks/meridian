@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 	"os/exec"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,7 +36,10 @@ const (
 	envIters = "MERIDIAN_STORE_ITERS"
 )
 
-// stressRun runs stressLoop in a process of a test's own (runChild).
+// stressRun runs stressLoop in a process of a test's own (runChild), which
+// writes a byte to its standard output as each iteration begins, and
+// nothing else, so that the test can tell how far it has got
+// (stressProcess).
 func stressRun(ctx context.Context, s *Store) error {
 	seed, _ := strconv.ParseUint(os.Getenv(envSeed), 10, 64)
 	iters, _ := strconv.Atoi(os.Getenv(envIters))
@@ -41,7 +47,8 @@ func stressRun(ctx context.Context, s *Store) error {
 	if err != nil {
 		return err
 	}
-	return stressLoop(ctx, s, p, seed, iters)
+	began := []byte{'.'}
+	return stressLoop(ctx, s, p, seed, iters, func() { _, _ = os.Stdout.Write(began) })
 }
 
 // stressLog records, in tx, what the transaction did: kind, of job, and n,
@@ -74,8 +81,9 @@ func expected(err error) bool {
 }
 
 // stressLoop does what the stress tests do, at random from seed, iters
-// times, or until it is killed for 0.
-func stressLoop(ctx context.Context, s *Store, p *plan.Plan, seed uint64, iters int) error {
+// times, or until it is killed for 0, and calls each, unless it is nil, as
+// each iteration begins.
+func stressLoop(ctx context.Context, s *Store, p *plan.Plan, seed uint64, iters int, each func()) error {
 	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)) //nolint:gosec // a test's random choices
 	var mine []stressAttempt
 	pick := func() (stressAttempt, bool) {
@@ -88,6 +96,9 @@ func stressLoop(ctx context.Context, s *Store, p *plan.Plan, seed uint64, iters 
 		return mine[rng.IntN(len(mine))], true
 	}
 	for i := 0; iters == 0 || i < iters; i++ {
+		if each != nil {
+			each()
+		}
 		job := stressJobs[rng.IntN(len(stressJobs))]
 		var err error
 		switch op := rng.IntN(16); op {
@@ -427,17 +438,111 @@ func stressCheck(t *testing.T, s *Store) map[string]int {
 	return counts
 }
 
+// A stressProcess is a process of the test's own that runs stressLoop
+// (startStress). Its standard output is the process itself, which counts
+// the bytes the process writes to it: the iterations of its loop it has
+// begun (stressRun). What it writes to its standard error is kept, for a
+// test to report if the process ends other than as the test ends it. A
+// goroutine waits for it, and closes exited once it has ended, as err
+// says.
+type stressProcess struct {
+	cmd      *exec.Cmd
+	begun    atomic.Int64
+	stderrMu sync.Mutex
+	stderr   bytes.Buffer
+	exited   chan struct{}
+	err      error
+}
+
+func (p *stressProcess) Write(b []byte) (int, error) {
+	p.begun.Add(int64(len(b)))
+	return len(b), nil
+}
+
+// wait waits for the process to end, and returns how it ended
+// (exec.Cmd.Wait).
+func (p *stressProcess) wait() error {
+	<-p.exited
+	return p.err
+}
+
+// wrote returns what the process has written to its standard error.
+func (p *stressProcess) wrote() string {
+	p.stderrMu.Lock()
+	defer p.stderrMu.Unlock()
+	return p.stderr.String()
+}
+
+// kill kills the process, waits for it, and returns an error that says
+// how it ended, and what it wrote to its standard error, if it ended
+// otherwise, as by a failure of its own before it was killed.
+func (p *stressProcess) kill() error {
+	_ = p.cmd.Process.Kill()
+	if err := p.wait(); !isKilled(err) {
+		return fmt.Errorf("a stress process ended with %w rather than killed, having written to its standard error:\n%s", err, p.wrote())
+	}
+	return nil
+}
+
+// stressBegunWithin is how long a test waits for a stress process to
+// open the store and begin iterations of its loop (stressBegun) before
+// it fails.
+const stressBegunWithin = time.Minute
+
+// stressBegun waits until one of procs has begun more than n iterations
+// of its loop, for stressBegunWithin at most, and returns the indexes of
+// those that have. It fails at once if one of them has ended, which a
+// stress process that runs until it is killed does only if it failed.
+func stressBegun(t *testing.T, n int64, procs ...*stressProcess) []int {
+	t.Helper()
+	deadline := time.Now().Add(stressBegunWithin)
+	for {
+		var past []int
+		for i, p := range procs {
+			select {
+			case <-p.exited:
+				t.Fatalf("a stress process ended with %v as the test waited for it, having written to its standard error:\n%s", p.err, p.wrote())
+			default:
+			}
+			if p.begun.Load() > n {
+				past = append(past, i)
+			}
+		}
+		if len(past) > 0 {
+			return past
+		}
+		if time.Now().After(deadline) {
+			var wrote strings.Builder
+			for _, p := range procs {
+				fmt.Fprintf(&wrote, "\none wrote to its standard error:\n%s", p.wrote())
+			}
+			t.Fatalf("no stress process began more than %d iterations of its loop within %v%s", n, stressBegunWithin, wrote.String())
+		}
+		time.Sleep(5 * time.Millisecond) //nolint:forbidigo // polls the processes' progress
+	}
+}
+
 // startStress starts a process of the test's own that runs stressLoop on
 // the store at path.
-func startStress(t *testing.T, path string, seed uint64, iters int) *exec.Cmd {
+func startStress(t *testing.T, path string, seed uint64, iters int) *stressProcess {
 	t.Helper()
-	cmd := startChild(t, "stress", path)
-	cmd.Env = append(cmd.Env, envSeed+"="+strconv.FormatUint(seed, 10), envIters+"="+strconv.Itoa(iters))
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
+	p := &stressProcess{cmd: startChild(t, "stress", path), exited: make(chan struct{})}
+	p.cmd.Env = append(p.cmd.Env, envSeed+"="+strconv.FormatUint(seed, 10), envIters+"="+strconv.Itoa(iters))
+	p.cmd.Stdout, p.cmd.Stderr = p, lockedWriter{&p.stderrMu, &p.stderr}
+	if err := p.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	return cmd
+	go func() {
+		p.err = p.cmd.Wait()
+		close(p.exited)
+	}()
+	// A test that fails before it has killed the process leaves none
+	// running.
+	t.Cleanup(func() {
+		_ = p.cmd.Process.Kill()
+		<-p.exited
+	})
+	return p
 }
 
 // seed is a random seed for a stress test, which it logs, so that a
@@ -466,7 +571,7 @@ func TestStressGoroutines(t *testing.T) {
 			st = s2
 		}
 		wg.Go(func() {
-			if err := stressLoop(t.Context(), st, p, base+uint64(g), 300); err != nil { //nolint:gosec // g is small
+			if err := stressLoop(t.Context(), st, p, base+uint64(g), 300, nil); err != nil { //nolint:gosec // g is small
 				t.Error(err)
 			}
 		})
@@ -481,22 +586,22 @@ func TestStressProcesses(t *testing.T) {
 	path, s := stressSetUp(t)
 	p := testPlan(t)
 	base := seed(t)
-	var cmds []*exec.Cmd
+	var procs []*stressProcess
 	for i := range 4 {
-		cmds = append(cmds, startStress(t, path, base+uint64(i), 300)) //nolint:gosec // i is small
+		procs = append(procs, startStress(t, path, base+uint64(i), 300)) //nolint:gosec // i is small
 	}
 	var wg sync.WaitGroup
 	for g := range 2 {
 		wg.Go(func() {
-			if err := stressLoop(t.Context(), s, p, base+100+uint64(g), 300); err != nil { //nolint:gosec // g is small
+			if err := stressLoop(t.Context(), s, p, base+100+uint64(g), 300, nil); err != nil { //nolint:gosec // g is small
 				t.Error(err)
 			}
 		})
 	}
 	wg.Wait()
-	for _, c := range cmds {
-		if err := c.Wait(); err != nil {
-			t.Errorf("a process: %v", err)
+	for _, proc := range procs {
+		if err := proc.wait(); err != nil {
+			t.Errorf("a process ended with %v, having written to its standard error:\n%s", err, proc.wrote())
 		}
 	}
 	stressCheck(t, s)
@@ -513,14 +618,24 @@ const (
 	// stressKilledFor is how long TestStressKilled goes on killing
 	// processes for want of stressKilledKinds, at most.
 	stressKilledFor = 2 * time.Minute
+	// stressKilledAfter is how many iterations of its loop a process has
+	// done, at least, before three kills in four of TestStressKilled's.
+	stressKilledAfter = 10
 )
 
 // TestStressKilled kills processes that run stressLoop at random moments,
 // mid-transaction as often as not, and checks what they leave. It kills
 // them 20 times, or MERIDIAN_STORE_STRESS_CYCLES, and then until the log
 // has stressKilledEach of each of stressKilledKinds, for stressKilledFor
-// at most, as on a slow machine a process may be killed before it does
-// much. It fails if the log has none of one of them.
+// at most. It fails if the log has none of one of them.
+//
+// Three kills in four are of a process that has done stressKilledAfter
+// iterations of its loop, which the test waits for if none has, so that
+// the processes do as much between kills on a slow machine as on a fast
+// one. Killed at moments of the clock alone, under the race detector on a
+// slow machine, they spent their lives opening the store, or in a few
+// slow iterations, and did too little to have done each kind. The fourth
+// is of any of them, as one may be opening the store.
 func TestStressKilled(t *testing.T) {
 	path, s := stressSetUp(t)
 	cycles := 20
@@ -534,32 +649,47 @@ func TestStressKilled(t *testing.T) {
 	}
 	base := seed(t)
 	rng := rand.New(rand.NewPCG(base, 1)) //nolint:gosec // a test's random choices
-	live := map[int]*exec.Cmd{}
+	var live [3]*stressProcess
 	next := base
-	for i := range 3 {
+	for i := range live {
 		next++
 		live[i] = startStress(t, path, next, 0)
 	}
 	enough := func() bool {
 		return len(fewer(stressCounts(t, s), stressKilledKinds, stressKilledEach)) == 0
 	}
-	c := 0
+	// pick returns which process to kill, as the test says.
+	pick := func() int {
+		if rng.IntN(4) == 0 {
+			return rng.IntN(len(live))
+		}
+		past := stressBegun(t, stressKilledAfter, live[:]...)
+		return past[rng.IntN(len(past))]
+	}
+	c, early := 0, 0
+	var iters int64
 	for ; c < cycles || !enough() && time.Now().Before(until); c++ {
+		k := pick()
 		// The moment of the kill is the test.
 		time.Sleep(time.Duration(30+rng.IntN(250)) * time.Millisecond) //nolint:forbidigo // see above
-		k := rng.IntN(3)
-		_ = live[k].Process.Kill()
-		if err := live[k].Wait(); !isKilled(err) {
-			t.Fatalf("cycle %d: a process ended with %v, want killed", c, err)
+		if err := live[k].kill(); err != nil {
+			t.Fatalf("cycle %d: %v", c, err)
 		}
+		n := live[k].begun.Load()
+		if n == 0 {
+			early++
+		}
+		iters += n
 		next++
 		live[k] = startStress(t, path, next, 0)
 	}
-	for _, c := range live {
-		_ = c.Process.Kill()
-		_ = c.Wait()
+	for _, p := range live {
+		if err := p.kill(); err != nil {
+			t.Error(err)
+		}
+		iters += p.begun.Load()
 	}
-	t.Logf("%d kills in %v", c, time.Since(start).Round(time.Millisecond))
+	t.Logf("%d kills in %v, %d of a process before its loop; %d iterations", c, time.Since(start).Round(time.Millisecond), early, iters)
 	counts := stressCheck(t, s)
 	if lack := fewer(counts, stressKilledKinds, 1); len(lack) > 0 {
 		t.Errorf("after %d kills in %v, the log has no %v: %v", c, time.Since(start).Round(time.Millisecond), lack, counts)
@@ -607,11 +737,14 @@ func fewer(counts map[string]int, kinds []string, n int) []string {
 // open leaves the database to the next writer at once.
 func TestWriteLockAfterKill(t *testing.T) {
 	path, s := stressSetUp(t)
-	cmd := startStress(t, path, seed(t), 0)
-	// Long enough for the process to be mid-transaction, as often as not.
+	p := startStress(t, path, seed(t), 0)
+	stressBegun(t, 0, p)
+	// Long enough into its loop for the process to be mid-transaction, as
+	// often as not, however long it took to open the store.
 	time.Sleep(300 * time.Millisecond) //nolint:forbidigo // see above
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
+	if err := p.kill(); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := s.Tx(ctx, func(tx *Tx) error { _, err := tx.NewRunID(); return err }); err != nil {

@@ -214,6 +214,19 @@ func TestStatementsKept(t *testing.T) {
 	}
 }
 
+// TestConnectionsUnbounded checks that nothing bounds the connections the
+// store's database opens: a transaction prepares a statement new to the
+// store on a connection it doesn't hold (Tx.stmt), so that, with a bound,
+// as many transactions as it, each preparing one, would wait for one
+// another forever.
+func TestConnectionsUnbounded(t *testing.T) {
+	t.Parallel()
+	s := open(t)
+	if n := s.db.Stats().MaxOpenConnections; n != 0 {
+		t.Errorf("the store's database opens %d connections at most, want no bound", n)
+	}
+}
+
 func TestRun(t *testing.T) {
 	t.Parallel()
 	s := open(t)
