@@ -201,16 +201,23 @@ Format 1 is the format Parallel Works ACTIVATE runs.
 - **A job's `cleanup:` list.** ACTIVATE's ingress reads one more key that
   neither its schema nor Meridian's has: a job's `cleanup:`, a list of
   steps that it appends to the job's, after the copies that run its
-  steps' `cleanup:`s, linked to the job rather than to a step (`.job`).
-  Like those copies, they run once the job's steps have, through its
-  cancellation and without a timeout, with each entry's own `cleanup:`
-  after them, run as such a copy. Unlike them, an entry is a whole step:
-  it keeps its `id`, its `uses:` and `with:`, which a copy drops, and its
-  `retry:`, which a copy ignores, and runs whether or not any of the
-  job's steps ran, where a copy runs only if its step did. Meridian warns
-  of it as an unknown key and ignores it, as it does every key the schema
-  doesn't define, so a workflow that has one runs without its cleanup.
-  None of the 218 known workflows
+  steps' `cleanup:`s. It appends them once it knows the job's steps, so
+  after any expression that gives the job, its steps or the list. Each
+  entry is linked to the job rather than to a step (`.job`), so, like
+  those copies, the entries run once the job's steps have: through a
+  failed step, through the job's cancellation and without the job's
+  timeout. Each entry's own `cleanup:` runs after them, as such a copy of
+  it. Unlike a copy, an entry is a whole step: it keeps its `id`, its
+  `uses:` and `with:`, which a copy drops, its `retry:`, which a copy
+  ignores, and its own `timeout:`, which stops it. In a job that runs, an
+  entry runs whether or not any of the job's steps ran, where a copy runs
+  only if its step did. Until a fix ACTIVATE now takes, it linked only an
+  entry with a `cleanup:` of its own, and ran that one past its own
+  `timeout:`; the rest ran as plain steps, skipped once a step failed, and
+  a job whose `steps:` an expression gave had them replaced by the list.
+  Meridian warns of it as an unknown key and ignores it, as it does every
+  key the schema doesn't define, so a workflow that has one runs without
+  its cleanup. None of the 218 known workflows
   ([Bug fixes to format 1](#bug-fixes-to-format-1)) has one. Whether
   format 1 gains it as an addition, with ACTIVATE's meaning, or ACTIVATE
   drops it, is a decision for later.
