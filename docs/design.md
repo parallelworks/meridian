@@ -2557,12 +2557,30 @@ runs as any other; none of the known calls has an `ssh:` of its own.
     the step (`child_request_failed`), so that the job's later steps may
     run meanwhile, as their `if:` lets them. Its room is lent to its own
     descendants alone even then, which share it with those steps.
-  - A batch scheduler can't give back a waiting job's allocation, and its
-    driver ignores the callers: there a caller holds its member while it
-    waits, and a child whose jobs queue behind it waits for it until the
-    caller's walltime or timeout ends it, an open question before a
-    scheduler backend runs children
-    ([Open questions](#open-questions)).
+  - A caller never waits in a batch allocation. A batch scheduler can't
+    lend part of a running job's allocation to another job, nor give it
+    back and take it again, so a caller there would hold its allocation
+    while its child's jobs queue, behind it where the user's limits or the
+    partition leave no room for both, until its walltime or `timeout:`
+    ends it. So, once the scheduler backends are built, placement leaves
+    a `slurm` or `pbs` member out for a job with a step whose `uses:`
+    names a workflow, whatever the step's `if:` says, as it leaves out one
+    that can't offer the job's `resources:`, and the job runs on its
+    group's next member, such as the cluster's login node through the
+    `ssh` backend; a job no member of its group can take fails as it is
+    placed, with each member's reason ([Placement](#placement)). That is
+    format 1's answer: none of the 267 known calling jobs waits in an
+    allocation. 241 name a host with `ssh:`, in every one the `ip` of the
+    cluster a `compute-clusters` or `compute-resources` input names, its
+    login node, or the machine the run started on where the input names
+    the workspace; 26 name none, and run where the run started; and 141
+    of the 260 whose called workflows are all known have a child, at some
+    depth, whose job runs `sbatch`, `qsub` or `salloc` on the login node
+    and waits for it there. A child's jobs are placed as any job is, and
+    one that its group puts on a scheduler's member runs in an allocation
+    of its own. A job that works in an allocation and then calls a
+    workflow is two jobs, the second needing the first, which share files
+    through the run's directory in the home the cluster's nodes share.
 
   The worker API's paths for a child, to ask for it, which a repeat
   answers with the same child, to wait for its end, and to stop it, raise
@@ -4050,9 +4068,12 @@ one member:
 When a job is ready, the coordinator places it on one member of its group:
 
 1. **Filter.** Members that are unhealthy, or can't offer the job's
-   `resources:`, are left out. A job that no member could ever run fails
-   when it is placed, with each member's reason. Refusing it when the run
-   is created, from the resources each member declares, isn't built.
+   `resources:`, are left out, and so, once the scheduler backends are
+   built, is a batch scheduler's member for a job that calls a workflow
+   ([Workflows a step calls](#workflows-a-step-calls)). A job that no
+   member could ever run fails when it is placed, with each member's
+   reason. Refusing it when the run is created, from the resources each
+   member declares, isn't built.
 2. **Rank.** The rest are ranked by whether they can start the job now,
    then whether they have capacity for it, then whether it would queue, and
    in the group's order within each.
@@ -4088,7 +4109,8 @@ The backend puts the binary where the job runs (copying it over SSH,
 verified by its digest, or using one on a shared filesystem), then starts it
 with three things:
 
-- the coordinator's address;
+- the coordinator's address, or, for a batch scheduler's job, the file
+  that says where its login node's relay listens;
 - the SHA-256 hash of the coordinator's TLS public key, for a connection that
   goes over TLS;
 - a bootstrap token: random and single-use, valid for this one attempt until
@@ -4107,7 +4129,21 @@ with three things:
   processes can read it until it is claimed, from the file until the
   worker removes it, or, on Linux and FreeBSD, from the environment until
   the worker has hardened itself, the first thing it does; it is good for
-  one claim, which the worker makes at once.
+  one claim, which the worker makes at once. A batch scheduler's job gets
+  it in a file in the home the cluster's nodes share, in a directory only
+  the user can use, written before the job is submitted: never in the
+  job's batch script or its environment, which the scheduler keeps with
+  the job, Slurm in its accounting too where a site keeps scripts and
+  environments there, and which PBS shows other users unless a site turns
+  `query_other_jobs` off. The user's own processes, and root, can read it
+  there for as long as the job waits in its queue, on any node that shares
+  the home, and so can whoever can watch the cluster's network where the
+  home is NFS without Kerberos privacy, as they can a batch script; until
+  its worker reads and removes it, or the coordinator removes it as it
+  withdraws the placement, which makes the token, and any copy of it in a
+  snapshot or a backup, good for nothing. The user's own processes can
+  read the job's environment and the user's files anyway, on a cluster
+  whose jobs run on the host.
 
 The coordinator looks for the attempt's placement before it makes the
 token, and makes one only for a placement that doesn't exist yet. When the
@@ -4371,22 +4407,48 @@ against, so neither side can drift from the other.
 
 ### Connections
 
-Workers only connect out, and nothing listens on a host where jobs run.
+Workers only connect out, and nothing listens on a host where jobs run
+but a scheduler's login node, where a relay, or a coordinator that runs
+there, takes its compute nodes' connections.
 
 | Backend | The worker reaches the coordinator through |
 | --- | --- |
 | `local` | A Unix socket in a directory only the user can open. |
 | `ssh` | A Unix socket on the host that the coordinator forwards over its SSH connection, so no port opens on either side. |
-| `slurm`, `pbs` | TLS 1.3 to the coordinator, through `meridian relay` on the login node, checked against its key's hash. |
+| `slurm`, `pbs` | TLS 1.3 to the coordinator, checked against its key's hash: through a relay that `meridian host` keeps on the login node while the coordinator's SSH connection to it lasts, or, where the coordinator runs on the login node, at a port it listens on there. |
 | `kubernetes` | TLS 1.3 to the coordinator's address, checked the same way. |
 
-A coordinator outside a cluster drives Slurm or PBS over SSH to the login
-node. There it starts `meridian relay`, the same binary, which accepts
-workers' connections and forwards them to the coordinator over SSH, still
-encrypted: TLS ends at the coordinator, not at the relay, and the
-coordinator's replicas share one key, so the hash a worker is started with
-holds whichever replica it reaches. Compute nodes reach the login node but
-not the coordinator's machine, and the coordinator's machine opens no port.
+A coordinator outside a cluster drives Slurm or PBS over SSH, on its login
+node, as the `ssh` backend drives a host. Compute nodes reach the login
+node, as `srun` and an interactive `qsub` need them to, but rarely the
+coordinator's machine. So the holder of the login node's connection
+forwards a socket there, as for a host's workers, and runs `meridian host
+relay`, which isn't built yet, in a session of the same connection, which
+it holds one of the connection's sessions for. The relay listens on the
+login node's private addresses, RFC 1918's and IPv6's unique local ones,
+never a public one, at a port in the range the member names where a
+site's firewall opens only some, as Slurm's `SrunPortRange` does for
+`srun`; a login node without a private address fails the member, saying
+so. It passes each connection on to the socket as TLS it can't decrypt:
+TLS ends at the coordinator, not at the relay, and the coordinator's
+replicas share one key, so the hash a worker is started with holds
+whichever replica it reaches. The relay holds no secret and checks no
+one: the coordinator's key, and the attempt's bootstrap token and then
+its credential, do that. It ends with its session, so nothing is left
+listening once the connection ends, as sshd sees it end, and a
+connection dialed again, by its holder or the next, starts another, on
+whichever login node it reaches, at a port that can differ. Each writes
+where it listens to the member's file in the home the cluster's nodes
+share, on a path no other user can change; that file, the same for every
+relay of the member, is how a scheduler's worker is started to reach the
+coordinator, and the worker reads it again before each connection it
+makes. A worker that meets another key there, as at a port another user
+took after a relay ended, will read the file again and try again, having
+sent nothing of its attempt; today's worker, which reads its address
+only from `MERIDIAN_COORDINATOR`, stops at another key
+(`coordinator_key_mismatch`). Where Meridian runs on the login node
+itself, it listens there in the same way, without SSH or a relay. A
+coordinator off the cluster opens no port on its own machine.
 
 The coordinator connects to a host over SSH as the user would with `ssh`
 (`backend/ssh/internal/sshconn`), which the `ssh` backend and the login
@@ -4478,8 +4540,9 @@ coordinator remembers only its last day's members. Taking a lease at a
 start or a takeover still starts one. A host's pooled SSH
 connection isn't let go yet. A replica that takes the lease over,
 once its holder has stopped renewing it, sets the connection up again at
-the same address, so the
-member's running workers reconnect to it. Locally, the socket is held
+the same address, or, for a scheduler's member, starts a relay that
+writes its own to the member's file, so the member's running workers
+reconnect to it. Locally, the socket is held
 under a lock on a file beside the store's database,
 which the system releases when its holder exits, however it exits, and
 the store records which process holds it and since when, from which the
@@ -5403,9 +5466,9 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian session url\|reset <run> <key>` | Prints a link to a run's session, or signs everyone out of it. |
 | `meridian rerun <run>` | Runs a run again, or only its failed jobs. |
 | `meridian serve` | Runs a coordinator that keeps running. |
-| `meridian worker`, `meridian host`, `meridian relay` | Started by backends, not by people. |
+| `meridian worker`, `meridian host` | Started by backends, not by people. |
 
-`meridian init`, `migrate`, `rerun`, `serve` and `relay` aren't built yet,
+`meridian init`, `migrate`, `rerun` and `serve` aren't built yet,
 and each says so.
 
 A run's ID is a number, one more than the last its store gave, which people
@@ -5611,7 +5674,8 @@ that maps root. A worker in one can't use its cache directory or
 `XDG_RUNTIME_DIR` either: it keeps its own files in the system's temporary
 directory, as it does wherever neither is safe, with a warning in its log
 that says why, and refuses a bootstrap token's file, which its backend can
-give it in its environment instead.
+give it in its environment instead, but for a batch scheduler's job, which
+gets it only in a file, and so doesn't run in one.
 
 Whoever can write the coordinator's database can claim an attempt, and
 with it the private values its job reads, so the coordinator's store
@@ -6131,22 +6195,29 @@ Larger features that aren't designed yet are proposed in
   hosts would still need `newuidmap`, a network helper and, on some
   distributions, an AppArmor profile. Revisit once driving Podman and Docker
   works.
-- **Steps that run a workflow.** A job made only of calls to workflows
-  could run on the coordinator, with no worker; 28 known jobs are. The
-  worker runs every calling step, and waits for the child run, parked
-  ([Workflows a step calls](#workflows-a-step-calls)): on `local` and
-  `ssh` it holds its lease, and lends its member's capacity to its own
-  descendants, but on a batch scheduler a waiting job can't give back its
-  allocation, which the child's jobs may need, and a child whose jobs
-  queue behind their caller waits for it until the caller's walltime or
-  timeout ends it. Decide before a scheduler backend runs children.
-  Format 1's answer is to run the calling job off the scheduler, on the
-  cluster's controller, through its `ssh:` hop, so that it holds no
-  allocation while it waits. Others: run a child's jobs within the
-  caller's allocation; run call-only jobs on the coordinator, which only
-  28 of the 267 calling jobs are; or give the caller's job back and place
-  it again once the child ends, which can't go on mid-job for the 239
-  calling jobs that share files, env or outputs with their other steps.
+- **Calls without a worker.** A job that calls a workflow never waits in a
+  batch allocation, so it runs off the scheduler, on another member of its
+  group ([Workflows a step calls](#workflows-a-step-calls)). A job can't
+  be split at its call instead: 239 of the 267 known calling jobs have
+  other steps, which run in order with the call and read its end as a
+  step's, and 51 of them do work of their own around it, some sharing
+  its outputs or its child's directory, or keeping a process running
+  across it. A job made only of calls, as 28 known jobs are, needs no
+  worker at all: it could run on the coordinator, as a job that calls a
+  workflow itself would
+  ([Reusable workflows](stories.md#reusable-workflows)), so that a job
+  whose group has only schedulers' members can still run it. A caller in an allocation
+  could also lend it to its descendants that fit, starting their workers
+  in it, as a [pool](stories.md#many-small-tasks-on-hpc) would, with
+  `srun --jobid --overlap` on Slurm, or from within the job on PBS; a
+  child that needs more than the allocation would still queue.
+- **A scheduler job's end while the coordinator is away.** A worker that
+  can't deliver its job's end holds its allocation until the scheduler
+  ends it at its walltime, and the attempt then ends timed out
+  ([Resources](#resources)), whatever its steps did. A later holder of
+  the member could deliver the end, if the worker kept it in the home the
+  cluster's nodes share, and the store could take an attempt's end other
+  than from its worker's credential.
 - **The Kubernetes client.** `client-go` is a large dependency for a few API
   calls; plain HTTP against the API may be enough.
 - **How long a job may wait in a queue** before Meridian withdraws it and

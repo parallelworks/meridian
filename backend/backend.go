@@ -94,10 +94,9 @@ type Driver interface {
 	// Connect makes m's workers able to reach the coordinator, at
 	// coordinator, where this replica listens, and returns the endpoint
 	// they reach it at from where they run: the coordinator's own Unix
-	// socket for local; or meridian relay on a login node, which forwards
-	// their TLS connections over SSH, for slurm and pbs. The workers of a
-	// Forwarder's members, as the ssh backend's, reach it through a
-	// listener on the member instead, which the coordinator serves.
+	// socket for local. The workers of a Forwarder's members, as the ssh
+	// backend's, reach it through a listener on the member instead, which
+	// the coordinator serves.
 	//
 	// One replica at a time holds a member's connection, under a lease in
 	// the store, and serves every attempt that reaches the coordinator
@@ -188,9 +187,9 @@ type Demand struct {
 	// callers that wait don't starve their own children; never to another
 	// job, which would still hold it when the caller went on. A driver
 	// that counts what it placed against its member, as local does, leaves
-	// these out, and ignores the IDs of attempts it didn't place. One that
-	// can't release what a placement holds, as a batch scheduler's
-	// allocation, ignores them all.
+	// these out, and ignores the IDs of attempts it didn't place. A batch
+	// scheduler's driver, which is never asked to place a job that calls a
+	// workflow (docs/design.md, Workflows a step calls), ignores them all.
 	Parked []string
 	// Tries is how many times, since the job was last placed, its
 	// placement found that a member's backend couldn't answer, as the
@@ -289,8 +288,9 @@ type PlaceRequest struct {
 	// BootstrapToken is the attempt's bootstrap token: random and
 	// single-use, valid until the attempt is claimed or its placement
 	// withdrawn, however long a scheduler queues it. The coordinator keeps
-	// only its hash. It goes in the worker's environment, or in a file only
-	// the user can read, and never on a command line, where other users
+	// only its hash. It goes on a socket the worker inherits, in a file only
+	// the user can read, as a batch scheduler's job gets it, or in the
+	// worker's environment, and never on a command line, where other users
 	// could see it, nor in a log.
 	BootstrapToken string
 	// TimeoutSeconds is the job's timeout, or the member's default, in

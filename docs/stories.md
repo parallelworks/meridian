@@ -457,8 +457,8 @@ such as `@main`, so two runs of a workflow can run different code.
   type is an error at its line.
 - **Jobs that call workflows.** A job can have a `uses:` of its own. The
   called workflow's jobs join the run's graph and are placed like the
-  caller's, and no worker waits for them. This answers steps that run a
-  workflow ([Open questions](design.md#open-questions)).
+  caller's, and no worker waits for them. This answers calls without a
+  worker ([Open questions](design.md#open-questions)).
 
 **Open.** Whether a reference to a branch is a warning, given how many format
 1 workflows use one, and how the called workflow's jobs are named in the
