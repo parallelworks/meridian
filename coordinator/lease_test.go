@@ -589,15 +589,24 @@ func TestMemberGone(t *testing.T) {
 
 // TestLostBeforeStep checks that a worker that ended before the job's
 // first step, claimed or not, fails the attempt before its first step,
-// which places the job again; and that one its scheduler ended at its time
-// limit fails the job with the reason timeout.
+// which places the job again, whatever ended it: one its scheduler ended
+// at its time limit, or for its memory, as one that waited for the
+// coordinator until then, ran none of the job's code either, and its
+// problem says what ended it.
 func TestLostBeforeStep(t *testing.T) {
 	parallel(t)
 	for _, tc := range []struct {
 		name    string
 		claimed bool
 		end     backend.End
-	}{{"claimed", true, ""}, {"never claimed", false, ""}, {"timed out", true, backend.EndTimedOut}} {
+	}{
+		{"claimed", true, ""},
+		{"never claimed", false, ""},
+		{"claimed, timed out", true, backend.EndTimedOut},
+		{"never claimed, timed out", false, backend.EndTimedOut},
+		{"claimed, out of memory", true, backend.EndOutOfMemory},
+		{"never claimed, out of memory", false, backend.EndOutOfMemory},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clock := newFakeClock()
 			c, d := openLease(t, clock, []bool{true}, []bool{false})
@@ -619,15 +628,15 @@ func TestLostBeforeStep(t *testing.T) {
 			clock.Advance(c.timing.Lease + time.Second)
 			wait := look(t, c, id)
 			a := latestAttempt(t, c, id, "main")
-			if tc.end == backend.EndTimedOut {
-				j := storedJob(t, c, id, "main")
-				if wait != 0 || j.Outcome != plan.OutcomeFailure || j.Reason != plan.ReasonTimeout || !slices.Equal(jobCodes(j), []string{"worker_killed"}) {
-					t.Errorf("the job whose worker timed out is %+v", j)
-				}
-				return
-			}
-			if a.ID != first.ID || a.End.Kind != store.EndSetupFailed || a.End.Problem == nil || a.End.Problem.Code != problems.WorkerEndedEarly.Code() {
+			if a.ID != first.ID || a.End.Kind != store.EndSetupFailed || a.End.Reason != plan.ReasonSetupFailed || a.End.Problem == nil {
 				t.Fatalf("the attempt is %+v", a)
+			}
+			code, reason := problems.WorkerEndedEarly.Code(), any(nil)
+			if r, killed := killedFor(tc.end); killed {
+				code, reason = problems.WorkerKilledEarly.Code(), string(r)
+			}
+			if p := a.End.Problem; p.Code != code || p.Params["reason"] != reason {
+				t.Fatalf("the attempt ended with %s %v, want %s, reason %v", p.Code, p.Params, code, reason)
 			}
 			if wait <= 0 {
 				t.Fatalf("after a setup failure, the supervisor waits %v", wait)
@@ -643,6 +652,73 @@ func TestLostBeforeStep(t *testing.T) {
 			}
 			if j := storedJob(t, c, id, "main"); j.Outcome != plan.OutcomeSuccess || j.Attempts != 2 {
 				t.Errorf("the job placed again is %+v", j)
+			}
+		})
+	}
+}
+
+// TestKilledBeforeStepAgain checks that a job whose worker its scheduler
+// ends at its time limit before its first step, each time it is placed,
+// fails once that has happened twice, as for any failure before the first
+// step that comes again for the same reason, with the reason
+// setup-failed, and a problem that says why.
+func TestKilledBeforeStepAgain(t *testing.T) {
+	parallel(t)
+	clock := newFakeClock()
+	c, d := openLease(t, clock, nil, nil)
+	// No worker ever claims its attempt.
+	d.set(func(d *testDriver) {
+		d.worker = func(backend.PlaceRequest) testEnd { return testEnd{never: true} }
+	})
+	d.says(backend.Status{State: backend.Dead, End: backend.EndTimedOut}, nil)
+	id, first := startJob(t, c, oneJob, store.AttemptPlacing)
+	look(t, c, id)
+	clock.Advance(time.Minute)
+	look(t, c, id)
+	waitFor(t, func() bool {
+		a := latestAttempt(t, c, id, "main")
+		return a.ID != first.ID && a.Placed()
+	})
+	if wait := look(t, c, id); wait != 0 {
+		t.Fatalf("the supervisor waits %v", wait)
+	}
+	j := storedJob(t, c, id, "main")
+	if j.Outcome != plan.OutcomeFailure || j.Reason != plan.ReasonSetupFailed || j.Attempts != 2 ||
+		!slices.Equal(jobCodes(j), []string{"setup_failed", "worker_killed_early"}) {
+		t.Fatalf("the job is %+v", j)
+	}
+	if got := j.Diagnostics[1].Params["reason"]; got != string(plan.ReasonTimeout) {
+		t.Errorf("the job's problem gives the reason %v", got)
+	}
+}
+
+// TestKilledAfterStep checks that a worker its scheduler ended at its time
+// limit, or that it or the kernel ended for its memory, once a step had
+// started, fails the job with that reason, not worker-lost.
+func TestKilledAfterStep(t *testing.T) {
+	parallel(t)
+	for _, tc := range []struct {
+		end    backend.End
+		reason plan.Reason
+	}{
+		{backend.EndTimedOut, plan.ReasonTimeout},
+		{backend.EndOutOfMemory, plan.ReasonOutOfMemory},
+	} {
+		t.Run(string(tc.end), func(t *testing.T) {
+			clock := newFakeClock()
+			c, d := openLease(t, clock, []bool{true}, []bool{true})
+			id, _ := startJob(t, c, oneJob, store.AttemptRunning)
+			d.says(backend.Status{State: backend.Dead, End: tc.end}, nil)
+			clock.Advance(c.timing.Lease + time.Second)
+			if wait := look(t, c, id); wait != 0 {
+				t.Fatalf("the supervisor waits %v", wait)
+			}
+			if a := latestAttempt(t, c, id, "main"); a.End.Kind != store.EndLost || a.End.Reason != tc.reason {
+				t.Errorf("the attempt ended %+v", a.End)
+			}
+			j := storedJob(t, c, id, "main")
+			if j.Outcome != plan.OutcomeFailure || j.Reason != tc.reason || j.Attempts != 1 || !slices.Equal(jobCodes(j), []string{"worker_killed"}) {
+				t.Errorf("the job is %+v", j)
 			}
 		})
 	}

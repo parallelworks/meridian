@@ -601,6 +601,11 @@ var (
 	// WorkerKilled is a job whose worker its scheduler, or the kernel,
 	// ended: at its time limit, or for the memory it used.
 	WorkerKilled = define(Error, "worker_killed", "Worker its scheduler ended", "job", "reason")
+	// WorkerKilledEarly is an attempt whose worker its scheduler, or the
+	// kernel, ended before its job's first step, at its time limit or for
+	// the memory it used: a failure before the first step, which places
+	// the job again, as WorkerEndedEarly is, but whose cause is another.
+	WorkerKilledEarly = define(Error, "worker_killed_early", "Worker its scheduler ended before the job's first step", "job", "reason")
 	// MemberGone is an attempt placed on a member that its group no longer
 	// has, whose backend can't say whether its worker runs: a failure
 	// before the job's first step, which places the job again.

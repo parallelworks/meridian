@@ -3665,11 +3665,13 @@ the attempt, whichever replica checked, time for a person to see the
 problem and fix it; and then the attempt is lost, with the problem, which
 its end, its events, and its job's diagnostics in `meridian status`, show. Once the backend says
 the worker has ended without completing its attempt, the attempt ends
-with the reason `worker-lost` if a step had started, and otherwise as a
-failure before its first step, which is placed again
-([Failures and retries](#failures-and-retries)); or with `timeout` when a
-scheduler ended it at its time limit, and `out-of-memory` when a scheduler
-or the kernel ended it for its memory. The backend of an attempt whose
+as a failure before its first step if no step had started, which is
+placed again ([Failures and retries](#failures-and-retries)), whatever
+ended it, even a scheduler's time limit or memory limit: none of the
+job's code ran (`worker_killed_early`). Once a step has started, it ends
+with `timeout` when a scheduler ended it at its time limit,
+`out-of-memory` when a scheduler or the kernel ended it for its memory,
+and otherwise `worker-lost`. The backend of an attempt whose
 member its group no longer has can't be asked: the attempt is lost once
 the grace has passed since its lease lapsed, or since it was placed if no
 worker claimed it, with `worker-lost` once a step has started and
@@ -5211,9 +5213,12 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   the scheduler and stops the job before it.
 - **A job the scheduler ends at its time limit timed out:** its worker
   wasn't lost. When the scheduler reports that it ended a job at its limit,
-  such as Slurm's `TIMEOUT` state, the attempt's reason is `timeout`, so a
-  `retry:` that lists `worker-lost` doesn't run it again. A node failure or
-  a preemption is still `worker-lost` ([Job retries](#job-retries)).
+  such as Slurm's `TIMEOUT` state, once a step had started, the attempt's
+  reason is `timeout`, so a `retry:` that lists `worker-lost` doesn't run
+  it again. Before a step started, none of the job's code ran: the attempt
+  failed before its first step (`worker_killed_early`), and is placed
+  again ([Leases and fencing](#leases-and-fencing)). A node failure or a
+  preemption is still `worker-lost` ([Job retries](#job-retries)).
 - **Placement** leaves out a member whose longest allowed walltime is
   shorter than the one the job would request.
 - **A format 1 job that sets its time limit through `runs-on:`** keeps it.
