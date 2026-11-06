@@ -101,6 +101,9 @@ func open(t testing.TB, opts Options) *Coordinator {
 	if opts.Keys == nil {
 		opts.Keys = coordtest.NewKeys(t)
 	}
+	if opts.TLSKey == nil {
+		opts.TLSKey = newTLSKey(t)
+	}
 	if opts.Groups == nil {
 		opts.Groups = testGroups{}
 	}

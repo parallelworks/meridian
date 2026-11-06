@@ -2,6 +2,7 @@ package workerapisrv_test
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"slices"
 	"testing"
 	"time"
@@ -20,27 +21,60 @@ func TestConformance(t *testing.T) {
 	workerapitest.Conformance(t, newTarget(t))
 }
 
+// The server serves the worker API as package workerapi says over TLS 1.3,
+// on a member's listener, as to workers that reach it from a network
+// through a relay, whose connections take no deadlines.
+func TestConformanceTLS(t *testing.T) {
+	parallel(t)
+	workerapitest.Conformance(t, newTLSTarget(t))
+}
+
 // A target is a rig as workerapitest.Target: each attempt is of a run of
 // its own, whose plan is of a version the server reads, but for one of a
 // newer plan version, which a replica of an older release serves.
 type target struct {
 	*rig
-	// older is the socket of a replica that reads only plan versions
-	// before plan.Version.
-	older string
+	// address is where the rig's server serves the attempts, and older
+	// where a replica that reads only plan versions before plan.Version
+	// does: their sockets, or, for attempts placed on the member whose key
+	// is member, where it isn't "", their listeners of the member's.
+	address, older, member string
 }
 
 var _ workerapitest.Target = (*target)(nil)
 
 func newTarget(t *testing.T) *target {
 	r := newRig(t, rigOptions{})
-	tg := &target{rig: r}
+	tg := &target{rig: r, address: r.socket}
 	before := r.socket
 	r.socket = ""
 	r.serve(rigOptions{older: true})
 	tg.older, r.socket = r.socket, before
 	return tg
 }
+
+// A tlsTarget is a target whose attempts are placed on a member whose
+// workers reach the coordinator over TLS, which each replica serves with
+// one key, whose hash is hash.
+type tlsTarget struct {
+	*target
+	hash [sha256.Size]byte
+}
+
+var _ workerapitest.TLSTarget = (*tlsTarget)(nil)
+
+func newTLSTarget(t *testing.T) *tlsTarget {
+	r := newRig(t, rigOptions{})
+	older := r.serve(rigOptions{older: true})
+	cert, hash := newCert(t)
+	const member = "batch-conformance"
+	return &tlsTarget{
+		target: &target{rig: r, member: member, address: serveMemberTLS(t, r.server, member, cert), older: serveMemberTLS(t, older, member, cert)},
+		hash:   hash,
+	}
+}
+
+func (tg *tlsTarget) KeyHash() [sha256.Size]byte { return tg.hash }
 
 func (tg *target) NewAttempt(t *testing.T, a workerapitest.Attempt) (string, string, string) {
 	t.Helper()
@@ -52,12 +86,12 @@ func (tg *target) NewAttempt(t *testing.T, a workerapitest.Attempt) (string, str
 	run := tg.newRunOf(c)
 	tg.readier.set(run, &workerapisrv.Ready{Job: a.Job, Run: a.Run, Needs: a.Needs})
 	at, token := tg.newAttempt(run, "build", placed{
-		selfFencing: a.SelfFencing, lease: a.LeaseSeconds, heartbeat: a.HeartbeatSeconds, digest: conformanceDigest,
+		selfFencing: a.SelfFencing, lease: a.LeaseSeconds, heartbeat: a.HeartbeatSeconds, digest: conformanceDigest, memberKey: tg.member,
 	})
 	if a.PlanVersion > plan.Version {
 		return tg.older, token, at.ID
 	}
-	return tg.socket, token, at.ID
+	return tg.address, token, at.ID
 }
 
 func (tg *target) Withdraw(t *testing.T, id string) {

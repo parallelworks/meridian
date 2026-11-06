@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto"
 	"errors"
 	"fmt"
 	"io"
@@ -306,6 +307,17 @@ func stepLog(t *testing.T, env map[string]string, id string) string {
 	return stepLogAt(t, env, id, 0)
 }
 
+// coordinatorKey returns the coordinator's TLS key of the state directory
+// dir, as meridian's own processes read it (local.CoordinatorKey).
+func coordinatorKey(t *testing.T, dir string) crypto.Signer {
+	t.Helper()
+	key, err := local.CoordinatorKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
 // stepLogAt returns the log of the first try of the step at index step of
 // the job main of the run id, as stepLog does of its first.
 func stepLogAt(t *testing.T, env map[string]string, id string, step int) string {
@@ -315,7 +327,7 @@ func stepLogAt(t *testing.T, env map[string]string, id string, step int) string 
 	if err != nil {
 		t.Fatal(err)
 	}
-	coord, err := coordinator.Open(t.Context(), coordinator.Options{Database: db, Keys: local.NewKeys(dirs.State)})
+	coord, err := coordinator.Open(t.Context(), coordinator.Options{Database: db, Keys: local.NewKeys(dirs.State), TLSKey: coordinatorKey(t, dirs.State)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +428,7 @@ func TestRunEnds(t *testing.T) {
 		}
 	}
 	state := env[local.EnvStateDir]
-	for _, name := range []string{local.DatabaseFile, local.KeyFile} {
+	for _, name := range []string{local.DatabaseFile, local.KeyFile, local.CoordinatorKeyFile} {
 		if _, err := os.Stat(filepath.Join(state, name)); err != nil {
 			t.Error(err)
 		}
@@ -486,7 +498,7 @@ func TestRunDirNotMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coord, err := coordinator.Open(t.Context(), coordinator.Options{Database: db, Keys: local.NewKeys(dirs.State)})
+	coord, err := coordinator.Open(t.Context(), coordinator.Options{Database: db, Keys: local.NewKeys(dirs.State), TLSKey: coordinatorKey(t, dirs.State)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,7 +688,7 @@ func TestHoldSocket(t *testing.T) {
 	}
 	db, path := filepath.Join(dir, "meridian.db"), filepath.Join(dir, "s.sock")
 	open := func() *coordinator.Coordinator {
-		c, err := coordinator.Open(t.Context(), coordinator.Options{Database: db, Keys: local.NewKeys(dir)})
+		c, err := coordinator.Open(t.Context(), coordinator.Options{Database: db, Keys: local.NewKeys(dir), TLSKey: coordinatorKey(t, dir)})
 		if err != nil {
 			t.Fatal(err)
 		}

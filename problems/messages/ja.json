@@ -298,6 +298,7 @@
   "key_file_missing": "鍵ファイル {path} が存在しないため、それがラップしたデータ鍵をアンラップできません。",
   "key_unwrap_failed": "実行 {run} のデータ鍵を鍵ファイル {path} でアンラップできません。別の鍵や別の実行のためにラップされたか、変更されています。",
   "key_wrapping_unknown": "実行 {run} のデータ鍵は、このバージョンの Meridian が知らない方法でラップされています。",
+  "coordinator_key_invalid": "コーディネーターの鍵ファイル {path} には、PKCS #8 PEM 形式の ECDSA P-256 秘密鍵が入っていません。",
   "git_unavailable": "Meridian は git を実行できません: {reason}",
   "command_missing": "meridian validate workflow.yaml のようにコマンドを指定してください。",
   "command_unknown": "コマンド「{command}」はありません。{suggested, select, true {「{suggestion}」の間違いではありませんか？} other {}}",

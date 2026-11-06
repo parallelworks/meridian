@@ -2123,6 +2123,14 @@
       "使用启动该运行的 Meridian 版本或更新的版本恢复该运行。"
     ]
   },
+  "coordinator_key_invalid": {
+    "title": "不是协调器密钥的密钥文件",
+    "why": "协调器的密钥文件保存 ECDSA P-256 密钥，协调器用它向通过网络（例如经由登录节点上的中继）连接的工作进程提供 TLS，工作进程依据该密钥的哈希识别协调器。它由 Meridian 创建，不应被其他任何东西更改。",
+    "fix": [
+      "如果您有密钥文件的副本，请将其恢复。",
+      "否则请将其删除：Meridian 会创建新的密钥文件，但已用旧密钥的哈希启动的工作进程会拒绝协调器（coordinator_key_mismatch）。"
+    ]
+  },
   "git_unavailable": {
     "title": "无法运行 git",
     "why": "Meridian 通过运行 git 从 Git 仓库读取步骤的 uses: 所指定的工作流，因此 git 必须已安装且在 PATH 中。",

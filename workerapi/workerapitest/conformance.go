@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -31,10 +33,11 @@ import (
 // own, and says what it stored of each. Conformance calls it from one
 // goroutine at a time.
 type Target interface {
-	// NewAttempt makes an attempt as a, ready to claim, and returns the
-	// path of the Unix socket the target serves it on, its bootstrap token
-	// and its ID.
-	NewAttempt(t *testing.T, a Attempt) (socket, token, attemptID string)
+	// NewAttempt makes an attempt as a, ready to claim, and returns where
+	// the target serves it, its bootstrap token and its ID: a Unix
+	// socket's path, which starts with /, or, for a TLSTarget, a host and
+	// port.
+	NewAttempt(t *testing.T, a Attempt) (address, token, attemptID string)
 	// Withdraw withdraws the attempt's placement before it is claimed, as
 	// when its run is cancelled.
 	Withdraw(t *testing.T, attemptID string)
@@ -56,6 +59,17 @@ type Target interface {
 	// EndChild ends the child run of the step's try of the attempt, which
 	// the suite asked for, with outcome, as the run itself ends.
 	EndChild(t *testing.T, attemptID string, step, try int, outcome plan.Outcome)
+}
+
+// A TLSTarget is a Target that serves attempts over TLS 1.3, at the host
+// and port NewAttempt returns, as a coordinator serves workers that reach
+// it from a network: the suite talks to it as a worker does, only once
+// the server shows the key whose hash KeyHash returns.
+type TLSTarget interface {
+	Target
+	// KeyHash returns the SHA-256 digest of the target's TLS public key,
+	// as DER SubjectPublicKeyInfo.
+	KeyHash() [sha256.Size]byte
 }
 
 // An Attempt is an attempt for a Target to make: of Job, as Ready gave it,
@@ -104,7 +118,8 @@ func selfFencing() Attempt {
 }
 
 // Conformance checks that target serves the worker API as package
-// workerapi says, playing a worker over HTTP on the target's Unix socket:
+// workerapi says, playing a worker over HTTP on the target's Unix socket,
+// or over TLS 1.3 to a TLSTarget, pinned to its key:
 // the claim and its credential, heartbeats, leases, control polls, events,
 // logs, actions and the attempt's end, each with what a coordinator
 // refuses, and strict decoding, fencing, error bodies, unknown paths and
@@ -150,11 +165,8 @@ type worker struct {
 
 func newWorker(t *testing.T, target Target, a Attempt) *worker {
 	t.Helper()
-	socket, token, id := target.NewAttempt(t, a)
-	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", socket)
-	}}
+	address, token, id := target.NewAttempt(t, a)
+	tr := &http.Transport{DialContext: dialer(t, target, address)}
 	t.Cleanup(tr.CloseIdleConnections)
 	return &worker{
 		t: t, target: target, attempt: a, attemptID: id, token: token, credential: newCredential(t), apiVersion: workerapi.Version,
@@ -164,6 +176,44 @@ func newWorker(t *testing.T, target Target, a Attempt) *worker {
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+		},
+	}
+}
+
+// dialer returns what connects to the target at address: a Unix socket,
+// for a path; or else TLS 1.3 to a TLSTarget, which the suite's requests
+// then go over as plain HTTP/1.1 would.
+func dialer(t *testing.T, target Target, address string) func(context.Context, string, string) (net.Conn, error) {
+	t.Helper()
+	if strings.HasPrefix(address, "/") {
+		return func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", address)
+		}
+	}
+	tt, ok := target.(TLSTarget)
+	if !ok {
+		t.Fatalf("the target serves at %s, and isn't a TLSTarget", address)
+	}
+	config := PinnedTLS(tt.KeyHash())
+	return func(ctx context.Context, _, _ string) (net.Conn, error) {
+		d := tls.Dialer{Config: config}
+		return d.DialContext(ctx, "tcp", address)
+	}
+}
+
+// PinnedTLS returns the TLS config of a client that talks only to a server
+// whose public key has hash, as a worker does: TLS 1.3, checked against
+// the key's hash, not a certificate authority.
+func PinnedTLS(hash [sha256.Size]byte) *tls.Config {
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the server's public key
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 || sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo) != hash {
+				return errors.New("workerapitest: the server doesn't hold the target's key")
+			}
+			return nil
 		},
 	}
 }

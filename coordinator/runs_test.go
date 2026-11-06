@@ -530,6 +530,9 @@ func (d *workerDriver) Place(ctx context.Context, m *backend.Member, req backend
 		}
 	}
 	environ = append(environ, workerapi.EnvCoordinator+"="+req.Coordinator.Address, workerapi.EnvBootstrapTokenFile+"="+token)
+	if req.Coordinator.KeyHash != "" {
+		environ = append(environ, workerapi.EnvKeySHA256+"="+req.Coordinator.KeyHash)
+	}
 	if home != "" {
 		environ = append(slices.DeleteFunc(environ, func(kv string) bool { return strings.HasPrefix(kv, "HOME=") }), "HOME="+home)
 	}

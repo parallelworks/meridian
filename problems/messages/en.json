@@ -304,6 +304,7 @@
   "key_file_missing": "The key file {path} isn't there, so the data keys it wrapped can't be unwrapped.",
   "key_unwrap_failed": "Run {run}'s data key can't be unwrapped with the key file {path}: it was wrapped under another key or for another run, or has been changed.",
   "key_wrapping_unknown": "Run {run}'s data key was wrapped in a way this version of Meridian doesn't know.",
+  "coordinator_key_invalid": "The coordinator's key file {path} doesn't hold an ECDSA P-256 private key in PKCS #8 PEM.",
   "git_unavailable": "Meridian can't run git: {reason}.",
   "command_missing": "Name a command, such as meridian validate workflow.yaml.",
   "command_unknown": "There is no command \"{command}\".{suggested, select, true { Did you mean \"{suggestion}\"?} other {}}",

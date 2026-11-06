@@ -10,9 +10,11 @@
 // attempt's reports are refused (workerapi.Fenced), and nothing it sends is
 // stored.
 //
-// It takes connections on a Unix socket only, and asks the system who each
-// is from before it reads a request (Peers): a connection it doesn't trust
-// is closed unread. It holds at most a number of connections at once, and
+// It takes connections on a Unix socket, and asks the system who each is
+// from before it reads a request (Peers): a connection it doesn't trust is
+// closed unread; and on a member's listener (ServeMember), whose
+// connections are the member's, over TLS 1.3 where they come from a
+// network. It holds at most a number of connections at once, and
 // past it closes the one that has waited longest for a request, once it
 // has waited a second, gives
 // each request's headers and body a time to arrive in, at a least
@@ -32,6 +34,7 @@ package workerapisrv
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
@@ -305,29 +308,66 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 // that takes no deadlines, as an SSH channel's doesn't, is bridged through
 // one that does (net.Pipe), so that the server's bounds on a request's
 // time hold on it too.
-func (s *Server) ServeMember(ctx context.Context, l net.Listener, member string) error {
+//
+// With cert, the coordinator's, it serves TLS on each connection, over
+// that bridge, for workers that reach the listener from a network, as
+// through a relay: TLS 1.3 alone, HTTP/1.1, and no client certificate,
+// since a worker shows who it is with its token and credential, and knows
+// cert's key by its hash, not by an authority. Its key exchanges are those
+// whose every part FIPS 140-3 approves (tlsGroups). A handshake has the
+// time a request's headers have to arrive in. Without cert, as for a
+// socket the ssh backend forwards, the connections are served as they
+// come.
+func (s *Server) ServeMember(ctx context.Context, l net.Listener, member string, cert *tls.Certificate) error {
 	if member == "" {
 		return errors.New("workerapisrv: a member's listener without its key")
 	}
-	conns := newConnSet(s.maxConns, evictAfter)
-	return s.serve(ctx, &memberListener{Listener: l, member: member, conns: conns}, conns)
+	ml := &memberListener{Listener: l, member: member, conns: newConnSet(s.maxConns, evictAfter)}
+	if cert != nil {
+		ml.tls = &tls.Config{
+			MinVersion:       tls.VersionTLS13,
+			Certificates:     []tls.Certificate{*cert},
+			NextProtos:       []string{"http/1.1"},
+			CurvePreferences: tlsGroups,
+			// A worker never resumes a session: it would send a ticket on
+			// every connection for nothing.
+			SessionTicketsDisabled: true,
+		}
+	}
+	return s.serve(ctx, ml, ml.conns)
 }
+
+// tlsGroups are the key exchanges a member's TLS takes, which crypto/tls
+// chooses among in an order of its own: ML-KEM with ECDH on P-256 or
+// P-384, and ECDH on either alone. crypto/tls takes X25519's hybrid with
+// ML-KEM too in FIPS 140-3 mode, but X25519 isn't an algorithm FIPS 140-3
+// approves.
+var tlsGroups = []tls.CurveID{tls.SecP256r1MLKEM768, tls.SecP384r1MLKEM1024, tls.CurveP256, tls.CurveP384}
 
 // serve serves the worker API on l, whose connections conns holds, as
 // Serve says.
 func (s *Server) serve(ctx context.Context, l net.Listener, conns *connSet) error {
+	// HTTP/1.1 alone: a worker drops its connections after a replica's
+	// 503, so that its next request may reach another, which HTTP/2's
+	// one connection wouldn't.
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
 	srv := &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: s.headerTime,
 		ReadTimeout:       s.headerTime + s.bodyTime,
 		IdleTimeout:       idleTime,
 		MaxHeaderBytes:    maxHeaderBytes,
+		Protocols:         &protocols,
 		ConnState:         conns.setState,
+		// What the HTTP server says of a connection, as a handshake that
+		// failed, goes where the server's own words do.
+		ErrorLog: slog.NewLogLogger(s.log.Handler(), slog.LevelWarn),
 		// The requests' context ends with ctx, which ends the control
 		// polls held, so that a shutdown waits for none of them.
 		BaseContext: func(net.Listener) context.Context { return ctx },
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
-			if pc, ok := c.(*peerConn); ok {
+			if pc, ok := peerConnOf(c); ok {
 				return context.WithValue(ctx, peerKey{}, pc.peer)
 			}
 			return ctx
@@ -408,6 +448,15 @@ func (c *peerConn) Close() error {
 	return err
 }
 
+// peerConnOf returns the peerConn that c is, or that c serves TLS over.
+func peerConnOf(c net.Conn) (*peerConn, bool) {
+	if tc, ok := c.(*tls.Conn); ok {
+		c = tc.NetConn()
+	}
+	pc, ok := c.(*peerConn)
+	return pc, ok
+}
+
 func (l *peerListener) Accept() (net.Conn, error) {
 	for {
 		c, err := l.Listener.Accept()
@@ -447,11 +496,13 @@ func (l *peerListener) Close() error {
 }
 
 // A memberListener takes the connections of a member's listener, whose
-// peer is the member, and holds at most as many at once as conns does.
+// peer is the member, and holds at most as many at once as conns does. It
+// serves TLS on each with tls, unless it is nil.
 type memberListener struct {
 	net.Listener
 	member string
 	conns  *connSet
+	tls    *tls.Config
 }
 
 func (l *memberListener) Accept() (net.Conn, error) {
@@ -463,6 +514,11 @@ func (l *memberListener) Accept() (net.Conn, error) {
 	if !l.conns.add(pc) {
 		pc.Conn.Close()
 		return nil, net.ErrClosed
+	}
+	if l.tls != nil {
+		// The HTTP server makes the handshake, within its time for a
+		// request's headers, as it does for a *tls.Conn.
+		return tls.Server(pc, l.tls), nil
 	}
 	return pc, nil
 }
@@ -598,7 +654,7 @@ func (cs *connSet) remove(c *peerConn) {
 
 // setState records the state the HTTP server says c is in.
 func (cs *connSet) setState(c net.Conn, state http.ConnState) {
-	pc, ok := c.(*peerConn)
+	pc, ok := peerConnOf(c)
 	if !ok {
 		return
 	}

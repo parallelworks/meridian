@@ -4400,7 +4400,8 @@ coordinator say to each other.
   request.
 
 What the API means is pinned by a suite, `workerapitest.Conformance`, that
-plays a worker against a coordinator over its Unix socket: the claim and
+plays a worker against a coordinator over its Unix socket, or over TLS
+1.3, pinned to its key, as on a member's listener: the claim and
 its credential, heartbeats, control polls, events, logs, actions and the
 attempt's end, with each refusal, fencing, strict decoding, and unknown paths and
 methods. Every coordinator passes it, Meridian's and a platform's, and so
@@ -4451,6 +4452,24 @@ only from `MERIDIAN_COORDINATOR`, stops at another key
 (`coordinator_key_mismatch`). Where Meridian runs on the login node
 itself, it listens there in the same way, without SSH or a relay. A
 coordinator off the cluster opens no port on its own machine.
+
+Where a member's workers reach the coordinator over TLS, the replica that
+holds the member's listener serves TLS on it: TLS 1.3 alone, HTTP/1.1,
+and no client certificate, since a worker shows who it is with its token,
+and then its credential. The key is an ECDSA P-256 key of the
+coordinator's own. Meridian keeps it in `coordinator.key`, in the state
+directory beside `secret-record.key`, readable only by the user, and makes
+it once, as it makes that file, so that every process of the state
+directory serves the same key, and a worker one placed reaches the one
+that takes its member over; a platform gives its replicas one key. Each
+process makes a certificate of the key as it starts, signed by the key
+itself: a worker checks the key's hash, not a certificate authority. A key
+file that has gone is made again, as another key, which workers placed
+before refuse (`coordinator_key_mismatch`); one that isn't such a key is
+`coordinator_key_invalid`. A coordinator that may write the store doesn't
+open without a key, since any replica may come to hold any member's
+listener, and one without a key would have to serve its workers in the
+clear.
 
 The coordinator connects to a host over SSH as the user would with `ssh`
 (`backend/ssh/internal/sshconn`), which the `ssh` backend and the login
@@ -5385,8 +5404,16 @@ enforced (`fips_not_enforced`), with a validated module
 check both too, whatever program calls them, as every entry point of
 Meridian's must (`internal/fipsmode`).
 
-- **TLS 1.3**, through `crypto/tls`, with the algorithms FIPS mode allows.
-  The coordinator's certificate uses an ECDSA P-256 key.
+- **TLS 1.3**, through `crypto/tls`, and no earlier version: AES-GCM, and
+  key exchange with ML-KEM and ECDH on P-256 or P-384, or with ECDH on
+  either alone. FIPS mode lets `crypto/tls` take X25519's hybrid with
+  ML-KEM too, which it prefers, but X25519 isn't approved, so the
+  coordinator doesn't take it. The coordinator's certificate uses an ECDSA
+  P-256 key, signing with SHA-256 ([Connections](#connections)). The key
+  is made from `crypto/rand`, not derived with HKDF from the key file's,
+  as the keys `local.Keys.Derive` gives are: FIPS 186-5 makes an ECDSA
+  key from an approved random bit generator's output, which
+  `ecdsa.GenerateKey` always uses, whatever reader it is given.
 - **SSH**, through `golang.org/x/crypto/ssh`, with the algorithms it can run
   in FIPS 140-only mode pinned: key exchange with ECDH on P-256, P-384 and
   P-521; the ciphers aes128-ctr, aes192-ctr and aes256-ctr; the MACs

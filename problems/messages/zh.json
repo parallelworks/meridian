@@ -298,6 +298,7 @@
   "key_file_missing": "密钥文件 {path} 不存在，因此无法解包它所包装的数据密钥。",
   "key_unwrap_failed": "无法用密钥文件 {path} 解包运行 {run} 的数据密钥：它是用其他密钥或为其他运行包装的，或者已被更改。",
   "key_wrapping_unknown": "运行 {run} 的数据密钥是以此版本的 Meridian 不了解的方式包装的。",
+  "coordinator_key_invalid": "协调器的密钥文件 {path} 中没有 PKCS #8 PEM 格式的 ECDSA P-256 私钥。",
   "git_unavailable": "Meridian 无法运行 git：{reason}",
   "command_missing": "请指定一个命令，例如 meridian validate workflow.yaml。",
   "command_unknown": "没有命令“{command}”。{suggested, select, true {您是不是想用“{suggestion}”？} other {}}",
