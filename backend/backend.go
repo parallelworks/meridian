@@ -376,11 +376,11 @@ const (
 )
 
 // An End is why a placement's worker ended, as its backend says. The
-// coordinator turns it into the attempt's reason: EndTimedOut into
-// plan.ReasonTimeout and EndOutOfMemory into plan.ReasonOutOfMemory; any
-// other end of a worker that didn't complete its attempt is
-// plan.ReasonWorkerLost once a step has started, and
-// plan.ReasonSetupFailed before.
+// coordinator turns the end of a worker that didn't complete its attempt
+// into the attempt's reason: before a step has started, whatever it is,
+// plan.ReasonSetupFailed, since none of the job's code ran; and after,
+// EndTimedOut into plan.ReasonTimeout, EndOutOfMemory into
+// plan.ReasonOutOfMemory, and any other into plan.ReasonWorkerLost.
 type End string
 
 const (

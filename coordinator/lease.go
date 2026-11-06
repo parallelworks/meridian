@@ -226,26 +226,33 @@ func (c *Coordinator) placedMember(ctx context.Context, run *store.Run, job *sto
 }
 
 // lose ends the attempt a, whose worker was lost, as st, its backend's
-// last word on it, says: with the reason timeout or out-of-memory when its
-// scheduler, or the kernel, ended it so; with worker-lost once a step has
-// started, with why, its problem, if it has one; and otherwise as a
-// failure before the job's first step, with why, or worker_ended_early
-// for nil, which places the job again. The
+// last word on it, says. Before a step has started, whatever ended the
+// worker, it is a failure before the job's first step, which places the
+// job again: none of the job's code ran, though its scheduler, or the
+// kernel, ended it at its time limit or for its memory, as one that
+// waited for the coordinator until then; its problem is why, or for nil,
+// worker_killed_early for such an end, and worker_ended_early for any
+// other. Once a step has started, it is lost with the reason timeout or
+// out-of-memory when its scheduler, or the kernel, ended it so, and
+// otherwise with worker-lost, with why, its problem, if it has one. The
 // attempt must still be as a was, not claimed nor renewed meanwhile, as a
 // worker that reached the coordinator again would have it, or nothing is
 // ended. Either way, the supervisor looks again.
 func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Status, why *problem.Problem) error {
+	reason, killed := killedFor(st.End)
 	end := store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost, Problem: why}
 	switch {
-	case st.End == backend.EndTimedOut:
-		end.Reason = plan.ReasonTimeout
-	case st.End == backend.EndOutOfMemory:
-		end.Reason = plan.ReasonOutOfMemory
 	case a.State != store.AttemptRunning:
-		if why == nil {
+		switch {
+		case why != nil:
+		case killed:
+			why = problems.WorkerKilledEarly.Problem(problems.Params{"job": a.Job, "reason": string(reason)})
+		default:
 			why = problems.WorkerEndedEarly.Problem(problems.Params{"job": a.Job})
 		}
 		end = store.AttemptEnd{Kind: store.EndSetupFailed, Outcome: plan.OutcomeFailure, Reason: plan.ReasonSetupFailed, Problem: why}
+	case killed:
+		end.Reason = reason
 	}
 	ended := false
 	err := c.store.Tx(ctx, func(tx *store.Tx) error {
@@ -266,6 +273,19 @@ func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Sta
 		c.log.InfoContext(ctx, "coordinator: an attempt's worker was lost", "run", a.Run, "job", a.Job, "attempt", a.ID, "reason", end.Reason)
 	}
 	return errAgain
+}
+
+// killedFor returns the reason of an attempt whose worker its scheduler,
+// or the kernel, ended as end says, and whether it did: timeout at its
+// time limit, and out-of-memory for its memory.
+func killedFor(end backend.End) (plan.Reason, bool) {
+	switch end {
+	case backend.EndTimedOut:
+		return plan.ReasonTimeout, true
+	case backend.EndOutOfMemory:
+		return plan.ReasonOutOfMemory, true
+	}
+	return "", false
 }
 
 // workerLost ends the job, whose latest attempt, a, was lost after a step

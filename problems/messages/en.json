@@ -241,6 +241,7 @@
   "worker_lost_again": "Job {job}'s worker was lost again, after its retry: had run it again {retries} times, as many as it allows.",
   "worker_ended_early": "Job {job}'s worker ended before the job's first step.",
   "worker_killed": "Job {job}'s worker was ended {reason, select, timeout {by its scheduler, at its time limit} other {for using more memory than it may}}.",
+  "worker_killed_early": "Job {job}'s worker was ended {reason, select, timeout {by its scheduler, at its time limit} other {for using more memory than it may}}, before the job's first step.",
   "member_gone": "Job {job}'s attempt was placed on a member that its group no longer has, so its backend can't be asked whether its worker runs.",
   "job_timeout_enforced": "Job {job} ran past its timeout, and its worker didn't stop it, so the coordinator ended its attempt.",
 
