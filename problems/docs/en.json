@@ -1119,6 +1119,12 @@
       "Check that the user the job runs as can make the directory, and write to it, on the host the job was placed on."
     ]
   },
+  "worker_deadline_passed": {
+    "why": "A backend that runs a worker in an allocation that ends, as a batch scheduler's job, gives it a deadline in MERIDIAN_DEADLINE, some time before that end, by which the worker stops the job as at its timeout. This one passed before the job's first step started, as when the worker couldn't reach the coordinator for so long, before it claimed its attempt or after, so the worker started none of the job: it would have had no time to run. None of its code ran, so the attempt fails before its first step, and Meridian places the job again.",
+    "fix": [
+      "Check that the coordinator, or the relay that workers reach it through, can be reached from where the job runs, and keeps running while jobs wait to start."
+    ]
+  },
   "env_name_invalid": {
     "why": "A platform gives a job's steps variables of its own, such as PW_USER, in the attempt's claim. The worker sets each in a step's environment, where a name can't be empty or hold = or NUL, so it refuses the attempt before any step runs, rather than run the steps without the variable. The job is placed again, on another member of its group if there is one.",
     "fix": [
@@ -2105,13 +2111,13 @@
     ]
   },
   "worker_environment_missing": {
-    "why": "A backend starts meridian worker with the coordinator's address in MERIDIAN_COORDINATOR, and the attempt's bootstrap token in MERIDIAN_BOOTSTRAP_TOKEN, or in a file MERIDIAN_BOOTSTRAP_TOKEN_FILE names, never on its command line. Without them, the worker can't claim an attempt.",
+    "why": "A backend starts meridian worker with the coordinator's address in MERIDIAN_COORDINATOR, or the address file that names where it is in MERIDIAN_COORDINATOR_FILE, and the attempt's bootstrap token in MERIDIAN_BOOTSTRAP_TOKEN, or in a file MERIDIAN_BOOTSTRAP_TOKEN_FILE names, never on its command line. Without them, the worker can't claim an attempt.",
     "fix": [
       "Let a backend start meridian worker: people don't run it."
     ]
   },
   "worker_environment_invalid": {
-    "why": "MERIDIAN_COORDINATOR_KEY_SHA256 must be sha256: and 64 hex digits when the coordinator is reached over TLS, and unset when it is a Unix socket; and only one of MERIDIAN_BOOTSTRAP_TOKEN and MERIDIAN_BOOTSTRAP_TOKEN_FILE may be set.",
+    "why": "Only one of MERIDIAN_COORDINATOR and MERIDIAN_COORDINATOR_FILE may be set, the second an absolute path; MERIDIAN_COORDINATOR_KEY_SHA256 must be sha256: and 64 hex digits when the coordinator is reached over TLS, as it always is through an address file, and unset when it is a Unix socket; only one of MERIDIAN_BOOTSTRAP_TOKEN and MERIDIAN_BOOTSTRAP_TOKEN_FILE may be set; and MERIDIAN_DEADLINE, if it is set, is a time in Unix seconds.",
     "fix": [
       "Let a backend start meridian worker, which sets them as it should."
     ]
@@ -2138,6 +2144,12 @@
     "why": "A worker reads the coordinator's answers strictly, as the worker API's version defines them, and the coordinator refuses a request with a problem that has a code. This answer was neither, or was larger than a refusal can be, so the worker stopped, rather than guess what the coordinator meant. A worker and a coordinator of different releases of Meridian, or a server that isn't the coordinator, answer so.",
     "fix": [
       "Start workers of the same release of Meridian as the coordinator, and check that the worker reaches the coordinator, not another server."
+    ]
+  },
+  "coordinator_file_invalid": {
+    "why": "A worker that reaches its coordinator through an address file, which MERIDIAN_COORDINATOR_FILE names, reads it again before each connection it makes: JSON with the addresses to try, the name its TLS handshake asks for, and when it was last written. This file isn't that, so the worker stopped, rather than guess where the coordinator is. A file written by another release of Meridian than the worker's, or by something other than Meridian, can be so.",
+    "fix": [
+      "Start workers of the same release of Meridian as the coordinator, and check that nothing else writes the file."
     ]
   },
   "coordinator_lost_data": {

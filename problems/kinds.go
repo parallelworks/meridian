@@ -447,11 +447,15 @@ var (
 // Running a job on a worker. A step's are diagnostics of its finished
 // event, at the step's path; the setup's are the problem with which an
 // attempt that failed before its first step ends, and is placed again.
+// WorkerDeadlinePassed, whose deadline is a time in RFC 3339, in UTC, is
+// also meridian worker's own, when its deadline passes before it has
+// claimed the attempt.
 var (
 	ContainerNotSupported = define(Error, "container_not_supported", "Container the worker can't run yet", "runtime", "image")
 	JobUnreadable         = define(Error, "job_unreadable", "Job the worker couldn't read")
 	JobVersionUnsupported = define(Error, "job_version_unsupported", "Job of a plan version the worker doesn't read", "version", "supported")
 	RunDirUnusable        = define(Error, "run_dir_unusable", "Run directory the worker couldn't use", "path", "reason")
+	WorkerDeadlinePassed  = define(Error, "worker_deadline_passed", "Worker's deadline passed before the job's first step", "deadline")
 	EnvNameInvalid        = define(Error, "env_name_invalid", "Platform's variable with a name no variable can have", "name")
 	UsesNotSupported      = define(Error, "uses_not_supported", "uses: step an earlier version of Meridian can't run", "uses")
 	ActionNeedsPlatform   = define(Error, "action_needs_platform", "Built-in action only a platform provides", "uses")
@@ -874,10 +878,11 @@ var (
 // meridian worker's own problems, which end it: variable is an environment
 // variable's name, address the coordinator's, uid a user's number, os the
 // operating system's name, as Go's GOOS has it, and reason what the
-// operating system said; path is a socket's, or a worker API request's;
-// status an HTTP status's number; at a JSON Pointer into an answer, which
-// has_at says it has; data is events or log, and from the first event's
-// number or byte of what the coordinator lost.
+// operating system said; path is a socket's, an address file's, or a
+// worker API request's; status an HTTP status's number; at a JSON Pointer
+// into an answer, or an address file, which has_at says it has; data is
+// events or log, and from the first event's number or byte of what the
+// coordinator lost.
 var (
 	WorkerEnvironmentMissing    = defineCommand("worker_environment_missing", "Worker started without what it claims", "variable")
 	WorkerEnvironmentInvalid    = defineCommand("worker_environment_invalid", "Worker started with what it can't use", "variable")
@@ -885,6 +890,7 @@ var (
 	CoordinatorPeerUnknown      = defineCommand("coordinator_peer_unknown", "Coordinator socket's user can't be told", "path", "reason")
 	CoordinatorKeyMismatch      = defineCommand("coordinator_key_mismatch", "Server without the coordinator's key", "address")
 	CoordinatorAnswerInvalid    = defineCommand("coordinator_answer_invalid", "Coordinator's answer the worker can't read", "path", "status", "has_at", "at")
+	CoordinatorFileInvalid      = defineCommand("coordinator_file_invalid", "Coordinator's address file the worker can't read", "path", "has_at", "at")
 	CoordinatorLostData         = defineCommand("coordinator_lost_data", "Coordinator lost what it had stored", "data", "from")
 	CoordinatorStoredUnsent     = defineCommand("coordinator_stored_unsent", "Coordinator stored events the worker didn't send", "seq", "last")
 	BootstrapTokenRefused       = defineCommand("bootstrap_token_refused", "Bootstrap token refused")

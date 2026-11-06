@@ -33,6 +33,10 @@ type attempt struct {
 	// claimed is when the worker sent the claim the coordinator answered,
 	// from which the job's timeout, and its lease, are counted.
 	claimed time.Time
+	// deadline, unless it is the zero time, is when the worker stops the
+	// job as at its timeout, if that hasn't come first: before its
+	// allocation ends, as its backend gives it (workerapi.EnvDeadline).
+	deadline time.Time
 
 	// job is the job as the claim gives it, and jobEnv its env: as the
 	// JobEnv phase gave it, for the attempt. mask masks the job's logs:
@@ -46,8 +50,10 @@ type attempt struct {
 	// scripts counts the scripts written, to name each.
 	scripts int
 	// stepEnded, if it is set, is called as each step, or cleanup, has
-	// ended (Config.stepEnded).
-	stepEnded func(a *attempt, step int, cleanup bool)
+	// ended (Config.stepEnded); and setUpEnded once the job is set up
+	// (Config.setUpEnded).
+	stepEnded  func(a *attempt, step int, cleanup bool)
+	setUpEnded func(a *attempt)
 	// firstStarted is set once the coordinator has stored that a step is
 	// starting.
 	firstStarted bool
@@ -83,9 +89,9 @@ type attempt struct {
 	// firstControl is closed once the worker has read its first control,
 	// and done as it asks, or failed to read it (awaitFirstControl).
 	firstControl chan struct{}
-	// timedOut is fired when the job has run past its timeout:, or its
-	// run past the run's, as the coordinator says; a step it stops is sent
-	// SIGKILL at timeoutKill.
+	// timedOut is fired when the job has run past its timeout:, or the
+	// worker's deadline, or its run past the run's, as the coordinator
+	// says; a step it stops is sent SIGKILL at timeoutKill.
 	timedOut    *signal
 	timeoutKill time.Time
 	// cancelJob ends the context the job's phases are evaluated in, and
@@ -262,10 +268,10 @@ func (a *attempt) cancel(ctl *workerapi.Control) {
 	}
 }
 
-// timeOut records that the job is past a deadline, its own timeout: or
-// its run's, which says, for the worker's log: a step it stops is sent
-// SIGKILL at kill, or at an earlier time an earlier deadline gave. A
-// later deadline that gives less time makes SIGKILL sooner.
+// timeOut records that the job is past a deadline, its own timeout:, the
+// worker's or its run's, which says, for the worker's log: a step it
+// stops is sent SIGKILL at kill, or at an earlier time an earlier deadline
+// gave. A later deadline that gives less time makes SIGKILL sooner.
 func (a *attempt) timeOut(kill time.Time, says string) {
 	a.stopMu.Lock()
 	defer a.stopMu.Unlock()
