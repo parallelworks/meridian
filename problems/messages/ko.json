@@ -298,6 +298,7 @@
   "key_file_missing": "키 파일 {path}이(가) 없어서, 그것이 감싼 데이터 키를 풀 수 없습니다.",
   "key_unwrap_failed": "실행 {run}의 데이터 키를 키 파일 {path}로 풀 수 없습니다. 다른 키로 또는 다른 실행을 위해 감쌌거나, 바뀌었습니다.",
   "key_wrapping_unknown": "실행 {run}의 데이터 키는 이 버전의 Meridian이 모르는 방식으로 감싸져 있습니다.",
+  "coordinator_key_invalid": "코디네이터의 키 파일 {path}에 PKCS #8 PEM 형식의 ECDSA P-256 개인 키가 들어 있지 않습니다.",
   "git_unavailable": "Meridian이 git을 실행할 수 없습니다: {reason}",
   "command_missing": "meridian validate workflow.yaml처럼 명령을 지정하세요.",
   "command_unknown": "‘{command}’ 명령은 없습니다.{suggested, select, true { ‘{suggestion}’을(를) 의도하셨나요?} other {}}",

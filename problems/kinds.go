@@ -799,14 +799,15 @@ var (
 	WorkflowMappingInvalid    = defineCommand("workflow_mapping_invalid", "Mapping to something other than a workflow in Git", "key", "what")
 )
 
-// The key that wraps runs' data keys, and git, which reads the workflows
-// uses: names.
+// The key that wraps runs' data keys, the coordinator's TLS key, and git,
+// which reads the workflows uses: names.
 var (
-	KeyFileInvalid     = defineCommand("key_file_invalid", "Key file that isn't a key", "path", "size")
-	KeyFileMissing     = defineCommand("key_file_missing", "Key file that isn't there", "path")
-	KeyUnwrapFailed    = defineCommand("key_unwrap_failed", "Data key that can't be unwrapped", "run", "path")
-	KeyWrappingUnknown = defineCommand("key_wrapping_unknown", "Data key wrapped an unknown way", "run")
-	GitUnavailable     = defineCommand("git_unavailable", "git can't be run", "reason")
+	KeyFileInvalid        = defineCommand("key_file_invalid", "Key file that isn't a key", "path", "size")
+	KeyFileMissing        = defineCommand("key_file_missing", "Key file that isn't there", "path")
+	KeyUnwrapFailed       = defineCommand("key_unwrap_failed", "Data key that can't be unwrapped", "run", "path")
+	KeyWrappingUnknown    = defineCommand("key_wrapping_unknown", "Data key wrapped an unknown way", "run")
+	CoordinatorKeyInvalid = defineCommand("coordinator_key_invalid", "Coordinator's key file that isn't its key", "path")
+	GitUnavailable        = defineCommand("git_unavailable", "git can't be run", "reason")
 )
 
 // What no meridian command, the worker above all, runs without: mode is

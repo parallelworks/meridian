@@ -2,9 +2,11 @@ package coordinator
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"strconv"
 	"sync"
@@ -352,8 +354,36 @@ func (c *Coordinator) forward(ctx context.Context, fw backend.Forwarder, m *back
 			return backend.Endpoint{}, placed, err
 		}
 	}
-	e, err := fw.Endpoint(ctx, m)
+	e, err := c.memberEndpoint(ctx, fw, m)
 	return e, placed, err
+}
+
+// memberEndpoint returns where m's workers reach the coordinator, as fw
+// says, with the hash of the coordinator's TLS key where they reach it
+// over TLS (backend.Endpoint.TLS), which every replica that shares the
+// key serves.
+func (c *Coordinator) memberEndpoint(ctx context.Context, fw backend.Forwarder, m *backend.Member) (backend.Endpoint, error) {
+	e, err := fw.Endpoint(ctx, m)
+	if err != nil || !e.TLS() {
+		return e, err
+	}
+	e.KeyHash = c.tls.keyHash
+	return e, nil
+}
+
+// listenMember forwards m's listener, as fw does, and returns it with the
+// certificate to serve TLS on it with, where m's workers reach the
+// coordinator over TLS, or nil.
+func (c *Coordinator) listenMember(ctx context.Context, fw backend.Forwarder, m *backend.Member) (net.Listener, *tls.Certificate, error) {
+	e, err := c.memberEndpoint(ctx, fw, m)
+	if err != nil {
+		return nil, nil, err
+	}
+	l, err := fw.Forward(ctx, m)
+	if err != nil || !e.TLS() {
+		return l, nil, err
+	}
+	return l, c.tls.cert, nil
 }
 
 // hold returns the holder of the listener of m, whose key is key, which it
@@ -409,8 +439,9 @@ func (c *Coordinator) hold(fw backend.Forwarder, m *backend.Member, key string, 
 // serveMember holds m's listener, whose key is key, as h, until ctx, h's,
 // is done, as when ServeMembers stops or h is let go: once it holds m's
 // lease, which it says it waits for where another process holds it, it
-// forwards m's listener, and serves the worker API on it, and forwards it
-// again whenever it fails, or ends. As it returns, the listener is closed
+// forwards m's listener, and serves the worker API on it, over TLS where
+// m's workers reach the coordinator over TLS (listenMember), and forwards
+// it again whenever it fails, or ends. As it returns, the listener is closed
 // and the lease released. Where idle is set, as for a member this process
 // let go of as idle, it takes the lease as idle (store.HoldIdleEndpoint).
 func (c *Coordinator) serveMember(ctx context.Context, f *forwarding, h *holder, fw backend.Forwarder, m *backend.Member, key string, idle bool) {
@@ -432,7 +463,7 @@ func (c *Coordinator) serveMember(ctx context.Context, f *forwarding, h *holder,
 	defer func() { _ = lease.Release(context.WithoutCancel(ctx)) }()
 	wait := forwardFirst
 	for ctx.Err() == nil {
-		l, err := fw.Forward(ctx, m)
+		l, cert, err := c.listenMember(ctx, fw, m)
 		if err != nil {
 			h.report(err)
 			if ctx.Err() == nil {
@@ -441,7 +472,7 @@ func (c *Coordinator) serveMember(ctx context.Context, f *forwarding, h *holder,
 		} else {
 			h.report(nil)
 			began := time.Now()
-			if err := f.srv.ServeMember(ctx, l, key); err != nil && ctx.Err() == nil {
+			if err := f.srv.ServeMember(ctx, l, key, cert); err != nil && ctx.Err() == nil {
 				c.log.InfoContext(ctx, "coordinator: a member's listener ended, and is forwarded again", "member", key)
 			}
 			_ = l.Close()
