@@ -97,7 +97,8 @@ type client struct {
 }
 
 // newClient returns a client for the coordinator at ep: over a Unix socket,
-// or over TLS 1.3 to a coordinator whose public key has ep's hash.
+// or over TLS 1.3 to a coordinator whose public key has ep's hash, at ep's
+// address, or at the addresses its address file names.
 func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 	c := &client{timing: tm, log: log, peer: checkPeer}
 	t := &http.Transport{
@@ -105,7 +106,13 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 		IdleConnTimeout:     90 * time.Second,
 	}
 	base := "https://" + ep.address
-	if ep.socket() {
+	// Over TLS, the worker speaks HTTP/1.1, as a Transport with a TLS
+	// config or a TLS dialer of its own does, rather than HTTP/2, which
+	// would send every request down one connection, to one replica: after
+	// a replica's 503, the worker drops its connections, and the next may
+	// reach another.
+	switch {
+	case ep.socket():
 		base = "http://meridian"
 		t.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
@@ -117,29 +124,41 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 			// this user's, or root's.
 			if err := c.peer(conn.(*net.UnixConn), ep.address); err != nil {
 				conn.Close()
-				return nil, &peerError{err}
+				return nil, &refusedError{err}
 			}
 			return conn, nil
 		}
-	} else {
-		// HTTP/1.1, which a Transport with a TLS config of its own
-		// speaks, rather than HTTP/2, which would send every request down
-		// one connection, to one replica: after a replica's 503, the
-		// worker drops its connections, and the next may reach another.
-		t.TLSClientConfig = &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			// The coordinator is known by its key's hash, not by a
-			// certificate authority: VerifyConnection checks the key, and
-			// TLS checks that the coordinator holds it.
-			InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the coordinator's public key
-			VerifyConnection:   pinned(ep.address, ep.keyHash),
+	case ep.file != "":
+		// Where the coordinator is the file says, as it is before each
+		// connection: the host the URL names is never dialed.
+		base = "https://meridian"
+		f := &addressFile{path: ep.file, every: tm.reread, log: log}
+		t.DialTLSContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return c.dialFile(ctx, f, ep.keyHash)
 		}
+	default:
+		t.TLSClientConfig = tlsConfig(ep.address, ep.keyHash)
 	}
 	// A redirect is refused: the worker talks only to the coordinator it
 	// was given.
 	refuse := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	c.base, c.http, c.transport = base, &http.Client{Transport: t, CheckRedirect: refuse}, t
 	return c
+}
+
+// tlsConfig is how the worker speaks TLS to the coordinator at address,
+// whose public key's hash is hash: TLS 1.3, its key exchanges, and the key
+// pinned.
+func tlsConfig(address string, hash []byte) *tls.Config {
+	return &tls.Config{
+		MinVersion:       tls.VersionTLS13,
+		CurvePreferences: workerapi.TLSGroups,
+		// The coordinator is known by its key's hash, not by a
+		// certificate authority: VerifyConnection checks the key, and
+		// TLS checks that the coordinator holds it.
+		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the coordinator's public key
+		VerifyConnection:   pinned(address, hash),
+	}
 }
 
 // pinned returns a check that a TLS connection's peer holds the public key
@@ -162,12 +181,13 @@ func pinned(address string, hash []byte) func(tls.ConnectionState) error {
 	}
 }
 
-// A peerError is a Unix socket served by another user. The worker never
-// talks to it, and doesn't try again.
-type peerError struct{ err error }
+// A refusedError is a coordinator the worker won't talk to, and doesn't
+// try again: a Unix socket served by another user, or an address file
+// that other users could have written, or that isn't one.
+type refusedError struct{ err error }
 
-func (e *peerError) Error() string { return e.err.Error() }
-func (e *peerError) Unwrap() error { return e.err }
+func (e *refusedError) Error() string { return e.err.Error() }
+func (e *refusedError) Unwrap() error { return e.err }
 
 func (c *client) close() { c.transport.CloseIdleConnections() }
 
@@ -261,8 +281,8 @@ func (c *client) send(ctx context.Context, cl call, out any) error {
 		if p := problemOf(err, problems.CoordinatorKeyMismatch); p != nil {
 			return p
 		}
-		if peer, ok := errors.AsType[*peerError](err); ok {
-			return peer
+		if refused, ok := errors.AsType[*refusedError](err); ok {
+			return refused
 		}
 		return &temporaryError{err}
 	}
@@ -719,6 +739,11 @@ type timing struct {
 	// an upload of a log that sent all the log had to the start of the
 	// next (spool.pace).
 	logPace time.Duration
+	// reread is how often, at most, the worker reads the coordinator's
+	// address file again, and dialEach how long it gives each address,
+	// TLS's handshake included, as long as a relay waits for its
+	// ClientHello.
+	reread, dialEach time.Duration
 }
 
 var defaultTiming = timing{
@@ -729,6 +754,8 @@ var defaultTiming = timing{
 	flush:        10 * time.Second,
 	firstControl: 5 * time.Second,
 	logPace:      100 * time.Millisecond,
+	reread:       time.Second,
+	dialEach:     10 * time.Second,
 }
 
 // backoff returns how long to wait before trying a request again after

@@ -163,6 +163,7 @@
 package workerapi
 
 import (
+	"crypto/tls"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"reflect"
@@ -420,20 +421,33 @@ const (
 )
 
 // The environment variables a backend starts meridian worker with, which
-// say how it reaches the coordinator and what it claims. The bootstrap
-// token is in one of them, or in a file one names, and never on the
-// command line, where other users could read it. The worker removes them
-// all from the environment its steps get.
+// say how it reaches the coordinator, what it claims, and by when it
+// stops. The bootstrap token is in one of them, or in a file one names,
+// and never on the command line, where other users could read it. The
+// worker removes them all from the environment its steps get.
 const (
 	// EnvCoordinator is the coordinator's address: a Unix socket's path,
 	// which starts with /, or a host and port, as in login1:7443, for TLS
-	// 1.3 (backend.Endpoint).
+	// 1.3 (backend.Endpoint, ValidAddress).
 	EnvCoordinator = "MERIDIAN_COORDINATOR"
+	// EnvCoordinatorFile, set in place of EnvCoordinator, is the absolute
+	// path of an address file (AddressFile), which names where the worker
+	// reaches the coordinator over TLS 1.3. The worker reads it again
+	// before each connection it makes, so that the coordinator can move,
+	// as a relay that starts again elsewhere does.
+	EnvCoordinatorFile = "MERIDIAN_COORDINATOR_FILE"
 	// EnvKeySHA256 is sha256: and the hex of the SHA-256 digest of the
 	// coordinator's TLS public key, as DER SubjectPublicKeyInfo, which the
 	// worker checks the TLS connection against. It is unset for a Unix
 	// socket.
 	EnvKeySHA256 = "MERIDIAN_COORDINATOR_KEY_SHA256"
+	// EnvDeadline, if it is set, is when, in Unix seconds, the worker stops
+	// the job as at its own timeout, if that hasn't come first: half the
+	// member's margin before the job's allocation ends, as meridian batch
+	// gives it, which leaves the rest for its cleanups and its reports. A
+	// worker whose deadline passes before the job's first step starts
+	// runs none of the job, and doesn't claim the attempt if it hasn't.
+	EnvDeadline = "MERIDIAN_DEADLINE"
 	// EnvBootstrapToken is the attempt's bootstrap token;
 	// EnvBootstrapTokenFile the path of a file only the user can read that
 	// holds it, which the worker deletes once it has read it; and
@@ -447,6 +461,16 @@ const (
 	EnvBootstrapTokenFile = "MERIDIAN_BOOTSTRAP_TOKEN_FILE"
 	EnvBootstrapTokenFD   = "MERIDIAN_BOOTSTRAP_TOKEN_FD"
 )
+
+// TLSGroups are the key exchanges of a worker's TLS 1.3 connection to its
+// coordinator, in the order the worker offers them: ML-KEM with ECDH on
+// P-256 or on P-384, then ECDH on either alone, each of which FIPS 140-3
+// approves. The coordinator's listener takes these and no other, so a
+// worker that offered crypto/tls's own first choice, X25519's hybrid with
+// ML-KEM, would pay a HelloRetryRequest's round trip on each connection.
+// The coordinator's listener has a copy of its own, which must be the
+// same, until it reads this one.
+var TLSGroups = []tls.CurveID{tls.SecP256r1MLKEM768, tls.SecP384r1MLKEM1024, tls.CurveP256, tls.CurveP384}
 
 // The codes of the API's own problems: each is a kind of package problems,
 // in its registry named worker (problems.WorkerRegistry), whose type URI

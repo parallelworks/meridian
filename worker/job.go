@@ -30,6 +30,9 @@ import (
 func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	a.maskSecrets()
 	problem := a.setUp()
+	if a.setUpEnded != nil {
+		a.setUpEnded(a)
+	}
 	if a.halted.fired() {
 		return nil
 	}
@@ -42,6 +45,15 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		})
 		defer t.Stop()
 	}
+	if !a.deadline.IsZero() {
+		// Whichever comes first, the deadline or the job's own timeout,
+		// stops the job, and the time left before its allocation ends is
+		// its cleanups' and its reports'.
+		t := time.AfterFunc(time.Until(a.deadline), func() {
+			a.timeOut(time.Now().Add(a.tm.grace), "the job ran to the worker's deadline, before its allocation ends")
+		})
+		defer t.Stop()
+	}
 	jobDiags, end, done := a.evaluateJobEnv(ctx)
 	if done {
 		return end
@@ -49,6 +61,12 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 	// What the coordinator asked before the claim applies from the first
 	// step: a cancel, the run's timeout, or a job of the run failing.
 	a.awaitFirstControl()
+	if a.deadlineFirst() {
+		// None of the job's code has run, and none would have time to:
+		// the attempt fails before its first step, which places the job
+		// again, as it does for a worker that couldn't claim it by then.
+		return &workerapi.Complete{Result: plan.JobResult{Outcome: plan.OutcomeFailure}, Reason: plan.ReasonSetupFailed, Problem: deadlinePassed(a.deadline)}
+	}
 	if a.claim.StepRun != nil {
 		// A step run's job runs its one step, and nothing else.
 		return a.runAsStepRun(ctx, jobDiags)
@@ -65,6 +83,28 @@ func (a *attempt) execute(ctx context.Context) *workerapi.Complete {
 		return nil
 	}
 	return a.endJob(ctx, r, jobDiags)
+}
+
+// deadlineFirst reports whether the worker's deadline has passed before
+// anything else stopped the job: its own timeout:, the run's, a cancel,
+// or the attempt ending without the worker.
+func (a *attempt) deadlineFirst() bool {
+	if a.deadline.IsZero() || time.Now().Before(a.deadline) {
+		return false
+	}
+	if t := a.job.TimeoutSeconds; t > 0 && !a.claimed.Add(seconds(t)).After(a.deadline) {
+		return false
+	}
+	a.stopMu.Lock()
+	defer a.stopMu.Unlock()
+	switch {
+	case a.halted.fired(), a.cancelled.fired():
+		return false
+	case a.timedOut.fired():
+		// By the deadline's own timer, or by the run's timeout after it.
+		return !a.timedOut.at.Before(a.deadline)
+	}
+	return true
 }
 
 // maskSecrets masks the run's secrets from now on (addMasked), and the

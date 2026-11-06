@@ -12,10 +12,12 @@ import (
 
 // runWorker is meridian worker, which a backend starts to run one attempt
 // of a job (worker.Run). It takes no arguments: where the coordinator is,
-// and the attempt's bootstrap token, come from its environment, as
-// workerapi.EnvCoordinator, EnvKeySHA256, and EnvBootstrapToken or
-// EnvBootstrapTokenFile, never from its command line, where other users
-// could read the token. It logs what it does as JSON on standard error.
+// the attempt's bootstrap token, and its deadline, if it has one, come
+// from its environment, as workerapi.EnvCoordinator or
+// EnvCoordinatorFile, EnvKeySHA256, EnvBootstrapToken or
+// EnvBootstrapTokenFile, and EnvDeadline, never from its command line,
+// where other users could read the token. It logs what it does as JSON on
+// standard error.
 func runWorker(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int {
 	positional, err := parseFlags(fs, args)
 	if err != nil {

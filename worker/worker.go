@@ -8,13 +8,15 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/url"
 	"os"
 	ossignal "os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/internal/fipsmode"
 	"github.com/parallelworks/meridian/internal/safepath"
@@ -33,8 +35,9 @@ type Config struct {
 	// executable, when it is "".
 	Worker workerapi.Worker
 	// Environ is the worker's environment, as os.Environ gives it, or nil
-	// for os.Environ(). It holds the coordinator's address, its key's hash
-	// and the bootstrap token, or the file that holds it
+	// for os.Environ(). It holds the coordinator's address, or the file
+	// that names where it is, its key's hash, the bootstrap token, or the
+	// file that holds it, and the worker's deadline, if it has one
 	// (workerapi.EnvCoordinator and the rest), and the job's steps get the
 	// rest of it.
 	Environ []string
@@ -68,6 +71,9 @@ type Config struct {
 	// stepEnded, if it is set, is called as each step, or cleanup, has
 	// ended, with the attempt: a test's seam.
 	stepEnded func(a *attempt, step int, cleanup bool)
+	// setUpEnded, if it is set, is called once the job is set up, before
+	// its env: is evaluated, with the attempt: a test's seam.
+	setUpEnded func(a *attempt)
 }
 
 // DefaultSpoolLimit is how many bytes of logs a worker keeps on disk for
@@ -85,7 +91,9 @@ const memorySpoolLimit = 64 << 20
 //
 // It returns nil once the coordinator has stored the attempt's end,
 // whatever the job's outcome. It returns an error when it couldn't claim
-// the attempt; when the attempt ended without it, because another attempt
+// the attempt, as by its deadline, if its environment gives one
+// (workerapi.EnvDeadline), which it stops the job at as at the job's own
+// timeout; when the attempt ended without it, because another attempt
 // superseded it, the coordinator no longer accepts its credential, or, for
 // a job that fences itself, its lease was about to lapse, once it has sent
 // what it had until the lease lapsed; and when ctx is done before the
@@ -153,34 +161,56 @@ func run(ctx context.Context, cfg Config, tm timing, protect func() error) error
 	c := newClient(ep, tm, log)
 	defer c.close()
 	credential := newCredential()
-	claim, claimed, err := c.claim(ctx, ep.token, workerapi.ClaimRequest{Credential: credential, APIVersion: workerapi.Version, PlanVersion: plan.Version, Worker: worker})
-	if err != nil {
+	// A job claimed after the worker's deadline would have no time to run:
+	// the worker leaves the attempt to be placed again.
+	claimCtx, stopClaim := ctx, func() {}
+	if !ep.deadline.IsZero() {
+		claimCtx, stopClaim = context.WithDeadline(ctx, ep.deadline)
+	}
+	claim, claimed, err := c.claim(claimCtx, ep.token, workerapi.ClaimRequest{Credential: credential, APIVersion: workerapi.Version, PlanVersion: plan.Version, Worker: worker})
+	late := claimCtx.Err() != nil && ctx.Err() == nil
+	stopClaim()
+	switch {
+	case err != nil && late:
+		return deadlinePassed(ep.deadline)
+	case err != nil:
 		return err
 	}
 	c.credential = credential
 	log.Info("claimed an attempt", "run", claim.RunID, "attempt", claim.AttemptID, "number", claim.Attempt)
 	a := &attempt{
-		claim:   claim,
-		claimed: claimed,
-		client:  c,
-		tm:      tm,
-		log:     log,
-		files:   files,
-		environ: stepsEnv,
-		worker:  worker,
-		events:  newEventQueue(),
-		spool:   newSpool(files, cfg.SpoolLimit),
+		claim:    claim,
+		claimed:  claimed,
+		deadline: ep.deadline,
+		client:   c,
+		tm:       tm,
+		log:      log,
+		files:    files,
+		environ:  stepsEnv,
+		worker:   worker,
+		events:   newEventQueue(),
+		spool:    newSpool(files, cfg.SpoolLimit),
 
-		stepEnded: cfg.stepEnded,
+		stepEnded:  cfg.stepEnded,
+		setUpEnded: cfg.setUpEnded,
 	}
 	return a.run(ctx)
 }
 
-// An endpoint is how a worker reaches its coordinator, and the bootstrap
-// token it claims its attempt with.
+// deadlinePassed is the problem of a worker whose deadline passed before
+// its job's first step started.
+func deadlinePassed(deadline time.Time) *problem.Problem {
+	return problems.WorkerDeadlinePassed.Problem(problems.Params{"deadline": deadline.UTC().Format(time.RFC3339)})
+}
+
+// An endpoint is how a worker reaches its coordinator, the bootstrap
+// token it claims its attempt with, and by when it stops its job.
 type endpoint struct {
-	// address is a Unix socket's path, or a host and port for TLS 1.3.
+	// address is a Unix socket's path, or a host and port for TLS 1.3; or
+	// file, in its place, the path of the address file that names where
+	// the coordinator is, over TLS 1.3 (workerapi.AddressFile).
 	address string
+	file    string
 	// keyHash is the SHA-256 digest of the coordinator's TLS public key,
 	// for TLS.
 	keyHash []byte
@@ -188,6 +218,9 @@ type endpoint struct {
 	// keptTokenFile is why the worker couldn't remove the token's file,
 	// if it couldn't.
 	keptTokenFile error
+	// deadline, unless it is the zero time, is when the worker stops the
+	// job as at its timeout, and gives up claiming it.
+	deadline time.Time
 }
 
 func (e endpoint) socket() bool { return strings.HasPrefix(e.address, "/") }
@@ -211,27 +244,30 @@ func inheritNothing() {
 	}
 }
 
-// readEnv reads how to reach the coordinator, and the bootstrap token, from
-// environ, and returns the rest of it, which the job's steps get. It reads
-// the token from the file EnvBootstrapTokenFile names, if it does, and
-// removes the file; it refuses one that other users can read. It reads it
-// from the socket EnvBootstrapTokenFD numbers, if it does, once it has
-// said on it that it is ready (readTokenSocket). Where the user's other
-// processes can read the worker's environment, as readable says
-// (environReadable), it refuses a token in EnvBootstrapToken.
+// readEnv reads how to reach the coordinator, the bootstrap token and the
+// worker's deadline from environ, and returns the rest of it, which the
+// job's steps get. It reads the token from the file EnvBootstrapTokenFile
+// names, if it does, and removes the file; it refuses one that other
+// users can read. It reads it from the socket EnvBootstrapTokenFD
+// numbers, if it does, once it has said on it that it is ready
+// (readTokenSocket). Where the user's other processes can read the
+// worker's environment, as readable says (environReadable), it refuses a
+// token in EnvBootstrapToken. It reads the address file
+// EnvCoordinatorFile names only as it connects (addressFile).
 func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 	vars := map[string]string{}
 	var rest []string
 	for _, kv := range environ {
 		name, value, _ := strings.Cut(kv, "=")
 		switch name {
-		case workerapi.EnvCoordinator, workerapi.EnvKeySHA256, workerapi.EnvBootstrapToken, workerapi.EnvBootstrapTokenFile, workerapi.EnvBootstrapTokenFD:
+		case workerapi.EnvCoordinator, workerapi.EnvCoordinatorFile, workerapi.EnvKeySHA256, workerapi.EnvDeadline,
+			workerapi.EnvBootstrapToken, workerapi.EnvBootstrapTokenFile, workerapi.EnvBootstrapTokenFD:
 			vars[name] = value
 		default:
 			rest = append(rest, kv)
 		}
 	}
-	ep := endpoint{address: vars[workerapi.EnvCoordinator]}
+	ep := endpoint{address: vars[workerapi.EnvCoordinator], file: vars[workerapi.EnvCoordinatorFile]}
 	key := vars[workerapi.EnvKeySHA256]
 	missing := func(variable string) error {
 		return problems.WorkerEnvironmentMissing.Problem(problems.Params{"variable": variable})
@@ -240,12 +276,16 @@ func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 		return problems.WorkerEnvironmentInvalid.Problem(problems.Params{"variable": variable})
 	}
 	switch {
-	case ep.address == "":
+	case ep.address != "" && ep.file != "":
+		return ep, nil, invalid(workerapi.EnvCoordinatorFile)
+	case ep.file != "" && !filepath.IsAbs(ep.file):
+		return ep, nil, invalid(workerapi.EnvCoordinatorFile)
+	case ep.address == "" && ep.file == "":
 		return ep, nil, missing(workerapi.EnvCoordinator)
 	case ep.socket() && key != "":
 		// A Unix socket needs no key: one set means the backend meant TLS.
 		return ep, nil, invalid(workerapi.EnvKeySHA256)
-	case !ep.socket() && !hostPort(ep.address):
+	case ep.file == "" && !ep.socket() && !workerapi.ValidAddress(ep.address):
 		return ep, nil, invalid(workerapi.EnvCoordinator)
 	case !ep.socket():
 		hexKey, ok := strings.CutPrefix(key, "sha256:")
@@ -254,6 +294,13 @@ func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 			return ep, nil, invalid(workerapi.EnvKeySHA256)
 		}
 		ep.keyHash = hash
+	}
+	if d := vars[workerapi.EnvDeadline]; d != "" {
+		unix, err := strconv.ParseInt(d, 10, 64)
+		if err != nil || unix <= 0 {
+			return ep, nil, invalid(workerapi.EnvDeadline)
+		}
+		ep.deadline = time.Unix(unix, 0)
 	}
 	token, file, fd := vars[workerapi.EnvBootstrapToken], vars[workerapi.EnvBootstrapTokenFile], vars[workerapi.EnvBootstrapTokenFD]
 	switch {
@@ -286,13 +333,6 @@ func readEnv(environ []string, readable bool) (endpoint, []string, error) {
 // maxTokenFile is the most bytes the worker reads of a bootstrap token's
 // file.
 const maxTokenFile = 4096
-
-// hostPort reports whether address is a host and port, or a host, that a
-// URL can hold as it is, as the coordinator's address over TLS must be.
-func hostPort(address string) bool {
-	u, err := url.Parse("https://" + address)
-	return err == nil && u.Host == address && u.Path == "" && u.RawQuery == "" && u.Fragment == ""
-}
 
 // readTokenFile reads a bootstrap token from a file of the worker's user
 // that only the user can read, not through a symbolic link, on a path no

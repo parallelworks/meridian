@@ -1303,6 +1303,13 @@
       "检查运行作业的用户能否在作业所放置的主机上创建并写入该目录。"
     ]
   },
+  "worker_deadline_passed": {
+    "title": "在作业第一个步骤之前就已过去的工作进程截止时间",
+    "why": "在有结束时间的分配中运行工作进程的后端，例如批处理调度器的作业，会通过 MERIDIAN_DEADLINE 给它一个比该结束时间稍早的截止时间，工作进程在那时像作业超时一样停止作业。这个截止时间在作业的第一个步骤开始之前就已过去，例如工作进程在领取其尝试之前或之后长时间无法连接协调器，因此工作进程没有启动作业的任何部分：作业将没有时间运行。作业的代码一行也没有运行，因此该尝试在第一个步骤之前失败，Meridian 会再次放置该作业。",
+    "fix": [
+      "检查从作业运行的地方能否连接到协调器，或工作进程借以连接协调器的中继，并检查它在作业等待开始期间一直在运行。"
+    ]
+  },
   "env_name_invalid": {
     "title": "名称不能用作变量名的平台变量",
     "why": "平台会在尝试的领取结果中为作业的步骤提供自己的变量，例如 PW_USER。工作进程会把每个变量设置到步骤的环境中，而在那里名称不能为空，也不能包含 = 或 NUL，因此它会在任何步骤运行之前拒绝该尝试，而不是在缺少该变量的情况下运行步骤。作业会被重新放置；如果其组中有其他成员，则放置到其他成员上。",
@@ -2445,14 +2452,14 @@
   },
   "worker_environment_missing": {
     "title": "启动时缺少领取所需信息的工作进程",
-    "why": "后端在启动 meridian worker 时，把协调器的地址放在 MERIDIAN_COORDINATOR 中，把尝试的引导令牌放在 MERIDIAN_BOOTSTRAP_TOKEN 中，或放在 MERIDIAN_BOOTSTRAP_TOKEN_FILE 所指的文件中，从不放在命令行上。缺少它们，工作进程就无法领取尝试。",
+    "why": "后端在启动 meridian worker 时，把协调器的地址放在 MERIDIAN_COORDINATOR 中，或把指明其位置的地址文件放在 MERIDIAN_COORDINATOR_FILE 中，把尝试的引导令牌放在 MERIDIAN_BOOTSTRAP_TOKEN 中，或放在 MERIDIAN_BOOTSTRAP_TOKEN_FILE 所指的文件中，从不放在命令行上。缺少它们，工作进程就无法领取尝试。",
     "fix": [
       "让后端来启动 meridian worker：它不是由人运行的。"
     ]
   },
   "worker_environment_invalid": {
     "title": "启动时带有无法使用的信息的工作进程",
-    "why": "通过 TLS 连接协调器时，MERIDIAN_COORDINATOR_KEY_SHA256 必须是 sha256: 加 64 位十六进制数字；协调器是 Unix 套接字时则不能设置它；而 MERIDIAN_BOOTSTRAP_TOKEN 和 MERIDIAN_BOOTSTRAP_TOKEN_FILE 只能设置其中一个。",
+    "why": "MERIDIAN_COORDINATOR 和 MERIDIAN_COORDINATOR_FILE 只能设置其中一个，后者必须是绝对路径；通过 TLS 连接协调器时（通过地址文件时总是如此），MERIDIAN_COORDINATOR_KEY_SHA256 必须是 sha256: 加 64 位十六进制数字；协调器是 Unix 套接字时则不能设置它；MERIDIAN_BOOTSTRAP_TOKEN 和 MERIDIAN_BOOTSTRAP_TOKEN_FILE 只能设置其中一个；MERIDIAN_DEADLINE 如果设置，必须是以 Unix 秒表示的时间。",
     "fix": [
       "让后端来启动 meridian worker，后端会正确设置它们。"
     ]
@@ -2483,6 +2490,13 @@
     "why": "工作进程按照工作进程 API 的版本所定义的方式严格读取协调器的应答，而协调器以带有代码的问题拒绝请求。这个应答两者都不是，或者大于拒绝所能有的大小，因此工作进程停止了，而不是猜测协调器的意思。Meridian 发行版本不同的工作进程和协调器，或者不是协调器的服务器，会这样应答。",
     "fix": [
       "启动与协调器相同发行版本的 Meridian 工作进程，并检查工作进程到达的是协调器，而不是其他服务器。"
+    ]
+  },
+  "coordinator_file_invalid": {
+    "title": "工作进程无法读取的协调器地址文件",
+    "why": "通过 MERIDIAN_COORDINATOR_FILE 所指的地址文件连接协调器的工作进程，会在每次建立连接之前重新读取该文件：一个 JSON，包含要尝试的地址、其 TLS 握手所请求的名称，以及文件最后一次写入的时间。这个文件不是这样，因此工作进程停止了，而不是猜测协调器在哪里。由与工作进程不同发行版本的 Meridian，或由 Meridian 以外的东西写入的文件，可能会这样。",
+    "fix": [
+      "启动与协调器相同发行版本的 Meridian 工作进程，并检查没有其他东西写入该文件。"
     ]
   },
   "coordinator_lost_data": {
