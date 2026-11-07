@@ -441,5 +441,11 @@
   "scheduler_job_cannot_start": "El trabajo {id} del planificador nunca podría empezar: esperaba por {reason}, que no cambia por sí solo, así que Meridian lo canceló.",
   "scheduler_job_vanished": "El planificador ya no conoce el trabajo {id}, y ni su contabilidad ni los registros del trabajo dicen cómo terminó.",
   "scheduler_worker_not_started": "El trabajo {id} del planificador terminó sin iniciar el worker de Meridian. La última línea que escribió fue: {said}.",
-  "scheduler_relay_unreachable": "El nodo del trabajo, {node}, no pudo conectarse al relé del coordinador en {addresses} en un minuto, así que se detuvo antes de que empezara su worker."
+  "scheduler_relay_unreachable": "El nodo del trabajo, {node}, no pudo conectarse al relé del coordinador en {addresses} en un minuto, así que se detuvo antes de que empezara su worker.",
+
+  "scheduler_command_missing": "Meridian no encuentra el comando {command} del planificador en {host}, en el PATH con el que se ejecuta.",
+  "scheduler_command_unsafe": "Meridian no ejecuta el comando del planificador {path} en {host}, porque no es seguro ejecutarlo ({code}).",
+  "scheduler_unsupported": "Meridian no puede usar {scheduler} en {host}: {federated, select, true {su clúster es uno de una federación, cuyos trabajos pueden ejecutarse en otro clúster, y Meridian aún no envía trabajos a una} other {{version, select, unknown {no se puede saber su versión} other {es de la versión {version}}}, y Meridian admite {minimum} y posteriores}}.",
+  "scheduler_cluster_variable": "Los comandos de Slurm en {host} están configurados para llegar a {value}, mediante {variable}, y no a {cluster}, el clúster al que llegan por defecto: Meridian solo envía trabajos a ese.",
+  "scheduler_token_required": "El sbatch de Slurm en {host} no puede autenticarse sin SLURM_JWT, y Meridian no le da el token: sbatch lo copiaría al entorno del trabajo, que el planificador guarda."
 }

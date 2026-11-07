@@ -1,0 +1,7 @@
+ii  libmunge2                 0.5.14-6ubuntu0.1                       amd64        authentication service for credential -- library package
+ii  munge                     0.5.14-6ubuntu0.1                       amd64        authentication service to create and validate credentials
+ii  slurm-client              21.08.5-2ubuntu1                        amd64        SLURM client side commands
+ii  slurm-wlm                 21.08.5-2ubuntu1                        amd64        Simple Linux Utility for Resource Management
+ii  slurm-wlm-basic-plugins   21.08.5-2ubuntu1                        amd64        SLURM basic plugins
+ii  slurmctld                 21.08.5-2ubuntu1                        amd64        SLURM central management daemon
+ii  slurmd                    21.08.5-2ubuntu1                        amd64        SLURM compute node daemon

@@ -1,0 +1,8 @@
+01-sbatch-export-all
+    env SLURM_FOO=x sbatch --parsable --export=ALL --output=/tmp/out.%j
+02-sbatch-export-all-slurm-foo-empty
+    env SLURM_FOO=x sbatch --parsable --export=ALL,SLURM_FOO= --output=/tmp/out.%j
+06-sbatch-no-munge
+    sbatch --parsable --export=ALL --output=/tmp/out.%j
+07-squeue-no-munge
+    squeue --noheader --states=all --format=%i

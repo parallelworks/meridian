@@ -734,9 +734,20 @@ var (
 // state what the scheduler says of it. id is a job's ID, as its scheduler
 // gives it; and reason, of the others, and said, what the scheduler, or
 // the job, said, on one line. node is a compute node's name, and
-// addresses where a relay listens, as QuoteAll writes them.
+// addresses where a relay listens, as QuoteAll writes them. host is the
+// login node's name, as it says it; command is one of the scheduler's
+// commands, and path where it is, with code the problem with it;
+// scheduler is slurm or pbs, version its release, or unknown, minimum the
+// oldest Meridian supports, and federated whether its cluster is one of a
+// federation; and variable is an environment variable's name, value what
+// it holds, and cluster the cluster's own name.
 var (
 	MemberSettingInvalid      = define(Error, "member_setting_invalid", "Member's setting its backend can't use", "member", "key", "reason")
+	SchedulerCommandMissing   = define(Error, "scheduler_command_missing", "Scheduler's command not found", "host", "command")
+	SchedulerCommandUnsafe    = define(Error, "scheduler_command_unsafe", "Scheduler's command that isn't safe to run", "host", "path", "code")
+	SchedulerUnsupported      = define(Error, "scheduler_unsupported", "Scheduler Meridian doesn't support", "host", "scheduler", "version", "minimum", "federated")
+	SchedulerClusterVariable  = define(Error, "scheduler_cluster_variable", "Variable that sends Slurm's commands to another cluster", "host", "variable", "value", "cluster")
+	SchedulerTokenRequired    = define(Error, "scheduler_token_required", "Login node where sbatch needs a token", "host")
 	SchedulerPartitionUnknown = define(Error, "scheduler_partition_unknown", "Partition the cluster doesn't have", "member", "partition")
 	SchedulerPartitionDown    = define(Error, "scheduler_partition_down", "Partition that takes no jobs", "member", "partition", "state")
 	SchedulerRejected         = define(Error, "scheduler_rejected", "Job the scheduler refused", "member", "reason")

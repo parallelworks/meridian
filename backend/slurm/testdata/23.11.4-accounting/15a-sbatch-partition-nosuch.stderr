@@ -1,0 +1,2 @@
+sbatch: error: invalid partition specified: nosuch
+sbatch: error: Batch job submission failed: Invalid partition name specified
