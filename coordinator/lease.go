@@ -29,31 +29,165 @@ import (
 //     runs, or is queued, or can't decide, doesn't.
 //   - An attempt whose job fences itself is lost once its lease has lapsed
 //     and the fence margin passed: its worker has stopped the job by then.
+//     Its backend is asked how it ended, each heartbeat period, for a
+//     while (fencedEnd), so that a scheduler's time limit or memory limit
+//     is its reason.
 //
 // After a coordinator takes the endpoint workers reach it through, or its
 // host wakes from sleep, or the store's clock is reset, no lapsed lease
 // counts until the grace has passed, so that workers cut off meanwhile can
 // reach it again.
 func (c *Coordinator) watch(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, error) {
+	wait, _, err := c.watchFenced(ctx, run, job, a)
+	return wait, err
+}
+
+// watchFenced is watch, which also reports whether a is a self-fencing
+// attempt past its lease and the fence margin, whose end its backend's
+// word on its worker decides (fencedEnd).
+func (c *Coordinator) watchFenced(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (time.Duration, bool, error) {
 	now, graceEnds, err := c.leaseClock(ctx)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	switch {
 	case a.State == store.AttemptPlacing:
-		return c.checkWorker(ctx, run, job, a, now)
+		wait, err := c.checkWorker(ctx, run, job, a, now)
+		return wait, false, err
 	case a.SelfFencing:
 		lost := latest(a.LeaseLapses().Add(c.timing.FenceMargin), graceEnds)
 		if now.Before(lost) {
-			return c.waitFor(lost.Sub(now)), nil
+			return c.waitFor(lost.Sub(now)), false, nil
 		}
-		return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, nil)
+		wait, err := c.fencedEnd(ctx, run, job, a, now, lost)
+		return wait, true, err
 	}
 	lapse := latest(a.LeaseLapses(), graceEnds)
 	if now.Before(lapse) {
-		return c.waitFor(lapse.Sub(now)), nil
+		return c.waitFor(lapse.Sub(now)), false, nil
 	}
-	return c.checkWorker(ctx, run, job, a, now)
+	wait, err := c.checkWorker(ctx, run, job, a, now)
+	return wait, false, err
+}
+
+// fencedEnd asks the backend of the attempt a, whose job fences itself,
+// and whose lease and the fence margin passed at lost, how its worker
+// ended, now by the store's clock, each call bounded (boundedCheck); and
+// loses the attempt as a Dead status says, with its scheduler's end at its
+// time limit or for its memory, or its problem, so that a retry: that
+// lists worker-lost doesn't run a job its scheduler timed out again, or
+// else with worker-lost. Any other answer, an error or none in time, it
+// asks again a heartbeat period later, for as long as the backend can take
+// to see how a worker ended (endWait), as a scheduler's whose snapshot of
+// its queue, or the records it waits for, don't show the job's end yet:
+// then it loses the attempt with worker-lost, and the problem the last
+// check gave as its error, if it gave one, as checkWorker does once
+// CheckGrace has passed. A backend that needs no while, as one whose
+// workers are processes, decides at the first check. Waiting is safe: the
+// worker has stopped the job, and the store refuses what it reports. A
+// member its group no longer has can't be asked, and is worker-lost at
+// once; one that can't be told now, as while Groups doesn't answer, is
+// asked again only while its place's driver's endWait lasts.
+func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, now, lost time.Time) (time.Duration, error) {
+	cand, p, err := c.placedMember(ctx, run, job, a)
+	switch {
+	case errors.Is(err, errMemberGone):
+		return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, nil)
+	case err != nil && !errors.Is(err, errUncheckable):
+		return 0, err
+	}
+	st := backend.Status{State: backend.Unknown}
+	if err == nil {
+		st, err = c.boundedCheck(ctx, a.ID, cand, p)
+	}
+	if ctx.Err() != nil {
+		// Stopped as it asked, as a coordinator that shuts down is.
+		return 0, ctx.Err()
+	}
+	if err == nil && st.State == backend.Dead {
+		return 0, c.lose(ctx, a, st, st.Problem)
+	}
+	if giveUp := lost.Add(c.endWait(cand.driver)); now.Before(giveUp) {
+		return c.waitFor(min(c.timing.Heartbeat, giveUp.Sub(now))), nil
+	}
+	if a.Private {
+		c.log.InfoContext(ctx, "coordinator: a self-fencing attempt's backend didn't say how its worker ended, which is lost", "attempt", a.ID)
+	} else {
+		c.log.InfoContext(ctx, "coordinator: a self-fencing attempt's backend didn't say how its worker ended, which is lost", "attempt", a.ID, "error", err)
+	}
+	why, _ := errors.AsType[*problem.Problem](err)
+	return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, why)
+}
+
+// endWait is how long past its lease and the fence margin a self-fencing
+// attempt whose worker's driver is d is asked how its worker ended: the
+// time d says a check can take to see it (backend.EndWaiter), and a
+// check's own bound and a heartbeat period more, since that time counts
+// from a check, which can be the second; or none, for a driver that
+// doesn't say.
+func (c *Coordinator) endWait(d backend.Driver) time.Duration {
+	w, ok := d.(backend.EndWaiter)
+	if !ok || w.EndWait() == 0 {
+		return 0
+	}
+	return w.EndWait() + c.fenceCheck + c.timing.Heartbeat
+}
+
+// A fenceCheck is a check of a self-fencing attempt's backend in flight
+// (boundedCheck): done is closed once it has answered, st and err.
+type fenceCheck struct {
+	done chan struct{}
+	st   backend.Status
+	err  error
+}
+
+// boundedCheck asks cand's driver what has become of the placement p of
+// the attempt id, for at most fenceCheck, whether or not the driver
+// honours its context, as one that reads a network filesystem may not. A
+// check that hasn't answered by then gives Unknown, with the context's
+// error; it goes on, the attempt's one check in flight, whose answer the
+// next look takes, rather than start another against a driver that is
+// stuck. It keeps maxMembers checks at most, as placedMember does members.
+func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candidate, p backend.Placement) (backend.Status, error) {
+	c.mu.Lock()
+	fc := c.fenceChecks[id]
+	if fc == nil {
+		if len(c.fenceChecks) >= maxMembers {
+			clear(c.fenceChecks)
+		}
+		fc = &fenceCheck{done: make(chan struct{})}
+		c.fenceChecks[id] = fc
+		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.fenceCheck)
+		go func() {
+			defer cancel()
+			fc.st, fc.err = cand.driver.Check(checkCtx, cand.member, p)
+			close(fc.done)
+		}()
+	}
+	c.mu.Unlock()
+	timer := time.NewTimer(c.fenceCheck)
+	defer timer.Stop()
+	select {
+	case <-fc.done:
+		c.mu.Lock()
+		if c.fenceChecks[id] == fc {
+			delete(c.fenceChecks, id)
+		}
+		c.mu.Unlock()
+		return fc.st, fc.err
+	case <-timer.C:
+		return backend.Status{State: backend.Unknown}, context.DeadlineExceeded
+	case <-ctx.Done():
+		return backend.Status{State: backend.Unknown}, ctx.Err()
+	}
+}
+
+// dropCheck lets go of the attempt id's check in flight (boundedCheck), as
+// of an attempt that has ended, whose answer nothing will take.
+func (c *Coordinator) dropCheck(id string) {
+	c.mu.Lock()
+	delete(c.fenceChecks, id)
+	c.mu.Unlock()
 }
 
 // leaseClock returns the store's clock, and when the grace in which no
@@ -198,7 +332,8 @@ const (
 // it, which a private attempt's place holds sealed (placedOn);
 // errMemberGone when its group, or the group, no longer has the member;
 // or errUncheckable when it can't be told now, as when Groups can't
-// answer. What it finds, but the last, it keeps for a while (memberFor).
+// answer, with a candidate that has only the driver of the place's
+// backend. What it finds, but the last, it keeps for a while (memberFor).
 func (c *Coordinator) placedMember(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt) (*candidate, backend.Placement, error) {
 	c.mu.Lock()
 	e, ok := c.members[a.ID]
@@ -208,7 +343,8 @@ func (c *Coordinator) placedMember(ctx context.Context, run *store.Run, job *sto
 	}
 	cand, at, _, err := c.placedOn(ctx, run, job, a)
 	if groups, ok := errors.AsType[*groupsError](err); ok {
-		return nil, backend.Placement{}, fmt.Errorf("%w: %w", errUncheckable, groups.err)
+		d := c.driver(&backend.Member{Backend: at.Backend})
+		return &candidate{driver: d}, backend.Placement{}, fmt.Errorf("%w: %w", errUncheckable, groups.err)
 	}
 	p := backend.Placement{Attempt: a.ID, ID: a.Placement.ID, WorkerDigest: a.Placement.WorkerDigest}
 	if a.Private {
@@ -237,8 +373,10 @@ func (c *Coordinator) placedMember(ctx context.Context, run *store.Run, job *sto
 // otherwise with worker-lost, with why, its problem, if it has one. The
 // attempt must still be as a was, not claimed nor renewed meanwhile, as a
 // worker that reached the coordinator again would have it, or nothing is
-// ended. Either way, the supervisor looks again.
+// ended. Either way, the supervisor looks again, and the attempt's check
+// in flight, if any, is let go (dropCheck).
 func (c *Coordinator) lose(ctx context.Context, a *store.Attempt, st backend.Status, why *problem.Problem) error {
+	c.dropCheck(a.ID)
 	reason, killed := killedFor(st.End)
 	end := store.AttemptEnd{Kind: store.EndLost, Reason: plan.ReasonWorkerLost, Problem: why}
 	switch {

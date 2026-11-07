@@ -59,6 +59,15 @@ type leaseDriver struct {
 	checks int
 	// asked are the placements Check was asked about.
 	asked []backend.Placement
+	// hold, if it is set, holds each Check until its context is done, as a
+	// scheduler that doesn't answer does; and stuck, if it isn't nil,
+	// until it is closed, whatever its context, as a driver that reads a
+	// network filesystem that hangs can.
+	hold  bool
+	stuck chan struct{}
+	// endWait is what EndWait says: how long a check can take to see how
+	// a worker ended, 0 for a backend that sees it at once.
+	endWait time.Duration
 	// silent says, for each attempt by its number, whether its worker
 	// claims it and goes silent, and started whether it then starts a
 	// step; an attempt beyond them completes with success, or with failure
@@ -70,12 +79,28 @@ type leaseDriver struct {
 	credentials map[string]string
 }
 
-func (d *leaseDriver) Check(_ context.Context, _ *backend.Member, p backend.Placement) (backend.Status, error) {
+func (d *leaseDriver) Check(ctx context.Context, _ *backend.Member, p backend.Placement) (backend.Status, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	d.checks++
 	d.asked = append(d.asked, p)
-	return d.status, d.err
+	st, err, hold, stuck := d.status, d.err, d.hold, d.stuck
+	d.mu.Unlock()
+	switch {
+	case stuck != nil:
+		<-stuck
+		return backend.Status{State: backend.Unknown}, errors.New("stuck")
+	case hold:
+		<-ctx.Done()
+		return backend.Status{State: backend.Unknown}, ctx.Err()
+	}
+	return st, err
+}
+
+// EndWait is the driver's endWait.
+func (d *leaseDriver) EndWait() time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.endWait
 }
 
 // checked returns how many times Check was called.
@@ -167,7 +192,10 @@ func openLeaseWith(t *testing.T, opts Options, silent, started []bool) (*Coordin
 	// Its workers, silent or not, run with the test's context, as open
 	// gives a testDriver's.
 	d.ctx = context.WithoutCancel(t.Context())
-	opts.Drivers = map[string]backend.Driver{testBackend: d, "ssh": d}
+	if opts.Drivers == nil {
+		opts.Drivers = map[string]backend.Driver{}
+	}
+	opts.Drivers[testBackend], opts.Drivers["ssh"] = d, d
 	c := open(t, opts)
 	d.c = c
 	d.testDriver.worker = d.worker
@@ -381,8 +409,9 @@ jobs:
 // TestSelfFenceRetry checks a job whose retry: lists worker-lost: its
 // attempt fences itself, and isn't lost before its lease and the fence
 // margin have passed since its last renewal, whatever its backend says,
-// which isn't asked; then it waits its retry:'s interval, and its next
-// attempt runs, counting the lost one, whose writes are refused.
+// which isn't asked until then, and then once; then it waits its retry:'s
+// interval, and its next attempt runs, counting the lost one, whose writes
+// are refused.
 func TestSelfFenceRetry(t *testing.T) {
 	parallel(t)
 	clock := newFakeClock()
@@ -399,13 +428,16 @@ func TestSelfFenceRetry(t *testing.T) {
 	if a := latestAttempt(t, c, id, "main"); a.ID != first.ID || a.State != store.AttemptRunning {
 		t.Fatalf("before the lease and the margin had passed, the attempt is %+v", a)
 	}
+	if d.checked() != 0 {
+		t.Errorf("before the lease and the margin had passed, the backend was asked %d times", d.checked())
+	}
 	clock.Advance(2 * time.Second)
 	// Lost, it waits the retry:'s interval.
 	if wait := look(t, c, id); wait != time.Minute {
 		t.Errorf("once lost, the supervisor waits %v for the retry:'s interval", wait)
 	}
-	if d.checked() != 0 {
-		t.Errorf("the backend of an attempt that fences itself was asked %d times", d.checked())
+	if d.checked() != 1 {
+		t.Errorf("the backend of an attempt that fences itself was asked %d times as it was lost", d.checked())
 	}
 	lost := latestAttempt(t, c, id, "main")
 	if lost.ID != first.ID || lost.End.Kind != store.EndLost || lost.End.Reason != plan.ReasonWorkerLost {
@@ -443,13 +475,275 @@ func TestSelfFenceRetry(t *testing.T) {
 	}
 }
 
+// TestSelfFenceEnd checks that a self-fencing attempt, once its lease and
+// the fence margin have passed, is lost as its backend says it ended,
+// which it asks each heartbeat period, for as long as the backend says a
+// check can take to see it (EndWait): a Dead status with its scheduler's
+// end at its time limit or for its memory, or with a problem, gives the
+// attempt its reason, or its problem, so that a job its scheduler timed
+// out fails with timeout though its retry: lists worker-lost; any other
+// Dead status is worker-lost at once. Running, an error, a problem as the
+// check's error, or no answer in time, as from a scheduler that doesn't
+// know yet, or a driver that doesn't honour its context, is asked again,
+// until that wait has passed, when the attempt is worker-lost, with the
+// problem a check gave as its error. One that says so later gives the
+// attempt its reason then. A backend that needs no wait decides at the
+// first check. Once the attempt is lost, the coordinator keeps no check of
+// it in flight.
+func TestSelfFenceEnd(t *testing.T) {
+	t.Parallel()
+	vanished := problems.SchedulerJobVanished.Problem(problems.Params{"id": "7"})
+	elsewhere := problems.SSHPlacementElsewhere.Problem(problems.Params{"host": "farm"})
+	timedOut := backend.Status{State: backend.Dead, End: backend.EndTimedOut}
+	for _, tc := range []struct {
+		name   string
+		status backend.Status
+		err    error
+		hold   bool
+		stuck  bool
+		// later, if it is set, is what the backend says a heartbeat
+		// period after the first check.
+		later *backend.Status
+		// waits says the first check doesn't decide.
+		waits  bool
+		reason plan.Reason
+		// why is the code of the problem the attempt ends with, or "".
+		why problem.Code
+	}{
+		{name: "timed out", status: timedOut, reason: plan.ReasonTimeout},
+		{name: "out of memory", status: backend.Status{State: backend.Dead, End: backend.EndOutOfMemory}, reason: plan.ReasonOutOfMemory},
+		{name: "vanished", status: backend.Status{State: backend.Dead, Problem: vanished}, reason: plan.ReasonWorkerLost, why: vanished.Code},
+		{name: "exited", status: backend.Status{State: backend.Dead, End: backend.EndExited}, reason: plan.ReasonWorkerLost},
+		{name: "preempted", status: backend.Status{State: backend.Dead, End: backend.EndPreempted}, reason: plan.ReasonWorkerLost},
+		{name: "unknown, then timed out", status: backend.Status{State: backend.Unknown}, later: &timedOut, waits: true, reason: plan.ReasonTimeout},
+		{name: "running", status: backend.Status{State: backend.Running}, waits: true, reason: plan.ReasonWorkerLost},
+		{name: "an error", status: timedOut, err: errors.New("the connection is down"), waits: true, reason: plan.ReasonWorkerLost},
+		{name: "a problem", status: backend.Status{State: backend.Unknown}, err: elsewhere, waits: true, reason: plan.ReasonWorkerLost, why: elsewhere.Code},
+		{name: "no answer", hold: true, waits: true, reason: plan.ReasonWorkerLost},
+		{name: "context ignored", stuck: true, waits: true, reason: plan.ReasonWorkerLost},
+		{name: "running, no wait", status: backend.Status{State: backend.Running}, reason: plan.ReasonWorkerLost},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parallel(t)
+			clock := newFakeClock()
+			c, d := openLease(t, clock, []bool{true}, []bool{true})
+			c.fenceCheck = 50 * time.Millisecond
+			id, first := startJob(t, c, retryJob, store.AttemptRunning)
+			d.says(tc.status, tc.err)
+			d.mu.Lock()
+			d.hold = tc.hold
+			if tc.waits {
+				d.endWait = 2 * time.Minute
+			}
+			if tc.stuck {
+				d.stuck = make(chan struct{})
+				t.Cleanup(func() { close(d.stuck) })
+			}
+			d.mu.Unlock()
+			clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+			wait := look(t, c, id)
+			if tc.waits {
+				if a := latestAttempt(t, c, id, "main"); a.State != store.AttemptRunning || wait <= 0 || wait > c.timing.Heartbeat {
+					t.Fatalf("at a check that doesn't decide, the attempt is %s, and the supervisor waits %v", a.State, wait)
+				}
+				if tc.later != nil {
+					d.says(*tc.later, nil)
+					clock.Advance(c.timing.Heartbeat)
+				} else {
+					clock.Advance(d.EndWait() + c.fenceCheck + c.timing.Heartbeat)
+				}
+				wait = look(t, c, id)
+			}
+			lost := latestAttempt(t, c, id, "main")
+			if lost.ID != first.ID || lost.End.Kind != store.EndLost || lost.End.Reason != tc.reason {
+				t.Fatalf("the attempt ended %+v", lost.End)
+			}
+			c.mu.Lock()
+			checks := len(c.fenceChecks)
+			c.mu.Unlock()
+			if checks != 0 {
+				t.Errorf("of an attempt that was lost, the coordinator keeps checks in flight: %d", checks)
+			}
+			if got := problem.Code(""); lost.End.Problem != nil {
+				if got = lost.End.Problem.Code; got != tc.why {
+					t.Errorf("the attempt ended with %s, want %q", got, tc.why)
+				}
+			} else if tc.why != "" {
+				t.Errorf("the attempt ended with no problem, want %s", tc.why)
+			}
+			j := storedJob(t, c, id, "main")
+			switch tc.reason {
+			case plan.ReasonWorkerLost:
+				if wait != time.Minute || j.Outcome != "" {
+					t.Errorf("a job lost as worker-lost waits %v, and is %+v", wait, j)
+				}
+			default:
+				if wait != 0 || j.Outcome != plan.OutcomeFailure || j.Reason != tc.reason {
+					t.Errorf("a job its scheduler ended waits %v, and is %+v", wait, j)
+				}
+			}
+		})
+	}
+}
+
+// slowEndDriver is a testDriver whose checks can take an hour to see how a
+// worker ended.
+type slowEndDriver struct{ *testDriver }
+
+func (slowEndDriver) EndWait() time.Duration { return time.Hour }
+
+// TestSelfFenceGroupsDown checks that a self-fencing attempt whose member
+// can't be told, while Groups doesn't answer, is asked again for as long
+// as its own place's driver says it can take to see how a worker ended,
+// not the longest any driver says, and is then worker-lost.
+func TestSelfFenceGroupsDown(t *testing.T) {
+	parallel(t)
+	clock := newFakeClock()
+	g := &downGroups{groupsOf: groupsOf{"local": {Name: "local", Members: []backend.Member{{Name: "m1", Backend: testBackend}}}}}
+	slow := slowEndDriver{newTestDriver()}
+	c, d := openLeaseWith(t, Options{now: clock.Now, Groups: g, Drivers: map[string]backend.Driver{"slow": slow}}, []bool{true}, []bool{true})
+	c.fenceCheck = 50 * time.Millisecond
+	id, first := startJob(t, c, retryJob, store.AttemptRunning)
+	d.mu.Lock()
+	d.endWait = 2 * time.Minute
+	d.mu.Unlock()
+	g.down.Store(true)
+	c.mu.Lock()
+	clear(c.members)
+	c.mu.Unlock()
+	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+	if wait := look(t, c, id); wait <= 0 || wait > c.timing.Heartbeat {
+		t.Fatalf("while Groups doesn't answer, the supervisor waits %v", wait)
+	}
+	clock.Advance(d.EndWait() + c.fenceCheck + c.timing.Heartbeat)
+	look(t, c, id)
+	if a := latestAttempt(t, c, id, "main"); a.ID != first.ID || a.End.Kind != store.EndLost || a.End.Reason != plan.ReasonWorkerLost {
+		t.Fatalf("once its driver's wait had passed, the attempt is %s, ended %+v", a.State, a.End)
+	}
+	if n := d.checked(); n != 0 {
+		t.Errorf("the backend was asked %d times about a member that can't be told", n)
+	}
+}
+
+// TestSelfFenceBeforeStep checks a self-fencing attempt whose worker
+// claimed it, but started no step: what its backend says ended it, its
+// scheduler's time limit or a problem, makes it a failure before its
+// first step, which places the job again, as for any attempt.
+func TestSelfFenceBeforeStep(t *testing.T) {
+	t.Parallel()
+	vanished := problems.SchedulerJobVanished.Problem(problems.Params{"id": "7"})
+	for _, tc := range []struct {
+		name   string
+		status backend.Status
+		code   problem.Code
+	}{
+		{"timed out", backend.Status{State: backend.Dead, End: backend.EndTimedOut}, problems.WorkerKilledEarly.Code()},
+		{"a problem", backend.Status{State: backend.Dead, Problem: vanished}, vanished.Code},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parallel(t)
+			clock := newFakeClock()
+			c, d := openLease(t, clock, []bool{true}, []bool{false})
+			c.fenceCheck = 50 * time.Millisecond
+			id, first := startJob(t, c, retryJob, store.AttemptClaimed)
+			if !first.SelfFencing {
+				t.Fatal("the attempt doesn't fence itself")
+			}
+			d.says(tc.status, nil)
+			clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+			if wait := look(t, c, id); wait <= 0 {
+				t.Errorf("after a failure before the first step, the supervisor waits %v", wait)
+			}
+			a := latestAttempt(t, c, id, "main")
+			if a.ID != first.ID || a.End.Kind != store.EndSetupFailed || a.End.Reason != plan.ReasonSetupFailed || a.End.Problem == nil || a.End.Problem.Code != tc.code {
+				t.Errorf("the attempt ended %+v", a.End)
+			}
+		})
+	}
+}
+
+// TestSelfFenceShutdown checks that a coordinator that stops as it asks a
+// self-fencing attempt's backend how its worker ended says it stopped, and
+// loses nothing.
+func TestSelfFenceShutdown(t *testing.T) {
+	t.Parallel()
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true}, []bool{true})
+	c.fenceCheck = 200 * time.Millisecond
+	id, first := startJob(t, c, retryJob, store.AttemptRunning)
+	d.mu.Lock()
+	d.hold = true
+	d.mu.Unlock()
+	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	if _, err := c.supervise(ctx, id, "main", func(context.Context, *store.Tx) error { return nil }); !errors.Is(err, context.Canceled) {
+		t.Errorf("a supervisor stopped as it asked: %v", err)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.ID != first.ID || a.State != store.AttemptRunning {
+		t.Errorf("the attempt is %+v", a)
+	}
+}
+
+// timedRetryJob is retryJob, with a timeout: of two minutes.
+const timedRetryJob = `
+jobs:
+  main:
+    timeout: 2m
+    retry:
+      reasons: [worker-lost]
+      max-retries: 1
+      interval: 1m
+    steps:
+      - run: echo main
+`
+
+// TestSelfFenceNoBackstop checks that the backstop of a job's timeout:
+// doesn't end a self-fencing attempt whose lease and the fence margin have
+// passed while its backend is asked how its worker ended, though the
+// timeout's backstop passes meanwhile: the backend's word decides, and
+// the job, its worker lost, runs again as its retry: says, rather than
+// fail with the timeout enforced.
+func TestSelfFenceNoBackstop(t *testing.T) {
+	t.Parallel()
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true}, []bool{true})
+	c.fenceCheck = 50 * time.Millisecond
+	id, first := startJob(t, c, timedRetryJob, store.AttemptRunning)
+	d.mu.Lock()
+	d.endWait = 3 * time.Minute
+	d.mu.Unlock()
+	d.says(backend.Status{State: backend.Unknown}, nil)
+	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+	look(t, c, id)
+	// Past the backstop: the timeout, the worker's stop, a heartbeat
+	// period and the margin since the claim.
+	clock.Advance(2*time.Minute + c.timing.WorkerStop)
+	look(t, c, id)
+	if a := latestAttempt(t, c, id, "main"); a.ID != first.ID || a.State != store.AttemptRunning {
+		t.Fatalf("past the backstop, the attempt is %+v", a)
+	}
+	d.says(backend.Status{State: backend.Dead}, nil)
+	clock.Advance(c.timing.Heartbeat)
+	if wait := look(t, c, id); wait != time.Minute {
+		t.Errorf("once lost, the supervisor waits %v", wait)
+	}
+	if a := latestAttempt(t, c, id, "main"); a.End.Reason != plan.ReasonWorkerLost {
+		t.Errorf("the attempt ended %+v", a.End)
+	}
+	if j := storedJob(t, c, id, "main"); j.Outcome != "" {
+		t.Errorf("the job is %+v", j)
+	}
+}
+
 // TestRetriesSpent checks that a job whose worker is lost once more than
 // its retry: allows fails, with the reason worker-lost.
 func TestRetriesSpent(t *testing.T) {
 	parallel(t)
 	clock := newFakeClock()
-	c, _ := openLease(t, clock, []bool{true, true}, []bool{true, true})
+	c, d := openLease(t, clock, []bool{true, true}, []bool{true, true})
 	id, _ := startJob(t, c, retryJob, store.AttemptRunning)
+	d.says(backend.Status{State: backend.Dead}, nil)
 	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
 	look(t, c, id)
 	clock.Advance(time.Minute)
@@ -802,6 +1096,7 @@ func TestLostNotMarked(t *testing.T) {
 	clock := newFakeClock()
 	c, d := openLease(t, clock, []bool{true, true}, []bool{true, true})
 	d.fails = map[string]bool{"main": true}
+	d.says(backend.Status{State: backend.Dead}, nil)
 	id, _ := create(t, c, retriedBeside, nil, nil)
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	served := make(chan error, 1)
