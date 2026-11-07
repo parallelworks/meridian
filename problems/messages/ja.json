@@ -442,6 +442,7 @@
   "scheduler_job_vanished": "スケジューラーはもうジョブ {id} を把握しておらず、アカウンティングもジョブの記録も、それがどう終わったかを示していません。",
   "scheduler_worker_not_started": "スケジューラーのジョブ {id} は Meridian のワーカーを起動せずに終了しました。最後に書いた行は次のとおりです: {said}。",
   "scheduler_relay_unreachable": "ジョブのノード {node} は 1 分以内に {addresses} にあるコーディネーターの中継に接続できなかったため、ワーカーが開始する前に停止しました。",
+  "scheduler_caller_refused": "ジョブはワークフローを呼び出すため、バッチスケジューラーのメンバー「{member}」では実行しません。呼び出したワークフローが実行される間、割り当てを抱えたままになるからです。バッチスケジューラーではないメンバーをグループに加えるか、ジョブ自身の処理を別のジョブに移してください。",
 
   "scheduler_command_missing": "Meridian は、{host} で、自身が実行されている PATH 上にスケジューラーのコマンド {command} を見つけられません。",
   "scheduler_command_unsafe": "Meridian は {host} でスケジューラーのコマンド {path} を実行しません。実行するのが安全ではないためです（{code}）。",

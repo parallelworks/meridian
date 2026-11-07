@@ -442,6 +442,7 @@
   "scheduler_job_vanished": "调度器已不再知道作业 {id}，而其记账信息和作业的记录都没有说明它是如何结束的。",
   "scheduler_worker_not_started": "调度器的作业 {id} 在没有启动 Meridian 工作进程的情况下结束了。它写的最后一行是：{said}。",
   "scheduler_relay_unreachable": "作业的节点 {node} 在一分钟内无法连接到位于 {addresses} 的协调器中继，因此在其工作进程启动前就停止了。",
+  "scheduler_caller_refused": "该作业调用了一个工作流，因此批处理调度器的成员“{member}”不会运行它：在它调用的工作流运行期间，它会一直占用其分配。请在其组中添加一个不属于批处理调度器的成员，或把作业本身的工作移到一个单独的作业中。",
 
   "scheduler_command_missing": "Meridian 在 {host} 上运行时所用的 PATH 中找不到调度器的命令 {command}。",
   "scheduler_command_unsafe": "Meridian 不会在 {host} 上运行调度器的命令 {path}，因为运行它并不安全（{code}）。",

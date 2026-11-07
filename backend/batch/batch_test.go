@@ -368,6 +368,26 @@ func TestProbe(t *testing.T) {
 	}
 }
 
+// TestProbeCaller checks that a job that calls a workflow, whose run it
+// would hold its allocation for, can't run on a member, whatever the
+// member is, and that the scheduler isn't asked.
+func TestProbeCaller(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	f.infoErr = errors.New("the controller isn't asked")
+	d, _ := newDriver(t, f)
+	fit, err := d.Probe(t.Context(), testMember, backend.Demand{CallsWorkflow: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kindtest.Want(t, fit.Problem, problems.SchedulerCallerRefused); got.Params["member"] != "m" {
+		t.Errorf("the problem's params are %v", got.Params)
+	}
+	if f.infos != 0 || f.calls() != 0 {
+		t.Errorf("the scheduler was asked %d and %d times", f.infos, f.calls())
+	}
+}
+
 // writeRecords writes a submission's records for a test.
 func writeRecords(t *testing.T, sub string, r records) {
 	t.Helper()

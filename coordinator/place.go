@@ -804,8 +804,9 @@ func (c *Coordinator) group(ctx context.Context, run *store.Run, rj *plan.ReadyJ
 	return g, nil, nil
 }
 
-// demandOf is what rj, a job of run, asks of a member, with the attempts
-// that are parked for it (backend.Demand.Parked): its run's caller chain,
+// demandOf is what rj, a job of run, asks of a member, with whether it
+// calls a workflow (backend.Demand.CallsWorkflow), and the attempts that
+// are parked for it (backend.Demand.Parked): its run's caller chain,
 // the attempt whose step called the run, and that attempt's run's caller,
 // up to the root, each waiting for the child run below it, which can't end
 // before rj's run does. A driver that counts what its member runs, as
@@ -830,7 +831,15 @@ func (c *Coordinator) demandOf(ctx context.Context, run *store.Run, rj *plan.Rea
 		}
 		return nil
 	})
-	return backend.Demand{Resources: backend.Resources(rj.Resources), TimeoutSeconds: rj.TimeoutSeconds, Parked: parked}, err
+	return backend.Demand{
+		Resources: backend.Resources(rj.Resources), TimeoutSeconds: rj.TimeoutSeconds, Parked: parked, CallsWorkflow: callsWorkflow(rj.Steps),
+	}, err
+}
+
+// callsWorkflow reports whether steps has one whose uses: names a
+// workflow, whatever its if: says, which Ready doesn't evaluate.
+func callsWorkflow(steps []plan.Step) bool {
+	return slices.ContainsFunc(steps, func(s plan.Step) bool { return s.Source != nil })
 }
 
 // rank returns the members of g that can run a job that asks for demand,

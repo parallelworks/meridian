@@ -755,6 +755,7 @@ var (
 	SchedulerJobVanished      = define(Error, "scheduler_job_vanished", "Job the scheduler no longer knows", "id")
 	SchedulerWorkerNotStarted = define(Error, "scheduler_worker_not_started", "Job that ended without starting its worker", "id", "said")
 	SchedulerRelayUnreachable = define(Error, "scheduler_relay_unreachable", "Job that couldn't reach the coordinator's relay", "node", "addresses")
+	SchedulerCallerRefused    = define(Error, "scheduler_caller_refused", "Job that calls a workflow, which a batch scheduler's member doesn't run", "member")
 )
 
 // The meridian command's directories. mode is a file's or directory's

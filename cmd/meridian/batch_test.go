@@ -21,6 +21,7 @@ import (
 	localbackend "github.com/parallelworks/meridian/backend/local"
 	"github.com/parallelworks/meridian/backend/slurm"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
+	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/internal/porttest"
 	"github.com/parallelworks/meridian/internal/schedtest"
 	"github.com/parallelworks/meridian/problems"
@@ -492,18 +493,21 @@ func TestOOMKills(t *testing.T) {
 }
 
 // batchRun sets up meridian run with a group, hpc, of one member of the
-// slurm backend, of a fake Slurm cluster that opts set up, and returns its
-// environment, the cluster, what sets meridian run up to drive it, and the
-// directory of its submissions.
+// slurm backend, cluster, of a fake Slurm cluster that opts set up, and a
+// group, hpc-here, of that member and then one of the local backend,
+// here, which offers a job one CPU; and returns its environment, the
+// cluster, what sets meridian run up to drive it, and the directory of
+// its submissions.
 func batchRun(t *testing.T, opts ...func(*schedtest.State)) (map[string]string, *schedtest.Cluster, func(*cli), string) {
 	t.Helper()
 	env := runEnv(t)
-	cluster := schedtest.New(t, opts...)
+	c := schedtest.New(t, opts...)
 	config := env[local.EnvConfigDir]
 	if err := os.MkdirAll(config, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	groups := "hpc:\n  members:\n    - {name: cluster, backend: slurm, isolation: host, settings: {partition: debug}}\n"
+	cluster := "    - {name: cluster, backend: slurm, isolation: host, settings: {partition: debug}}\n"
+	groups := "hpc:\n  members:\n" + cluster + "hpc-here:\n  members:\n" + cluster + "    - {name: here, backend: local, isolation: host, resources: {cpu: 1}}\n"
 	if err := os.WriteFile(filepath.Join(config, local.GroupsFile), []byte(groups), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -511,10 +515,10 @@ func batchRun(t *testing.T, opts ...func(*schedtest.State)) (map[string]string, 
 	_, _ = rand.Read(key)
 	dir := filepath.Join(env["HOME"], "batch")
 	d := &batch.Driver{
-		Scheduler: &slurm.Scheduler{Environ: cluster.Env(nil)}, Dir: dir, Key: key,
-		Binary: localbackend.Executable, Environ: cluster.Env(nil),
+		Scheduler: &slurm.Scheduler{Environ: c.Env(nil)}, Dir: dir, Key: key,
+		Binary: localbackend.Executable, Environ: c.Env(nil),
 	}
-	return env, cluster, func(c *cli) { c.drivers = map[string]backend.Driver{"slurm": d} }, dir
+	return env, c, func(c *cli) { c.drivers = map[string]backend.Driver{"slurm": d} }, dir
 }
 
 // jobOutput returns what the cluster's jobs wrote, for a test that fails.
@@ -543,6 +547,38 @@ func TestBatchEndToEnd(t *testing.T) {
 	}
 	if j := cluster.Job(t, 2); j == nil || j.State != "COMPLETED" || !strings.HasPrefix(j.Name, "meridian-") {
 		t.Errorf("the cluster's job is %+v\n%s", j, jobOutput(dir))
+	}
+}
+
+// TestBatchCaller checks that a job that calls a workflow runs off the
+// scheduler, on the next member of its group, here, since it would hold
+// its allocation while the run it calls ran; while the job of the run it
+// calls, which calls none, and asks for more CPUs than here offers, runs
+// on the scheduler's member, in the caller's group. A caller whose group
+// has only the scheduler's member fails as it is placed, before any of its
+// code runs, and nothing is submitted.
+func TestBatchCaller(t *testing.T) {
+	parallel(t)
+	env, cluster, setUp, dir := batchRun(t)
+	sources := &conformancetest.MapSources{Texts: map[string]string{"github/t/leaf": "jobs:\n  leaf:\n    resources: {cpu: 2}\n    steps:\n      - run: echo leaf in job $SLURM_JOB_ID\n"}}
+	withSources := func(c *cli) { setUp(c); c.sources = sources }
+	caller := func(group string) string {
+		return writeFile(t, group+".yaml", "jobs:\n  main:\n    runs-on: {execution-group: "+group+"}\n    steps:\n"+
+			"      - run: echo main in job ${SLURM_JOB_ID:-none}\n      - uses: github/t/leaf\n        with: {$yaml: w.yaml}\n")
+	}
+	r := endedWithin(t, startCommand(t, env, withSources, "run", caller("hpc-here")))
+	if r.code != exitOK || !strings.Contains(r.stdout, "main step 0| main in job none\n") || !strings.Contains(r.stdout, "main step 1 › leaf step 0| leaf in job 2\n") {
+		t.Fatalf("meridian run of a caller in hpc-here: %+v\nthe jobs' output:\n%s", r, jobOutput(dir))
+	}
+	if j := cluster.Job(t, 2); j == nil || j.State != "COMPLETED" || cluster.Job(t, 3) != nil {
+		t.Errorf("the cluster's jobs are %+v", cluster.State(t).Jobs)
+	}
+	r = endedWithin(t, startCommand(t, env, withSources, "run", caller("hpc")))
+	if r.code != exitInvalid || !strings.Contains(r.stdout+r.stderr, string(problems.SchedulerCallerRefused.Code())) || strings.Contains(r.stdout, "main step 0") {
+		t.Errorf("meridian run of a caller in hpc: %+v", r)
+	}
+	if cluster.Job(t, 3) != nil {
+		t.Errorf("the caller was submitted: %+v", cluster.Job(t, 3))
 	}
 }
 

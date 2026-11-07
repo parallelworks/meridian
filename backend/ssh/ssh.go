@@ -374,7 +374,7 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 		return fit(err)
 	}
 	msg, _, err := d.run(ctx, t, conn, hostproto.OpProbe, func(*host) (*hostproto.Request, error) {
-		return &hostproto.Request{Member: hostMember(m), Demand: &hostproto.Demand{Resources: demand.Resources, TimeoutSeconds: demand.TimeoutSeconds, Parked: demand.Parked}}, nil
+		return &hostproto.Request{Member: hostMember(m), Demand: hostproto.DemandOf(demand)}, nil
 	})
 	if err != nil {
 		return fit(err)

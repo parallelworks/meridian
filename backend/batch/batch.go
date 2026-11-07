@@ -507,14 +507,18 @@ func (d *Driver) member(ctx context.Context, m *backend.Member) (*Settings, Part
 	return s, p, nil
 }
 
-// Probe says whether m can run a job that asks for demand: whether its
-// scheduler's commands are there, safe to run and of a release the driver
-// supports, its partition is there and up, and its walltimes fit the
-// partition's. A job that fits would queue: the scheduler decides when it
-// starts. Demand.Parked is ignored: an allocation can't lend what it
-// holds.
+// Probe says whether m can run a job that asks for demand: whether the
+// job calls no workflow, whose run it would hold its allocation for; and
+// whether its scheduler's commands are there, safe to run and of a release
+// the driver supports, its partition is there and up, and its walltimes
+// fit the partition's. A job that fits would queue: the scheduler decides
+// when it starts. Demand.Parked is ignored: an allocation can't lend what
+// it holds.
 func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.Demand) (backend.Fit, error) {
 	d.init()
+	if demand.CallsWorkflow {
+		return backend.Fit{Problem: problems.SchedulerCallerRefused.Problem(problems.Params{"member": m.Name})}, nil
+	}
 	s, p, err := d.member(ctx, m)
 	if err != nil {
 		return fitOf(err)

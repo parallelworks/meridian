@@ -37,6 +37,10 @@ func (testGroups) Group(_ context.Context, name string) (*backend.Group, error) 
 		return &backend.Group{Name: name, Members: []backend.Member{{Name: "m1", Backend: testBackend}}}, nil
 	case "pair":
 		return &backend.Group{Name: name, Members: []backend.Member{{Name: "m1", Backend: testBackend}, {Name: "m2", Backend: testBackend}}}, nil
+	case "batch":
+		return &backend.Group{Name: name, Members: []backend.Member{{Name: "sched", Backend: schedBackend}, {Name: "m1", Backend: testBackend}}}, nil
+	case "batch-only":
+		return &backend.Group{Name: name, Members: []backend.Member{{Name: "sched", Backend: schedBackend}}}, nil
 	}
 	return nil, compile.ErrNotFound
 }
