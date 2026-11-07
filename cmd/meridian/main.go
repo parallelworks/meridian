@@ -30,6 +30,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/backend"
 	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator"
@@ -53,7 +54,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	// The first interrupt cancels ctx, which stops what the command waits
 	// on; a second, which is no longer caught, stops the process at once.
-	context.AfterFunc(ctx, stop)
+	// meridian worker goes on catching them as it stops its job: a
+	// scheduler signals every process of a job, so its worker gets the
+	// scheduler's SIGTERM and then meridian batch's, and a backend that
+	// must have it end sends SIGKILL, as the local backend does a minute
+	// after its SIGTERM.
+	if len(os.Args) < 2 || os.Args[1] != "worker" {
+		context.AfterFunc(ctx, stop)
+	}
 	code := run(ctx, &cli{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, lookupEnv: os.LookupEnv}, os.Args[1:])
 	stop()
 	os.Exit(code)
@@ -79,8 +87,10 @@ type cli struct {
 	// harden.Process for nil.
 	harden func() error
 	// host is what meridian host asks of the system, which a test gives in
-	// place of the system's (systemHost) for nil.
-	host *hostSystem
+	// place of the system's (systemHost) for nil; batch what meridian batch
+	// does (systemBatch).
+	host  *hostSystem
+	batch *batchSystem
 	// signals and interactive are what a test gives meridian run in place
 	// of the process's: the interrupts it gets, nil for the process's
 	// (notify); and whether a person can answer it, nil for whether its
@@ -100,6 +110,9 @@ type cli struct {
 	// workers run on, as coordinator.ServeMembers does, which a test
 	// replaces; nil for it.
 	serveMembers func(*coordinator.Coordinator, context.Context, coordinator.Logs) error
+	// drivers are drivers a test adds to the coordinator's, of backends
+	// this release doesn't register yet, as a scheduler's; nil for none.
+	drivers map[string]backend.Driver
 	// sources is what a test gives in place of the user's Git
 	// repositories (cacheSources) for the workflows a workflow's steps
 	// call, nil for theirs; and trees for the trees its checkout steps
@@ -185,6 +198,7 @@ func init() {
 		{name: "serve", summary: "Runs a coordinator that keeps running."},
 		{name: "worker", summary: "Runs one attempt of a job. Started by backends, not by people.", run: runWorker},
 		{name: "host", args: "<operation>", summary: "Runs the local backend for a coordinator on another host. Started by backends, not by people.", about: hostAbout, hidden: true, run: runHost},
+		{name: "batch", args: "<directory>", summary: "Runs a scheduler's job for an attempt of a job. Started by backends, not by people.", about: batchAbout, hidden: true, run: runBatch},
 		{name: "version", summary: "Shows Meridian's version.", run: runVersion},
 	}
 }

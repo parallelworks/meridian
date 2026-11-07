@@ -52,6 +52,7 @@ type hostStubReport struct {
 	Env         []string `json:"env"`
 	GODEBUG     bool     `json:"godebug"`
 	Coordinator string   `json:"coordinator"`
+	PID         int      `json:"pid"`
 }
 
 // leaks returns where else the worker was given token than on its
@@ -69,7 +70,7 @@ func (r hostStubReport) leaks(token string) []string {
 func hostStub() int {
 	terms := make(chan os.Signal, 1)
 	signal.Notify(terms, syscall.SIGTERM)
-	r := hostStubReport{Args: os.Args[1:], Argv: os.Args, Env: os.Environ(), Coordinator: os.Getenv(workerapi.EnvCoordinator)}
+	r := hostStubReport{Args: os.Args[1:], Argv: os.Args, Env: os.Environ(), Coordinator: os.Getenv(workerapi.EnvCoordinator), PID: os.Getpid()}
 	_, r.GODEBUG = os.LookupEnv("GODEBUG")
 	token := os.NewFile(3, "token")
 	if _, err := token.Write([]byte{'1'}); err == nil {

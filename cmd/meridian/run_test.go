@@ -26,6 +26,7 @@ import (
 	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/internal/login"
 	"github.com/parallelworks/meridian/internal/racetest"
+	"github.com/parallelworks/meridian/internal/schedtest"
 	"github.com/parallelworks/meridian/internal/testtiming"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
@@ -38,12 +39,16 @@ const helloWorkflow = "jobs:\n  main:\n    steps:\n      - run: echo hello\n"
 
 // TestMain runs the test binary as meridian worker when the local backend
 // starts it so, as it starts the binary that placed a job, for a job of a
-// run that a test's meridian run coordinates; and as meridian, with its
+// run that a test's meridian run coordinates; as meridian batch when a
+// fake Slurm cluster's job runs it, and as that cluster's commands
+// (schedtest); and as meridian, with its
 // arguments, when a test starts it so (envMain); and as a session's
 // service, as a test's step starts it (envSessionService). Run with
 // testtiming.EnvScale, it shortens the timing of the coordinators it opens
 // (testtiming.Scale), as only a test does.
 func TestMain(m *testing.M) {
+	// The fake Slurm cluster's commands, and its jobs.
+	schedtest.Main()
 	if v, ok := os.LookupEnv(testtiming.EnvScale); ok {
 		s, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -58,7 +63,7 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "worker" && os.Getenv(hostStubEnv) != "" {
 		os.Exit(hostStub())
 	}
-	if len(os.Args) > 1 && os.Args[1] == "worker" || os.Getenv(envMain) == "1" {
+	if len(os.Args) > 1 && (os.Args[1] == "worker" || os.Args[1] == "batch") || os.Getenv(envMain) == "1" {
 		main()
 	}
 	// A race that a worker the tests' runs start reports, or any other
