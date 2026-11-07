@@ -379,6 +379,10 @@ type Status struct {
 	State State
 	// End is why a Dead placement's worker ended, when its backend knows.
 	End End
+	// Problem is why a Dead placement's worker never ran its attempt, or
+	// was lost, where its backend can say, as a scheduler's job that could
+	// never start: the attempt ends with it.
+	Problem *problem.Problem
 }
 
 // A State is where a placement's worker is.

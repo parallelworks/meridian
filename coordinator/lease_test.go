@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
+
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
@@ -595,17 +597,21 @@ func TestMemberGone(t *testing.T) {
 // problem says what ended it.
 func TestLostBeforeStep(t *testing.T) {
 	parallel(t)
+	cannotStart := problems.SchedulerJobCannotStart.Problem(problems.Params{"id": "12", "reason": "PartitionTimeLimit"})
 	for _, tc := range []struct {
 		name    string
 		claimed bool
 		end     backend.End
+		// why is the problem the backend says the worker ended with.
+		why *problem.Problem
 	}{
-		{"claimed", true, ""},
-		{"never claimed", false, ""},
-		{"claimed, timed out", true, backend.EndTimedOut},
-		{"never claimed, timed out", false, backend.EndTimedOut},
-		{"claimed, out of memory", true, backend.EndOutOfMemory},
-		{"never claimed, out of memory", false, backend.EndOutOfMemory},
+		{"claimed", true, "", nil},
+		{"never claimed", false, "", nil},
+		{"claimed, timed out", true, backend.EndTimedOut, nil},
+		{"never claimed, timed out", false, backend.EndTimedOut, nil},
+		{"claimed, out of memory", true, backend.EndOutOfMemory, nil},
+		{"never claimed, out of memory", false, backend.EndOutOfMemory, nil},
+		{"never started", false, "", cannotStart},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clock := newFakeClock()
@@ -624,7 +630,7 @@ func TestLostBeforeStep(t *testing.T) {
 				want = store.AttemptPlacing
 			}
 			id, first := startJob(t, c, oneJob, want)
-			d.says(backend.Status{State: backend.Dead, End: tc.end}, nil)
+			d.says(backend.Status{State: backend.Dead, End: tc.end, Problem: tc.why}, nil)
 			clock.Advance(c.timing.Lease + time.Second)
 			wait := look(t, c, id)
 			a := latestAttempt(t, c, id, "main")
@@ -634,6 +640,9 @@ func TestLostBeforeStep(t *testing.T) {
 			code, reason := problems.WorkerEndedEarly.Code(), any(nil)
 			if r, killed := killedFor(tc.end); killed {
 				code, reason = problems.WorkerKilledEarly.Code(), string(r)
+			}
+			if tc.why != nil {
+				code, reason = tc.why.Code, tc.why.Params["reason"]
 			}
 			if p := a.End.Problem; p.Code != code || p.Params["reason"] != reason {
 				t.Fatalf("the attempt ended with %s %v, want %s, reason %v", p.Code, p.Params, code, reason)

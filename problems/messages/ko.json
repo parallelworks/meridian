@@ -432,5 +432,14 @@
   "ssh_host_command_unsafe": "Meridian은 {host}에서 그곳의 PATH가 찾은 {path}을(를) 실행하지 않습니다. 실행하기에 안전하지 않기 때문입니다({code}).",
   "ssh_host_id_unknown": "Meridian은 {host}을(를) 홈을 공유할 수 있는 다른 호스트와 구별할 수 없습니다. Meridian이 읽을 수 있는 머신 ID가 없거나 이름이 없습니다.",
   "ssh_loginctl_missing": "Meridian은 {host}이(가) 워커를 시작한 세션과 함께 끝낼지 알 수 없습니다. 그곳에서 logind가 실행되지만, 그곳의 PATH에서 그것에 물어볼 loginctl을 찾을 수 없습니다.",
-  "ssh_systemd_too_old": "Meridian은 {host}에서 서비스 관리자의 스코프에 워커를 시작하지 않습니다. 그곳의 systemd-run은 systemd {version}의 것이며, 스코프의 --collect에는 systemd {minimum} 이상이 필요합니다."
+  "ssh_systemd_too_old": "Meridian은 {host}에서 서비스 관리자의 스코프에 워커를 시작하지 않습니다. 그곳의 systemd-run은 systemd {version}의 것이며, 스코프의 --collect에는 systemd {minimum} 이상이 필요합니다.",
+
+  "member_setting_invalid": "구성원 ‘{member}’의 설정 {key}은(는) {reason, select, unknown {백엔드가 받는 설정이 아닙니다} type {값의 형식이 잘못되었습니다} value {백엔드가 쓸 수 없는 값입니다} partition {파티션이 허용하는 것보다 깁니다} required {클러스터에 기본 파티션이 없으므로 필요합니다} other {쓸 수 없습니다}}.",
+  "scheduler_partition_unknown": "구성원 ‘{member}’은(는) 파티션 {partition}에 작업을 제출하는데, 그 클러스터에는 그 파티션이 없습니다.",
+  "scheduler_partition_down": "구성원 ‘{member}’의 파티션 {partition}은(는) 작업을 받지 않습니다. 스케줄러에 따르면 상태가 {state}입니다.",
+  "scheduler_rejected": "스케줄러가 구성원 ‘{member}’의 작업을 거부했습니다: {reason}.",
+  "scheduler_job_cannot_start": "스케줄러의 작업 {id}은(는) 시작될 수 없었습니다. {reason} 때문에 기다렸는데 이것은 저절로 바뀌지 않으므로, Meridian이 작업을 취소했습니다.",
+  "scheduler_job_vanished": "스케줄러는 더 이상 작업 {id}을(를) 알지 못하며, 어카운팅도 작업의 기록도 그것이 어떻게 끝났는지 말하지 않습니다.",
+  "scheduler_worker_not_started": "스케줄러의 작업 {id}이(가) Meridian의 워커를 시작하지 않고 끝났습니다. 마지막으로 쓴 줄은 다음과 같습니다: {said}.",
+  "scheduler_relay_unreachable": "작업의 노드 {node}이(가) 1분 안에 {addresses}에 있는 코디네이터의 릴레이에 연결하지 못해, 워커가 시작하기 전에 멈췄습니다."
 }

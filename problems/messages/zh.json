@@ -432,5 +432,14 @@
   "ssh_host_command_unsafe": "Meridian 不会在 {host} 上运行那里的 PATH 找到的 {path}，因为运行它并不安全（{code}）。",
   "ssh_host_id_unknown": "Meridian 无法把 {host} 与可能共享其主目录的其他主机区分开：它没有 Meridian 能读取的机器 ID，或者没有名称。",
   "ssh_loginctl_missing": "Meridian 无法判断 {host} 是否会随启动工作进程的会话结束该工作进程：那里运行着 logind，但那里的 PATH 找不到用于询问它的 loginctl。",
-  "ssh_systemd_too_old": "Meridian 不会在 {host} 上于你的服务管理器的 scope 中启动工作进程：那里的 systemd-run 来自 systemd {version}，而 scope 的 --collect 需要 systemd {minimum} 或更高版本。"
+  "ssh_systemd_too_old": "Meridian 不会在 {host} 上于你的服务管理器的 scope 中启动工作进程：那里的 systemd-run 来自 systemd {version}，而 scope 的 --collect 需要 systemd {minimum} 或更高版本。",
+
+  "member_setting_invalid": "成员“{member}”的设置 {key}{reason, select, unknown {不是其后端接受的设置} type {的值类型不对} value {的值是其后端无法使用的} partition {超出了其分区允许的长度} required {是必需的，因为集群没有默认分区} other {无法使用}}。",
+  "scheduler_partition_unknown": "成员“{member}”把作业提交到分区 {partition}，而其集群没有该分区。",
+  "scheduler_partition_down": "成员“{member}”的分区 {partition} 不接受作业：其调度器说它处于 {state} 状态。",
+  "scheduler_rejected": "调度器拒绝了成员“{member}”的作业：{reason}。",
+  "scheduler_job_cannot_start": "调度器的作业 {id} 永远无法开始：它在等待 {reason}，而这不会自行改变，因此 Meridian 取消了它。",
+  "scheduler_job_vanished": "调度器已不再知道作业 {id}，而其记账信息和作业的记录都没有说明它是如何结束的。",
+  "scheduler_worker_not_started": "调度器的作业 {id} 在没有启动 Meridian 工作进程的情况下结束了。它写的最后一行是：{said}。",
+  "scheduler_relay_unreachable": "作业的节点 {node} 在一分钟内无法连接到位于 {addresses} 的协调器中继，因此在其工作进程启动前就停止了。"
 }

@@ -3106,5 +3106,65 @@
       "Pide a los administradores del host que definan KillUserProcesses=no en logind.conf, como lo tienen la mayoría de los sistemas: Meridian inicia entonces los workers en una sesión propia, sin systemd-run.",
       "O ejecuta el trabajo en un host con systemd 236 o posterior."
     ]
+  },
+  "member_setting_invalid": {
+    "title": "Ajuste de un miembro que su backend no puede usar",
+    "why": "Un miembro del backend slurm acepta estos ajustes, en groups.yaml: partition, account, qos y reservation, como texto; nodes, un número entero de al menos 1; exclusive, true o false; gpu-type, como texto; walltime, una duración, escrita como el timeout: de un flujo de trabajo; y host, el nodo de acceso, al que una versión posterior llega por SSH. Una clave que no acepta, un valor de otro tipo o uno que no puede usar, como un texto con un carácter de control, se rechaza en lugar de ignorarse, para que un trabajo nunca se envíe de otra forma que como dice el miembro. El max-walltime y el walltime de un miembro no pueden ser más largos que el MaxTime de su partición, al que el planificador sometería el trabajo; y donde el clúster no tiene una partición predeterminada, el miembro debe nombrar una.",
+    "fix": [
+      "Corrige el ajuste en groups.yaml, como dice el mensaje.",
+      "scontrol show partition muestra los límites de una partición y cuál es la predeterminada."
+    ]
+  },
+  "scheduler_partition_unknown": {
+    "title": "Partición que el clúster no tiene",
+    "why": "Un miembro envía sus trabajos a la partición que nombran sus ajustes, o a la predeterminada del clúster si no nombran ninguna. El planificador del clúster no tiene la nombrada, como muestra scontrol show partition, así que la asignación deja fuera al miembro y asigna el trabajo a otro miembro de su grupo, si lo hay.",
+    "fix": [
+      "Nombra una partición que liste sinfo, en los ajustes del miembro en groups.yaml."
+    ]
+  },
+  "scheduler_partition_down": {
+    "title": "Partición que no acepta trabajos",
+    "why": "Una partición caída, drenada o inactiva no acepta trabajos, o los retiene hasta que un administrador la activa. La asignación deja fuera al miembro mientras lo esté, en lugar de encolar un trabajo que puede no empezar, y asigna el trabajo a otro miembro de su grupo, si lo hay.",
+    "fix": [
+      "Ejecuta el trabajo cuando la partición vuelva a estar activa, o en un miembro con otra partición.",
+      "Pregunta a los administradores del clúster por qué la partición está caída."
+    ]
+  },
+  "scheduler_rejected": {
+    "title": "Trabajo que el planificador rechazó",
+    "why": "El planificador se negó a aceptar el trabajo, y dijo por qué: una cuenta o una QoS que el miembro no puede usar, una partición que la cuenta no puede usar, más nodos, memoria o GPU de los que tiene cualquier nodo, o un límite de tiempo que la partición no permite. Enviarlo de nuevo no lo cambiaría. El trabajo falla antes de su primer paso, y se vuelve a asignar, a otro miembro de su grupo si lo hay.",
+    "fix": [
+      "Cambia los ajustes del miembro, o el resources: del trabajo, según lo que dijo el planificador."
+    ]
+  },
+  "scheduler_job_cannot_start": {
+    "title": "Trabajo que nunca podría empezar",
+    "why": "El trabajo esperaba en la cola por un motivo que no cambia por sí solo: un límite de tiempo más largo de lo que permite su partición (PartitionTimeLimit), más nodos de los que tiene la partición (PartitionNodeLimit), una característica que ningún nodo tiene (BadConstraints), una cuenta o una QoS que no es válida, o una dependencia que no se puede cumplir. Un planificador configurado para encolar un trabajo así en lugar de rechazarlo (EnforcePartLimits=NO) lo retiene para siempre, así que Meridian lo canceló. El trabajo falla antes de su primer paso, y se vuelve a asignar, a otro miembro de su grupo si lo hay.",
+    "fix": [
+      "Cambia lo que pide el trabajo, o los ajustes del miembro, para que la partición pueda ejecutarlo: scontrol show partition muestra sus límites."
+    ]
+  },
+  "scheduler_job_vanished": {
+    "title": "Trabajo que el planificador ya no conoce",
+    "why": "Un planificador olvida un trabajo algún tiempo después de que termina (el MinJobAge de Slurm, cinco minutos por defecto), y después solo lo conoce su contabilidad, donde el clúster la lleva. Este clúster no la lleva, y los registros en el directorio del trabajo, que meridian batch escribe mientras el trabajo se ejecuta, dicen que empezó, pero no cómo terminó: meridian batch terminó antes de poder escribirlo, como cuando falla su nodo. Meridian esperó dos minutos por un registro que un sistema de archivos de red quizá aún no mostraba. El worker se pierde.",
+    "fix": [
+      "Lee la salida del trabajo, out, en su directorio dentro del directorio batch de Meridian, ~/.local/state/meridian/batch, para ver qué pasó."
+    ]
+  },
+  "scheduler_worker_not_started": {
+    "title": "Trabajo que terminó sin iniciar su worker",
+    "why": "El trabajo terminó sin que meridian batch empezara en su nodo: el directorio del trabajo no tiene ninguno de sus registros. Eso pasa cuando el nodo de cómputo no puede ejecutar el binario de Meridian, como cuando la caché en la que está no está en un sistema de archivos que los nodos compartan, el home está montado con noexec o el nodo es de otra arquitectura; o cuando el script del trabajo falló antes de ejecutarlo. El trabajo falla antes de su primer paso, y se vuelve a asignar.",
+    "fix": [
+      "Lee la salida del trabajo, out, en su directorio dentro del directorio batch de Meridian, ~/.local/state/meridian/batch.",
+      "Comprueba que los nodos de cómputo vean tu home y puedan ejecutar el binario meridian de su caché."
+    ]
+  },
+  "scheduler_relay_unreachable": {
+    "title": "Trabajo que no pudo llegar al relé del coordinador",
+    "why": "El worker de un trabajo llega al coordinador a través de un relé en el nodo de acceso, cuyas direcciones indica un archivo en tu home. El archivo se actualizó en los últimos tres minutos, así que había un relé activo, pero el nodo del trabajo no pudo conectarse a ninguna de sus direcciones en un minuto: un cortafuegos entre los nodos de cómputo y el nodo de acceso, o direcciones a las que los nodos no tienen ruta, pueden impedirlo. El trabajo se detuvo antes de que empezara su worker, en lugar de retener su asignación, y se vuelve a asignar.",
+    "fix": [
+      "Comprueba que los nodos de cómputo puedan conectarse al nodo de acceso en las direcciones que nombra el mensaje, como srun necesita.",
+      "Pregunta a los administradores del clúster por qué red, y por qué puertos, pueden los nodos de cómputo llegar al nodo de acceso."
+    ]
   }
 }
