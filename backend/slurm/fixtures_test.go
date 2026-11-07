@@ -65,7 +65,9 @@ func TestFixtureConfig(t *testing.T) {
 		out, _, _ := captured(t, release, "02-scontrol-show-config")
 		info := parseConfig(out)
 		version, _, _ := strings.Cut(release, "-")
-		if info.Version != version || info.Cluster != "fixture" || info.Accounting != accounting(release) || !supported(info.Version) {
+		// The controller is n1, and srun's ports aren't fixed.
+		if info.Version != version || info.Cluster != "fixture" || info.Accounting != accounting(release) || !supported(info.Version) ||
+			!slices.Equal(info.Controllers, []string{"n1"}) || info.FirstPort != 0 || info.LastPort != 0 {
 			t.Errorf("%s: %+v", release, info)
 		}
 		out, _, _ = captured(t, release, "01-sbatch-version")
@@ -80,6 +82,12 @@ func TestFixtureConfig(t *testing.T) {
 		if supported(v) != want {
 			t.Errorf("supported(%q) = %v", v, !want)
 		}
+	}
+	// A controller's address, where its host's line gives one, a backup's
+	// too, and srun's ports where the site fixes them.
+	info := parseConfig("SlurmctldHost[0]        = ctl1(10.1.0.2)\nSlurmctldHost[1]        = ctl2\nSrunPortRange           = 60001-63000\n")
+	if !slices.Equal(info.Controllers, []string{"10.1.0.2", "ctl2"}) || info.FirstPort != 60001 || info.LastPort != 63000 {
+		t.Errorf("a config with controllers and srun's ports: %+v", info)
 	}
 	if !federated("Federation: fed1\nSelf:       c1:n1:6817 ID:1 FedState:ACTIVE Features:\nSibling:    c2:n2:6817 ID:2\n") {
 		t.Error("a federation isn't one")

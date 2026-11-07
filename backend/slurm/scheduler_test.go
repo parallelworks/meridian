@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,7 +46,7 @@ func TestInfo(t *testing.T) {
 	t.Parallel()
 	s, _ := newScheduler(t)
 	info, err := s.Info(t.Context())
-	if err != nil || *info != (batch.Info{Version: "23.11.4", Cluster: "fixture"}) {
+	if err != nil || info.Version != "23.11.4" || info.Cluster != "fixture" || info.Accounting || !slices.Equal(info.Controllers, []string{"n1"}) || info.FirstPort != 0 {
 		t.Errorf("Info: %+v, %v", info, err)
 	}
 	for _, tc := range []struct {
@@ -132,13 +133,64 @@ func TestPartition(t *testing.T) {
 	}
 }
 
+// TestConfig checks the config the commands read, which names their
+// cluster without asking it: SLURM_CONF's, its links followed, or the
+// default.
+func TestConfig(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "slurm.conf")
+	if err := os.WriteFile(conf, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.conf")
+	if err := os.Symlink(conf, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := defaultConf
+	if r, err := filepath.EvalSymlinks(defaultConf); err == nil {
+		def = r
+	}
+	for _, tc := range []struct {
+		environ []string
+		want    string
+	}{
+		{[]string{"SLURM_CONF=" + link}, resolved},
+		{[]string{"SLURM_CONF=/nowhere/slurm.conf"}, "/nowhere/slurm.conf"},
+		{[]string{"PATH=/usr/bin"}, def},
+	} {
+		if got := (&Scheduler{Environ: tc.environ}).Config(); got != tc.want {
+			t.Errorf("%v: %s, want %s", tc.environ, got, tc.want)
+		}
+	}
+}
+
 func TestSettings(t *testing.T) {
 	t.Parallel()
 	s := new(Scheduler)
-	got, err := s.Settings("m", jsontext.Value(`{"partition":"gpu","account":"proj","qos":"high","reservation":"r1","nodes":2,"exclusive":true,"gpu-type":"a100","walltime":"90m","host":"login1"}`))
-	want := batch.Settings{Host: "login1", Partition: "gpu", Account: "proj", QOS: "high", Reservation: "r1", Nodes: 2, Exclusive: true, GPUType: "a100", WalltimeSeconds: 5400}
+	got, err := s.Settings("m", jsontext.Value(`{"partition":"gpu","account":"proj","qos":"high","reservation":"r1","nodes":2,"exclusive":true,"gpu-type":"a100","walltime":"90m","host":"login1","relay":{"network":"10.1.2.3/16","ports":"60001-63000"}}`))
+	want := batch.Settings{
+		Host: "login1", Partition: "gpu", Account: "proj", QOS: "high", Reservation: "r1", Nodes: 2, Exclusive: true, GPUType: "a100", WalltimeSeconds: 5400,
+		Relay: batch.Relay{Network: netip.MustParsePrefix("10.1.0.0/16"), FirstPort: 60001, LastPort: 63000},
+	}
 	if err != nil || *got != want {
 		t.Errorf("Settings: %+v, %v", got, err)
+	}
+	for raw, want := range map[string]batch.Relay{
+		`{"ports":40000}`:                            {FirstPort: 40000, LastPort: 40000},
+		`{"ports":"40000"}`:                          {FirstPort: 40000, LastPort: 40000},
+		`{"network":"fd00:1::/64"}`:                  {Network: netip.MustParsePrefix("fd00:1::/64")},
+		`{"network":"100.64.0.0/10"}`:                {Network: netip.MustParsePrefix("100.64.0.0/10")},
+		`{"network":"192.168.0.0/16","ports":"1-1"}`: {Network: netip.MustParsePrefix("192.168.0.0/16"), FirstPort: 1, LastPort: 1},
+	} {
+		got, err := s.Settings("m", jsontext.Value(`{"relay":`+raw+`}`))
+		if err != nil || got.Relay != want {
+			t.Errorf("relay %s: %+v, %v", raw, got, err)
+		}
 	}
 	for raw, want := range map[string][2]string{
 		// The first key, as they sort, is the one said.
@@ -157,6 +209,22 @@ func TestSettings(t *testing.T) {
 		`{"walltime":0}`:           {"walltime", "value"},
 		`["partition"]`:            {"settings", "type"},
 		`{"directives":["-N"]}`:    {"directives", "unknown"},
+		`{"relay":"10.0.0.0/8"}`:   {"relay", "type"},
+		`{"relay":{"net":"x"}}`:    {"relay.net", "unknown"},
+		`{"relay":{"network":8}}`:  {"relay.network", "type"},
+		// Never a network with a public, loopback or link-local address.
+		`{"relay":{"network":"0.0.0.0/0"}}`:      {"relay.network", "value"},
+		`{"relay":{"network":"192.168.0.0/15"}}`: {"relay.network", "value"},
+		`{"relay":{"network":"127.0.0.0/8"}}`:    {"relay.network", "value"},
+		`{"relay":{"network":"100.0.0.0/8"}}`:    {"relay.network", "value"},
+		`{"relay":{"network":"fe80::/64"}}`:      {"relay.network", "value"},
+		`{"relay":{"network":"10.0.0.1"}}`:       {"relay.network", "value"},
+		`{"relay":{"ports":"0-0"}}`:              {"relay.ports", "value"},
+		`{"relay":{"ports":"9-8"}}`:              {"relay.ports", "value"},
+		`{"relay":{"ports":"1-65536"}}`:          {"relay.ports", "value"},
+		`{"relay":{"ports":"08"}}`:               {"relay.ports", "value"},
+		`{"relay":{"ports":1.5}}`:                {"relay.ports", "value"},
+		`{"relay":{"ports":true}}`:               {"relay.ports", "type"},
 	} {
 		_, err := s.Settings("m", jsontext.Value(raw))
 		got := kindtest.Want(t, err, problems.MemberSettingInvalid)

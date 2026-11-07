@@ -67,19 +67,22 @@ Meridian is a set of Go packages:
 The backends that start workers (`local`, `ssh`, `kubernetes`, `slurm`,
 `pbs`) and the drivers of container runtimes (Podman, Docker, Apptainer,
 Apple's `container`) will be packages of their own; only `local`, which
-runs workers on this machine, and `ssh`, which runs them on hosts it
-reaches over SSH, are built yet
+runs workers on this machine, `ssh`, which runs them on hosts it reaches
+over SSH, and `slurm`, which submits them to Slurm from its login node,
+where Meridian runs, are built yet
 ([Backends and isolation](#backends-and-isolation)).
 
 The `meridian` command wires the packages together with local resolvers.
 It runs a coordinator in its own process, with a SQLite store: today it
 validates a workflow (`meridian validate`), runs one, its jobs on this
-machine with the `local` backend or on hosts with the `ssh` backend
+machine with the `local` backend, on hosts with the `ssh` backend, or on
+a Slurm cluster whose login node this machine is with the `slurm` backend
 (`meridian run`), shows runs and their logs (`meridian status` and
 `logs`), takes up a run whose command stopped (`meridian resume`), cancels
 one (`meridian cancel`), runs one attempt of a job as a worker (`meridian
-worker`), and runs the local backend on a host for the `ssh` backend
-(`meridian host`), and its other commands say they aren't built yet
+worker`), runs the local backend on a host for the `ssh` backend
+(`meridian host`), and runs a scheduler's job for the `slurm` backend
+(`meridian batch`), and its other commands say they aren't built yet
 ([The `meridian` command](#the-meridian-command)). A
 platform wires them with its own resolvers, Postgres, whose store isn't
 built yet, and as many coordinator replicas as it needs. Nothing in the
@@ -3344,9 +3347,11 @@ not assumed idempotent.
   places their new attempts itself, so counting, backoff and fencing work
   the same on every backend.
 - **A worker that stops heartbeating is checked with its backend** before it
-  is declared lost: `squeue` or `qstat`, the pod's status, the process on the
-  SSH host. So a worker that is only cut off from the coordinator isn't
-  mistaken for one that is dead ([Leases and fencing](#leases-and-fencing)).
+  is declared lost: `squeue` or `qstat`, which a scheduler's backend asks
+  of all of a cluster's attempts at once, at most every 15 seconds, the
+  pod's status, the process on the SSH host. So a worker that is only cut
+  off from the coordinator isn't mistaken for one that is dead ([Leases
+  and fencing](#leases-and-fencing)).
 
 ### Job retries
 
@@ -4139,13 +4144,14 @@ a worker never upgrades itself.
 ### Starting a worker
 
 The backend puts the binary where the job runs (copying it over SSH,
-verified by its digest, or using one on a shared filesystem), then starts it
-with three things, and a fourth where the job's allocation ends:
+verified by its digest, or into the cache in the home a cluster's nodes
+share, by its digest, as the `slurm` backend does), then starts it with
+three things, and a fourth where the job's allocation ends:
 
 - the coordinator's address, or the path of a file that names where it is,
-  as a batch scheduler's job's file that says where its login node's relay
-  listens, which the worker reads again before each connection it makes
-  ([Running steps](#running-steps));
+  as a batch scheduler's job's file that says where its login node's relay,
+  or the coordinator on the login node, listens, which the worker reads
+  again before each connection it makes ([Running steps](#running-steps));
 - the SHA-256 hash of the coordinator's TLS public key, for a connection that
   goes over TLS;
 - a bootstrap token: random and single-use, valid for this one attempt until
@@ -4463,10 +4469,11 @@ coordinator's machine. So the holder of the login node's connection
 forwards a socket there, as for a host's workers, and runs `meridian host
 relay`, which isn't built yet, in a session of the same connection, which
 it holds one of the connection's sessions for. The relay listens on the
-login node's private addresses, RFC 1918's and IPv6's unique local ones,
-never a public one, at a port in the range the member names where a
-site's firewall opens only some, as Slurm's `SrunPortRange` does for
-`srun`; a login node without a private address fails the member, saying
+login node's private addresses, RFC 1918's, RFC 6598's and IPv6's
+unique local ones, never a public one, at a port in the range the
+member names where a site's firewall opens only some, as Slurm's
+`SrunPortRange` does for `srun`; a login node without a private address
+fails the member, saying
 so. It passes each connection on to the socket as TLS it can't decrypt:
 TLS ends at the coordinator, not at the relay, and the coordinator's
 replicas share one key, so the hash a worker is started with holds
@@ -4481,12 +4488,12 @@ share, on a path no other user can change; that file, the same for every
 relay of the member, is how a scheduler's worker is started to reach the
 coordinator, and the worker reads it again before each connection it
 makes. A worker that meets another key there, as at a port another user
-took after a relay ended, will read the file again and try again, having
-sent nothing of its attempt; today's worker, which reads its address
-only from `MERIDIAN_COORDINATOR`, stops at another key
-(`coordinator_key_mismatch`). Where Meridian runs on the login node
-itself, it listens there in the same way, without SSH or a relay. A
-coordinator off the cluster opens no port on its own machine.
+took after a relay ended, reads the file again and tries again, having
+sent nothing of its attempt. Where Meridian runs on the login node
+itself, it listens there in the same way, without SSH or a relay, which
+is what is built today ([The `slurm` and `pbs`
+backends](#the-slurm-and-pbs-backends)). A coordinator off the cluster
+opens no port on its own machine.
 
 Where a member's workers reach the coordinator over TLS, the replica that
 holds the member's listener serves TLS on it: TLS 1.3 alone, HTTP/1.1,
@@ -4894,7 +4901,7 @@ outputs, which are capped.
 | `local` | As a process detached from the terminal | A rootless container |
 | `ssh` | Over SSH, detached so it outlives the connection: in a session of its own, or, where logind ends a session's processes with it and the user lingers, in a scope of their service manager (`systemd-run --user --scope`) | A rootless container |
 | `kubernetes` | As a pod, through the Kubernetes API | A rootless container: the pod, run as a non-root user |
-| `slurm`, `pbs` | As a batch job, submitted on the login node | The host |
+| `slurm`, `pbs` | As a batch job, submitted on the login node, where Meridian runs there, as built today, or through `meridian host` over SSH | The host |
 
 A member can choose stronger isolation, such as a microVM, or name host
 isolation explicitly. It never gets weaker isolation than it asked for: when
@@ -4904,15 +4911,22 @@ isolation, as the built-in `local` group's does, runs no job: a job that no
 other member can take fails, with that member's reason among the rest,
 rather than run on the host.
 
-Today the `local` backend (`backend/local`) and the `ssh` backend
+Today the `local` backend (`backend/local`), the `ssh` backend
 (`backend/ssh`), which runs the local backend on its host through
-`meridian host` ([The `ssh` backend](#the-ssh-backend)), are built, and
-both run a member's jobs on the host only. A member of either names
-`isolation: host`, as the built-in `local` group's member does, and as the
-member a format 1 `ssh:` makes does. One that names a runtime, or none,
-which is a rootless container, has `isolation_not_built`, so placement
-leaves it out rather than run its jobs on the host. A member of another
-backend has `backend_not_built` (`backend.NotBuilt`).
+`meridian host` ([The `ssh` backend](#the-ssh-backend)), and the `slurm`
+backend (`backend/slurm`, over `backend/batch`), for a login node that
+Meridian runs on ([The `slurm` and `pbs`
+backends](#the-slurm-and-pbs-backends)), are built, and all run a
+member's jobs on the host only. A member of the first two names
+`isolation: host`, as the built-in `local` group's member does, and as
+the member a format 1 `ssh:` makes does; a `slurm` member names host
+isolation or none, which for a scheduler is the host. One that names a
+runtime, or, of the first two, none, which is a rootless container, has
+`isolation_not_built`, so placement leaves it out rather than run its
+jobs on the host. A member of another backend has `backend_not_built`
+(`backend.NotBuilt`), and so has a `slurm` member that names another
+login node than this machine (`host`), until Meridian reaches one over
+SSH.
 
 The `local` backend starts `meridian worker` from the binary that places
 it, once it has checked that no other user can change that binary, or the
@@ -5324,6 +5338,232 @@ Where format 1, as ACTIVATE runs it, does otherwise:
   unless the user lingers (`ssh_worker_would_be_killed`). ACTIVATE's steps
   there end with their session.
 
+### The `slurm` and `pbs` backends
+
+A member of the `slurm` backend is a partition of a Slurm cluster, of
+release 21.08 or later, with the account, QoS and reservation to submit
+with; `pbs` isn't built yet. Today the backend runs on the cluster's
+login node: `meridian run` runs there, and runs Slurm's own commands in
+its own process. A member that names another login node (`host`), which
+a later release reaches over SSH through `meridian host`, has
+`backend_not_built`.
+
+**Its settings** name each as Slurm's own option does: `partition`, or
+the cluster's default; `account`, `qos` and `reservation`; `nodes`, how
+many a job asks for; `exclusive`, for whole nodes; `gpu-type`, the type
+of GPU a job's `gpu` resource asks for; `walltime`, a time to ask for
+whatever a job's `timeout:`, written as a `timeout:` is; and `relay`, where
+its workers reach Meridian on the login node: `network`, a private
+network, and `ports`, a port or a range of them
+([`docs/examples/groups.yaml`](examples/groups.yaml)). A name is
+letters, digits, `_`, `.` and `-`, never a comma or a colon, which would
+make an option of one name a list. A key the backend doesn't take, a
+value of another type, or one it can't use, is `member_setting_invalid`,
+as `groups.yaml` is read, at its line, and again as a job is placed. A
+user's own options (`directives`) aren't taken yet, nor are their
+`sbatch` defaults: Slurm's commands run without `SBATCH_` variables, so a
+site that relies on `SBATCH_ACCOUNT` names the account in `groups.yaml`.
+
+**Slurm's commands** are found on the `PATH`, and checked as the worker's
+binary is (`scheduler_command_missing`, `scheduler_command_unsafe`). Each
+runs with its arguments, never through a shell, each option in its long
+form with its value after `=`, under a minute's timeout, and one that
+prints more than 16 MiB fails. They run without what would change what
+they do or which cluster they reach: the `SBATCH_`, `SQUEUE_`, `SACCT_`,
+`SCANCEL_`, `SCONTROL_` and `SINFO_` variables, `POSIXLY_CORRECT`, and
+the `SLURM_` variables, as a job inherits them within an allocation, but
+`SLURM_CONF`. A `*_CLUSTERS` variable that names another cluster than
+the commands' own is refused (`scheduler_cluster_variable`), and so are a
+cluster of a federation, whose jobs can run on a sibling, which every
+later command would have to name, and a controller or commands older
+than 21.08 (`scheduler_unsupported`). A token (`SLURM_JWT`) reaches the
+commands that ask Slurm, never `sbatch`, which would copy it into the
+job's environment, which Slurm keeps, and may archive: a login node
+where `sbatch` can't authenticate without one isn't supported for
+submitting (`scheduler_token_required`). What the commands say of their
+release, their cluster and its partitions is kept for a minute.
+
+**Submitting.** An attempt's submissions are in a directory of its own,
+`${XDG_STATE_HOME:-$HOME/.local/state}/meridian/batch/<attempt>/<n>/`,
+in the home the cluster's nodes share, each made with `mkdir`, which is
+atomic on NFS too, and only the user's. Each holds what `meridian batch`
+is to do, and the bootstrap token, which waits there for the job
+([Starting a worker](#starting-a-worker)). The job's script is two
+lines, which run `meridian batch` with that directory, from Meridian's
+own binary, which the backend copies into the cache in that home,
+`${XDG_CACHE_HOME:-$HOME/.cache}/meridian/bin/<hex digest>/meridian`,
+once: to a file of its own there, which it checks against the digest
+before it links it into place; where another process linked one there
+first, it checks that one instead. It checks the copy, and the way to it,
+as the `local` backend checks the binary it starts, before each
+submission. Every option is an argument of `sbatch`'s: the job asks never
+to run again (`--no-requeue`), is named `meridian-<attempt>-<n>`, which
+is how it is found again after a coordinator that stopped between
+submitting it and recording it, works in its submission's directory, and
+writes its output there, to `out`. Its resources become one task a node
+with the job's CPUs (`--ntasks-per-node=1 --cpus-per-task`), its memory a
+node (`--mem`), and its GPUs as `gpu` generic resources (`--gres`), on
+`nodes` nodes, and its walltime is `--time`. It gets the environment of
+`meridian run`, as `sbatch`'s `--export=ALL` passes it, but for
+`GODEBUG`, Meridian's own variables and those the user's secret
+variables are read from, since Slurm keeps a job's environment. Four
+submissions run at once. A refusal that submitting again won't change,
+as an account the partition doesn't take, is `scheduler_rejected`, and
+its submission, token and all, goes; a controller that is busy, or that
+can't be reached, is a backend that can't answer, asked again.
+
+**The run's directory** is in that home too, named as `meridian host`
+names one on a host ([The `ssh` backend](#the-ssh-backend)), by the
+run's ID and the store's, a child's in its root's, so the run's jobs on
+the cluster share it, and the compute nodes see it:
+`${XDG_STATE_HOME:-$HOME/.local/state}/meridian/runs/`. Where the run
+started, its directory is another, on the login node's own disk by
+default, as for a host, and `--run-dir` names that one alone: a job on
+the cluster runs in the home's. **What the compute nodes read is in the
+home they share, whatever `MERIDIAN_STATE_DIR` and `MERIDIAN_CACHE_DIR`
+say**, as `meridian host`'s runs' directory follows `MERIDIAN_STATE_DIR`
+on a host: Meridian's state directory holds a database that can't be on a
+network filesystem, so on a login node it is often on the node's own
+disk, which no compute node sees. A cluster's homes often have small
+quotas, and the runs' directories, the submissions and the copy of
+Meridian's binary count against them; a setting of their own for where
+they are isn't built yet.
+
+**`meridian batch`**, the job's first process, checks that only the user
+can use its directory, and that the job wasn't withdrawn; hardens itself;
+checks its own binary, as the `local` backend does, and that it is the
+one placed (`worker_digest_mismatch`); reads what it is to do; finds when
+the allocation ends ([Resources](#resources)); and records that the job
+started (`started.json`). Where the address file was written in the last
+three minutes, so a listener is up, it completes a TLS handshake with the
+coordinator's key at one of its addresses within a minute, or exits
+before the worker starts (`scheduler_relay_unreachable`), which places
+the job again, rather than hold the allocation; where the listener is
+down, as while the coordinator is away, the worker waits for it. Only
+then does it take the token, start `meridian worker` with the address
+file (`MERIDIAN_COORDINATOR_FILE`) and the deadline, and give the worker
+its token on a socket, once the worker says it is hardened, as the `local`
+backend does. It passes `SIGTERM` and `SIGINT` on, as `scancel --batch`
+signals only a job's first process, and records the first (`term.json`);
+and records how the worker ended, with how many processes the kernel
+killed for their memory in the job's cgroup meanwhile (`exit.json`), so
+that how a job ended is known where the site keeps no accounting. Every
+way it ends before the worker starts it records, and removes the token.
+A job that a signal from outside ends, as a cancel, a preemption or a
+node's shutdown, stops as a worker stopped from outside does: its steps
+get `SIGTERM` and their grace, what they wrote is sent, and the worker
+sends no end, so the coordinator records the attempt as lost. No cleanup
+runs: Slurm sends `SIGKILL` after its `KillWait`, 30 seconds by default,
+which cleanups couldn't be relied on to finish in. Cleanups run where the
+coordinator cancels a job, at the deadline, and at the job's own
+`timeout:`. The worker keeps catching `SIGTERM` as it stops its job,
+since Slurm signals every process of a job, and `meridian batch` passes
+its own on.
+
+**Checking.** The backend asks Slurm about every job it watches in one
+command, `squeue`, of at most 500 jobs at a time, at most every 15
+seconds, however many attempts wait, one caller at a time; then reads
+the records of the jobs `squeue` no longer lists, and asks accounting,
+`sacct`, where the cluster keeps it, of those whose records don't say
+how they ended. It maps what it learns so:
+
+| Slurm, or the records | The placement |
+| --- | --- |
+| `PENDING`, `CONFIGURING`, `REQUEUE_HOLD`, `RESV_DEL_HOLD` | Queued |
+| … for a reason that can't clear, two minutes on | Withdrawn, and dead, `scheduler_job_cannot_start` |
+| `RUNNING`, `COMPLETING`, `SUSPENDED`, `STAGE_OUT`, `SIGNALING`, `RESIZING` | Running |
+| `COMPLETED`, `FAILED`, `SPECIAL_EXIT` | Dead, exited; out of memory where `exit.json` says the kernel killed the worker with kills counted, timed out where `term.json` came within a minute of the allocation's end |
+| `TIMEOUT`, `DEADLINE` | Dead, timed out |
+| `OUT_OF_MEMORY` | Dead, out of memory |
+| `NODE_FAIL`, `BOOT_FAIL` | Dead, its node failed |
+| `PREEMPTED` | Dead, preempted |
+| `CANCELLED`, which the backend withdrew | Dead, withdrawn |
+| `CANCELLED` otherwise | Dead, exited |
+| Gone, by `exit.json`, a withdrawal or accounting | As those say |
+| Gone, `started.json` alone, two minutes on | Dead, `scheduler_job_vanished` |
+| Gone or ended, no records, two minutes on | Dead, `scheduler_worker_not_started`, with the last line the job printed |
+
+`REVOKED`, a federation's job that a sibling runs, is Unknown. A job
+`squeue` no longer lists, whose end neither accounting nor its records
+say, is Unknown for two minutes after it was last seen, so that a record
+a network filesystem doesn't show yet is waited for: NFS holds what it
+knows of a directory for up to a minute by default. A job pending for a
+reason that can't clear by itself, as a time limit longer than its
+partition's, a per-job limit of its QoS or its association, a constraint
+no node has, an account or a QoS it may not use, or a dependency that
+can never be met, is withdrawn once it has been so for two minutes since
+a check last found it otherwise, since Slurm can give such a reason for
+a while of a job it then runs: its attempt fails before its first step,
+and is placed again (`scheduler_job_cannot_start`). A job its
+administrator holds (`JobHeldAdmin`) is never withdrawn, nor is one that
+waits on a partition's node limit (`PartitionNodeLimit`), as a node that
+is down can have it do. A placement whose job is on another cluster
+than the commands reach now, as after `SLURM_CONF` changed, can't be
+asked about (`scheduler_placement_elsewhere`): it counts as running for
+five minutes, as any check that gives a problem does, and is then lost
+with it. How a job ended becomes its attempt's reason as [Leases and
+fencing](#leases-and-fencing) says.
+
+**Forgetting.** Cancel records the job as withdrawn, removes its token,
+and then cancels it (`scancel`); Forget removes the attempt's
+submissions once their records say how its job ended, as `meridian
+batch`'s exit record or a withdrawal does, or else once Slurm lists the
+job as ended, or no longer lists it, in a snapshot made since Forget was
+asked, since the coordinator asks once the attempt has ended, which an
+older snapshot can predate. Such snapshots are made no sooner than five
+seconds apart, so that many attempts that end at once, as a matrix's,
+share them. A submission no coordinator had the backend forget, the next
+to place a
+job removes once its exit record or its withdrawal is a day old, or its
+allocation ended a day ago, or, where its end isn't told, once nothing in
+it has changed for 30 days.
+
+**Placement** leaves out a member whose commands, release or cluster
+can't be used, whose settings can't, or whose partition isn't there, or
+takes no jobs (`scheduler_partition_unknown`,
+`scheduler_partition_down`), and a member for a job that calls a workflow
+(`scheduler_caller_refused`, [Workflows a step
+calls](#workflows-a-step-calls)). Any other member would queue the job,
+since Slurm decides when it starts, and offers what it declares. Slurm's
+own estimate of when a job would start (`sbatch --test-only`), and the
+partition's limits besides its time, aren't asked yet.
+
+**Its workers reach Meridian** on the login node, where the backend
+listens for them as a relay would ([Connections](#connections)): on its
+private addresses, RFC 1918's, RFC 6598's and IPv6's unique local ones,
+of interfaces that are up and running, never a loopback, link-local or
+public one, not even where a site's own network is public address space;
+those the system routes to Slurm's controller (`SlurmctldHost`) from, or
+in its network, first, since the compute nodes reach it; at a port of
+the member's `relay.ports`, or else of Slurm's `SrunPortRange`, which a
+site's firewall opens to the login node for `srun`, or else any, the
+same on each where it is free. RFC 6598's addresses, `100.64.0.0/10`,
+are among them, as an overlay network such as Tailscale's gives a
+machine, which other machines of that overlay can reach: `relay.network`
+keeps the listener to the private addresses in one network, as a site's
+cluster network rather than such an overlay's. A login node with none
+can't run the member's jobs (`scheduler_relay_no_address`). Members that
+listen alike, by the same `relay`, share one listener, by one key, and
+one whose `relay` differs has its own. A listener's address file is
+`batch/relays/<key>.json` in that home, only the user's, written whole,
+with a nonce of the listener's own, again every 30 seconds while the
+listener listens, with its directory where they are gone, and removed as
+it stops, if it is still the listener's own: one another listener wrote
+since, it leaves be. What Slurm last said of its controllers and its
+ports is kept beside it, by a keyed hash of the path of Slurm's config
+file and the login node's name and machine ID, systemd's or else
+D-Bus's, where it has one, which it knows without asking the controller,
+so that a listener taken over while the controller doesn't answer still
+listens, and the login nodes of two clusters that share a home keep
+their own, even ones of the same name. Its workers' TLS asks for the
+name the file says, which nothing resolves; a failed handshake at the
+listener, as a port scan's, is logged at Debug. One process of the state
+directory at a time holds the listener, as for an `ssh` member's socket:
+one that takes it over, as `meridian resume` does after a `meridian run`
+that was killed, listens again, at a port that can differ, and writes
+the file again, which the workers read again before each connection they
+make, and `meridian batch` each second as it checks the listener.
+
 ### Images
 
 A job that names no image runs in `ghcr.io/parallelworks/meridian-base`,
@@ -5334,7 +5574,8 @@ the job is placed, and the digest is what the attempt records and runs.
 
 `resources:` says what a job needs: CPUs, memory and GPUs. A job fits a
 member that offers at least that. On Slurm and PBS, resources become
-scheduler options, and `runs-on:` can add scheduler parameters of its own.
+scheduler options. Scheduler parameters of a `runs-on:`'s own, as a
+platform's environment gives, aren't built yet.
 
 A job's time limit is its `timeout:`. There is no separate walltime:
 
@@ -5342,13 +5583,22 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   the member sets, for starting the worker, pulling the image, running
   `cleanup:` commands and reporting. The worker enforces the timeout itself,
   so the job ends as timed out, with its cleanup run and its logs delivered,
-  before the scheduler would end it.
+  before the scheduler would end it. A scheduler member's margin is five
+  minutes unless the member sets one, and on Slurm the walltime is
+  rounded up to a whole minute, as Slurm keeps it. A member's fixed
+  `walltime` is asked for as it is.
 - **A job without a `timeout:`** gets the member's default, or else the
-  partition's.
+  partition's default time less the margin, or else asks for no time, and
+  gets the partition's default.
 - **The worker stops the job before its allocation ends.**
-  `meridian batch`, the batch job's first process, which isn't built yet,
-  reads when the allocation ends, and starts the worker with a deadline
-  half the member's margin before it (`MERIDIAN_DEADLINE`). The worker
+  `meridian batch`, the batch job's first process, reads when the
+  allocation ends: Slurm's `SLURM_JOB_END_TIME`, from 23.02, or else
+  `squeue`, or else the job's start and the walltime it asked for. It
+  starts the worker with a deadline half the member's margin before it
+  (`MERIDIAN_DEADLINE`). Where nothing says when the allocation ends, as
+  where Slurm says no end and the job asked for no walltime, the worker
+  has no deadline, and the scheduler still ends the job at its limit. The
+  worker
   stops the job at its deadline, as at its own timeout, if that hasn't
   come first. The margin's first half is for the worker to start, and its
   second for the job's cleanups and its reports: a job whose worker
@@ -5368,8 +5618,14 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   failed before its first step (`worker_killed_early`), and is placed
   again ([Leases and fencing](#leases-and-fencing)). A node failure or a
   preemption is still `worker-lost` ([Job retries](#job-retries)).
-- **Placement** leaves out a member whose longest allowed walltime is
-  shorter than the one the job would request.
+- **Placement** leaves out a member whose longest walltime is shorter
+  than the job's timeout, or else the member's default, and the member's
+  margin, rounded up as its scheduler keeps walltimes, to a minute on
+  Slurm (`walltime_exceeds_member`). The coordinator does, not each
+  backend, so the rule holds for every member that says a longest
+  walltime: its own `max-walltime`, or, for a scheduler's member, its
+  partition's limit, whichever is shorter. A member that allows more than
+  its partition does is refused (`member_setting_invalid`).
 - **A format 1 job that sets its time limit through `runs-on:`** keeps it.
   The compiler warns when that limit is shorter than the job's `timeout:`
   and the margin.
@@ -5396,7 +5652,13 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   ([Serving a session](#serving-a-session)). Nor can they change a run's
   directories: the worker refuses one of a run's tree that another user
   owns, or that its group or other users can change
-  ([Running steps](#running-steps)).
+  ([Running steps](#running-steps)). On a cluster's login node, they can
+  see the port the `slurm` backend listens at for its workers, and
+  connect to it, but reach only the coordinator's TLS, and its answers to
+  a request without a token or a credential; the address file, the
+  tokens and what a job reads wait in directories of the user's alone, in
+  the home the cluster's nodes share; and nothing listens on a compute
+  node ([The `slurm` and `pbs` backends](#the-slurm-and-pbs-backends)).
 - **The user's own processes can.** With the `local` backend, a workflow's
   steps run as the user who started it, so they can read what the user can:
   the state directory's key file, `secret-record.key`, and its database,
@@ -5565,7 +5827,7 @@ binaries still link `libSystem`, as Apple requires.
 | `meridian session url\|reset <run> <key>` | Prints a link to a run's session, or signs everyone out of it. |
 | `meridian rerun <run>` | Runs a run again, or only its failed jobs. |
 | `meridian serve` | Runs a coordinator that keeps running. |
-| `meridian worker`, `meridian host` | Started by backends, not by people. |
+| `meridian worker`, `meridian host`, `meridian batch` | Started by backends, not by people. |
 
 `meridian init`, `migrate`, `rerun` and `serve` aren't built yet,
 and each says so.
@@ -5606,7 +5868,11 @@ host itself.
 - **`groups.yaml`** holds each group by name, with its members in order:
   each one's backend, its settings, its isolation, the resources it offers
   (`cpu: 4`, `memory: 8Gi`, `gpu: 1`), and its walltime limit, margin and
-  default timeout.
+  default timeout ([`docs/examples/groups.yaml`](examples/groups.yaml)).
+  A `slurm` member's settings are checked as the file is read, as its
+  backend reads them, and one it can't use is `member_setting_invalid`,
+  at its line ([The `slurm` and `pbs`
+  backends](#the-slurm-and-pbs-backends)).
 - **`variables.yaml`** holds `org` and `vars`. A plain variable is its
   value, and any variable can instead name an environment variable or a
   file that holds it; an environment variable set to `""` gives `""`, as

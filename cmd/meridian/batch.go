@@ -3,11 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -192,7 +195,11 @@ func (b *batchJob) run(ctx context.Context) (int, error) {
 		return b.fail(err)
 	}
 	if file := spec.Coordinator.AddressFile; file != "" {
-		if p := b.relayUnreachable(stop, file, node); p != nil {
+		hash, ok := keyHash(spec.Coordinator.KeyHash)
+		if !ok {
+			return b.fail(fmt.Errorf("batch: the spec's key hash %q isn't one", spec.Coordinator.KeyHash))
+		}
+		if p := b.relayUnreachable(stop, file, hash, node); p != nil {
 			return b.fail(p)
 		}
 	}
@@ -369,20 +376,43 @@ func workerEnviron(base []string, spec *batch.Spec, end time.Time) []string {
 	return append(out, workerapi.EnvBootstrapTokenFD+"=3")
 }
 
-// relayUnreachable returns scheduler_relay_unreachable where the address
-// file says a relay is up, as one written within relayFresh is, and none
-// of its addresses takes a connection within relayWait; and otherwise
-// nil, as for a relay that is down, while the coordinator is away, which
-// the worker waits for.
-func (b *batchJob) relayUnreachable(ctx context.Context, file, node string) *problem.Problem {
+// relayUnreachable returns scheduler_relay_unreachable, with the
+// addresses the address file said last, where the file says a relay is
+// up, as one written within relayFresh is, and at none of its addresses,
+// which it reads again each second, does the coordinator, whose key's hash
+// is hash, complete a TLS handshake within relayWait; and otherwise nil,
+// as for a relay that is down, while the coordinator is away, which the
+// worker waits for. A connection that ended before its handshake would have the
+// coordinator warn of it, as of a port scan's; one that ends after, it
+// takes for an idle one.
+func (b *batchJob) relayUnreachable(ctx context.Context, file string, hash []byte, node string) *problem.Problem {
 	// A file that can't be read, or isn't one, the worker says why of.
 	f, fresh := b.readRelay(file)
 	if !fresh {
 		return nil
 	}
 	deadline := time.Now().Add(b.sys.relayWait)
-	var dialer net.Dialer
+	config := &tls.Config{
+		MinVersion: tls.VersionTLS13, CurvePreferences: workerapi.TLSGroups,
+		// The coordinator is known by its key's hash, which
+		// VerifyConnection checks, as the worker does.
+		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the coordinator's public key
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("batch: no certificate")
+			}
+			got := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
+			if subtle.ConstantTimeCompare(got[:], hash) != 1 {
+				return errors.New("batch: another key")
+			}
+			return nil
+		},
+	}
 	for {
+		// Each round's own: the name the file says, read again.
+		cfg := config.Clone()
+		cfg.ServerName = f.Name
+		dialer := tls.Dialer{Config: cfg}
 		for _, a := range f.Addresses {
 			dctx, cancel := context.WithTimeout(ctx, min(5*time.Second, max(time.Until(deadline), time.Millisecond)))
 			conn, err := dialer.DialContext(dctx, "tcp", a)
@@ -402,7 +432,24 @@ func (b *batchJob) relayUnreachable(ctx context.Context, file, node string) *pro
 		case <-time.After(time.Second):
 		case <-ctx.Done():
 		}
+		// The listener can have moved, as one another process took over
+		// does, or stopped, which the worker waits for: the file says,
+		// read again, at most once a second, as the worker reads it.
+		if f, fresh = b.readRelay(file); !fresh {
+			return nil
+		}
 	}
+}
+
+// keyHash returns the digest a spec's key hash, sha256: and hex, says,
+// and whether it says one.
+func keyHash(s string) ([]byte, bool) {
+	h, ok := strings.CutPrefix(s, "sha256:")
+	if !ok {
+		return nil, false
+	}
+	hash, err := hex.DecodeString(h)
+	return hash, err == nil && len(hash) == sha256.Size
 }
 
 // readRelay reads the address file, and reports whether it was written

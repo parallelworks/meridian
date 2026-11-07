@@ -843,8 +843,9 @@ func callsWorkflow(steps []plan.Step) bool {
 }
 
 // rank returns the members of g that can run a job that asks for demand,
-// as their drivers' Probe say, the soonest to start it first, and in the
-// group's order among those as soon; for each member that can't, the
+// as their drivers' Probe say, within the longest walltime each allows
+// (walltimeExceeds), the soonest to start it first, and in the group's
+// order among those as soon; for each member that can't, the
 // problem its Probe gave, masked when where the job runs is private; and,
 // of those whose Probe couldn't answer, what the look counts for the job
 // (probeLook), which seen, with a member's name after it, keys
@@ -869,10 +870,36 @@ func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend
 			look.add(counted, notYet, retryAt)
 			continue
 		}
+		if p := walltimeExceeds(m, demand, fit); p != nil {
+			reasons = append(reasons, maskedIf(private, problemDiagnostic(p)))
+			continue
+		}
 		fits = append(fits, candidate{group: g.Name, member: m, driver: d, fit: fit})
 	}
 	slices.SortStableFunc(fits, func(a, b candidate) int { return cmp.Compare(a.fit.Availability, b.fit.Availability) })
 	return fits, reasons, look
+}
+
+// walltimeExceeds returns walltime_exceeds_member where a job that asks
+// for demand would ask m for a longer walltime than m allows, as its fit
+// says: its timeout, or else m's default, and m's margin, rounded up to
+// what m's scheduler keeps walltimes in, as it is asked for. A job with no
+// timeout, on a member without a default, asks for none. The coordinator,
+// not each driver, leaves such a member out, so that the rule holds for
+// every backend.
+func walltimeExceeds(m *backend.Member, demand backend.Demand, fit backend.Fit) *problem.Problem {
+	timeout := cmp.Or(demand.TimeoutSeconds, fit.DefaultTimeoutSeconds)
+	if fit.MaxWalltimeSeconds <= 0 || timeout <= 0 {
+		return nil
+	}
+	asks := timeout + fit.MarginSeconds
+	if unit := fit.WalltimeUnitSeconds; unit > 1 {
+		asks = (asks + unit - 1) / unit * unit
+	}
+	if asks <= fit.MaxWalltimeSeconds {
+		return nil
+	}
+	return problems.WalltimeExceedsMember.Problem(problems.Params{"member": m.Name, "walltime": asks, "max": fit.MaxWalltimeSeconds})
 }
 
 // A probeLook is what a look's probes said of the members that couldn't

@@ -31,6 +31,24 @@ func TestAddressFile(t *testing.T) {
 	if got, err := workerapi.UnmarshalAddressFile([]byte(later)); err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("with a member a later writer adds, read as %+v, %v", got, err)
 	}
+	// A writer's nonce, which a worker passes by.
+	want.Nonce = "0f1e"
+	if data, err = want.Marshal(); err != nil || !strings.HasSuffix(string(data), `,"nonce":"0f1e"}`) {
+		t.Fatalf("written as %s, %v", data, err)
+	}
+	if got, err := workerapi.UnmarshalAddressFile(data); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("with a nonce, read back as %+v, %v", got, err)
+	}
+	// A reader takes a nonce it couldn't write, which it doesn't use; a
+	// writer refuses to write one.
+	other := strings.Replace(string(data), `"0f1e"`, `"not hex"`, 1)
+	if _, err := workerapi.UnmarshalAddressFile([]byte(other)); err != nil {
+		t.Errorf("a file whose nonce isn't hex was refused: %v", err)
+	}
+	want.Nonce = "not hex"
+	if _, err := want.Marshal(); err == nil {
+		t.Error("a nonce that isn't hex was written")
+	}
 }
 
 // TestAddressFileRefused checks that what isn't an address file is

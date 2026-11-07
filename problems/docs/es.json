@@ -1835,7 +1835,7 @@
   },
   "home_unknown": {
     "title": "Sin directorio personal",
-    "why": "Meridian guarda su configuración, su estado y su caché en directorios dentro de tu directorio personal, salvo que MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR y MERIDIAN_CACHE_DIR elijan otros.",
+    "why": "Meridian guarda su configuración, su estado y su caché en directorios dentro de tu directorio personal, salvo que MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR y MERIDIAN_CACHE_DIR elijan otros. Lo que leen los trabajos de un planificador, que debe estar en el home que comparten los nodos de un clúster, está en los directorios meridian de XDG_STATE_HOME y XDG_CACHE_HOME, o si no en el home, digan lo que digan MERIDIAN_STATE_DIR y MERIDIAN_CACHE_DIR.",
     "fix": [
       "Asigna a HOME tu directorio personal.",
       "O asigna una ruta absoluta a la variable que nombra el mensaje."
@@ -2802,11 +2802,19 @@
       "Pide menos en el resources: del trabajo, declara lo que ofrece el miembro en groups.yaml, o ejecuta el trabajo en un grupo con un miembro que ofrezca suficiente."
     ]
   },
+  "walltime_exceeds_member": {
+    "title": "Trabajo cuyo límite de tiempo es más largo de lo que permite su miembro",
+    "why": "Un miembro que ejecuta trabajos con un límite de tiempo, como lo hace la partición de un planificador, o que fija max-walltime en groups.yaml, dice el tiempo de ejecución más largo que permite a un trabajo. Un trabajo pide su timeout:, o si no el timeout predeterminado del miembro, más el margen del miembro, que es para arrancar el worker, ejecutar los comandos cleanup: del trabajo y enviar sus informes. Un trabajo que pediría más de lo que permite el miembro nunca podría ejecutarse allí, o su planificador lo terminaría antes de su propio timeout:, así que la asignación deja fuera al miembro, y asigna el trabajo a otro miembro de su grupo si alguno permite suficiente. Un trabajo sin timeout:, en un miembro sin uno predeterminado, no pide tiempo, y no se deja fuera.",
+    "fix": [
+      "Acorta el timeout: del trabajo, o ejecuta el trabajo en un grupo con un miembro que permita un tiempo de ejecución más largo.",
+      "O deja que el miembro permita más, hasta lo que permite su partición, con su max-walltime en groups.yaml, o dale un margen más corto."
+    ]
+  },
   "backend_not_built": {
     "title": "Backend que esta versión aún no tiene",
-    "why": "Un miembro nombra el backend que inicia workers en él: local, ssh, kubernetes, slurm o pbs. Esta versión de Meridian solo tiene el backend local, así que la asignación deja fuera a un miembro de otro backend y asigna el trabajo a otro miembro de su grupo, si lo hay.",
+    "why": "Un miembro nombra el backend que inicia workers en él: local, ssh, kubernetes, slurm o pbs. Esta versión de Meridian tiene los backends local, ssh y slurm, y el backend slurm solo para un nodo de acceso en el que se ejecuta Meridian: así que la colocación deja fuera a un miembro de otro backend, y a un miembro slurm que nombra otro nodo de acceso (host), y coloca el trabajo en otro miembro de su grupo, si lo hay.",
     "fix": [
-      "Ejecuta el trabajo en un grupo con un miembro del backend local, hasta que una versión tenga el backend del miembro."
+      "Ejecuta el trabajo en un grupo con un miembro de un backend que tenga esta versión, o ejecuta Meridian en el nodo de acceso del clúster y quita el host del miembro, hasta que una versión tenga lo que el miembro necesita."
     ]
   },
   "worker_binary_unsafe": {
@@ -3109,7 +3117,7 @@
   },
   "member_setting_invalid": {
     "title": "Ajuste de un miembro que su backend no puede usar",
-    "why": "Un miembro del backend slurm acepta estos ajustes, en groups.yaml: partition, account, qos y reservation, como texto; nodes, un número entero de al menos 1; exclusive, true o false; gpu-type, como texto; walltime, una duración, escrita como el timeout: de un flujo de trabajo; y host, el nodo de acceso, al que una versión posterior llega por SSH. Una clave que no acepta, un valor de otro tipo o uno que no puede usar, como un texto con un carácter de control, se rechaza en lugar de ignorarse, para que un trabajo nunca se envíe de otra forma que como dice el miembro. El max-walltime y el walltime de un miembro no pueden ser más largos que el MaxTime de su partición, al que el planificador sometería el trabajo; y donde el clúster no tiene una partición predeterminada, el miembro debe nombrar una.",
+    "why": "Un miembro del backend slurm acepta estos ajustes, en groups.yaml: partition, account, qos y reservation, como texto; nodes, un número entero de al menos 1; exclusive, true o false; gpu-type, como texto; walltime, una duración, escrita como el timeout: de un flujo de trabajo; relay, una asignación de network, una red en notación CIDR, como 10.1.0.0/16, todas cuyas direcciones son privadas, en cuyas direcciones del nodo de acceso los workers del miembro llegan al coordinador, escrita relay.network, y ports, un puerto, o un rango de ellos, como 60001-63000, en el que escucha, escrito relay.ports; y host, el nodo de acceso, al que una versión posterior llega por SSH. Una clave que no acepta, un valor de otro tipo o uno que no puede usar, como un texto con un carácter de control, se rechaza en lugar de ignorarse, para que un trabajo nunca se envíe de otra forma que como dice el miembro. El max-walltime y el walltime de un miembro no pueden ser más largos que el MaxTime de su partición, al que el planificador sometería el trabajo; y donde el clúster no tiene una partición predeterminada, el miembro debe nombrar una.",
     "fix": [
       "Corrige el ajuste en groups.yaml, como dice el mensaje.",
       "scontrol show partition muestra los límites de una partición y cuál es la predeterminada."
@@ -3161,7 +3169,7 @@
   },
   "scheduler_relay_unreachable": {
     "title": "Trabajo que no pudo llegar al relé del coordinador",
-    "why": "El worker de un trabajo llega al coordinador a través de un relé en el nodo de acceso, cuyas direcciones indica un archivo en tu home. El archivo se actualizó en los últimos tres minutos, así que había un relé activo, pero el nodo del trabajo no pudo conectarse a ninguna de sus direcciones en un minuto: un cortafuegos entre los nodos de cómputo y el nodo de acceso, o direcciones a las que los nodos no tienen ruta, pueden impedirlo. El trabajo se detuvo antes de que empezara su worker, en lugar de retener su asignación, y se vuelve a asignar.",
+    "why": "El worker de un trabajo llega al coordinador a través de un relé en el nodo de acceso, o del propio coordinador allí, cuyas direcciones indica un archivo en tu home, que el trabajo vuelve a leer cada segundo. El archivo se actualizó en los últimos tres minutos, así que había algo escuchando, pero el nodo del trabajo no pudo completar un handshake TLS con la clave del coordinador en ninguna de sus direcciones en un minuto: un cortafuegos entre los nodos de cómputo y el nodo de acceso, o direcciones a las que los nodos no tienen ruta, pueden impedirlo, y un servidor en una de ellas que tiene otra clave, como uno en un puerto que tomó otro programa, no es el coordinador. El trabajo se detuvo antes de que empezara su worker, en lugar de retener su asignación, y se vuelve a colocar.",
     "fix": [
       "Comprueba que los nodos de cómputo puedan conectarse al nodo de acceso en las direcciones que nombra el mensaje, como srun necesita.",
       "Pregunta a los administradores del clúster por qué red, y por qué puertos, pueden los nodos de cómputo llegar al nodo de acceso."
@@ -3173,6 +3181,21 @@
     "fix": [
       "Añade al grupo del trabajo un miembro que no sea de un planificador de lotes, como el nodo de acceso del clúster mediante el backend ssh, donde el trabajo pueda esperar al flujo de trabajo al que llama.",
       "O pasa lo que el trabajo hace por sí mismo a un trabajo aparte, que el trabajo que llama necesite, o que lo necesite a él, y que pueda ejecutarse en el miembro del planificador: los dos comparten archivos a través del directorio de la ejecución."
+    ]
+  },
+  "scheduler_relay_no_address": {
+    "title": "Nodo de acceso sin una dirección privada a la que lleguen sus nodos de cómputo",
+    "why": "Los nodos de cómputo de un planificador llegan al coordinador a través de su nodo de acceso, cuando Meridian se ejecuta allí: escucha allí a los workers del miembro, y escribe dónde en un archivo del home que comparten los nodos del clúster, que los workers leen. Solo escucha en las direcciones privadas del nodo de acceso, las de RFC 1918, las de RFC 6598 y las locales únicas de IPv6, de interfaces activas y en marcha, nunca en una de loopback, de enlace local o pública, para que nada fuera de las redes del propio sitio pueda llegar a él; y, donde el relay.network del miembro nombra una red, solo en las de esa red. Van primero aquellas desde las que el sistema enruta hacia el controlador del planificador, o las de su red, a la que llegan los nodos de cómputo. Este nodo de acceso no tiene ninguna, así que los trabajos del miembro nunca llegarían al coordinador, y la colocación deja fuera al miembro.",
+    "fix": [
+      "Ejecuta Meridian en un nodo de acceso que tenga una dirección privada en la red que comparten sus nodos de cómputo, como muestra ip address.",
+      "O, donde el relay.network del miembro nombra una red, nombra una que contenga una de las direcciones privadas del nodo de acceso."
+    ]
+  },
+  "scheduler_placement_elsewhere": {
+    "title": "Trabajo en otro clúster que aquel al que llegan los comandos del planificador",
+    "why": "Una asignación al miembro de un planificador nombra el clúster al que se envió su trabajo, por un hash con clave del nombre del clúster, porque el ID de un trabajo solo significa un trabajo en su propio clúster. Los comandos del planificador que Meridian ejecuta llegan ahora a otro clúster, como tras cambiar SLURM_CONF, así que Meridian no puede preguntar por el trabajo, ni cancelarlo. Da por hecho que el worker del trabajo sigue en marcha durante cinco minutos, tiempo para volver a dejarlo como estaba, y luego da el intento por perdido con este problema.",
+    "fix": [
+      "Ejecuta Meridian donde los comandos del planificador lleguen al clúster al que se envió el trabajo, como con el SLURM_CONF con el que se ejecutó."
     ]
   },
   "scheduler_command_missing": {

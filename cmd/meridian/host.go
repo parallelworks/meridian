@@ -456,30 +456,35 @@ func ensureHostDir(dir string) error {
 }
 
 // ensureRootDir makes dir, the directory of a child run's root in the runs
-// directory, which place has checked (ensureHostDir), if none of the
-// root's jobs ran on the host, readable by the user alone, as a root's
-// worker makes its own; and checks one that is there, as it is, never
-// following a symbolic link: a directory of the user's that no other user
-// can change, though others may read it, as a workflow may have let them,
-// which ensureHostDir would refuse. A symbolic link there, which
-// makeDirIn's os.Root would follow, a file, or a directory another user
-// can change is ssh_host_dir_unusable.
+// directory, which place has checked (ensureHostDir), as makeRootDir
+// does: what is wrong is ssh_host_dir_unusable.
 func ensureRootDir(dir string) error {
-	err := os.Mkdir(dir, 0o700)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, fs.ErrExist) {
-		return hostDirUnusable(dir, err)
-	}
-	info, err := os.Lstat(dir)
-	if err == nil {
-		err = safepath.CheckDirInfo(dir, info, safepath.Unchangeable)
-	}
-	if err != nil {
+	if err := makeRootDir(dir); err != nil {
 		return hostDirUnusable(dir, err)
 	}
 	return nil
+}
+
+// makeRootDir makes dir, the directory of a child run's root in a runs
+// directory, which its caller has checked, if none of the root's jobs ran
+// where it is, readable by the user alone, as a root's worker makes its
+// own; and checks one that is there, as it is, never following a symbolic
+// link: a directory of the user's that no other user can change, though
+// others may read it, as a workflow may have let them, which a check of
+// the runs' directory would refuse. A symbolic link there, which
+// makeDirIn's os.Root would follow, a file, or a directory another user
+// can change is the problem safepath says; a directory that can't be made
+// or read, the system's error.
+func makeRootDir(dir string) error {
+	err := os.Mkdir(dir, 0o700)
+	if err == nil || !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	return safepath.CheckDirInfo(dir, info, safepath.Unchangeable)
 }
 
 // hostDirUnusable is the ssh_host_dir_unusable of the directory dir, which

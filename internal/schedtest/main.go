@@ -1,6 +1,7 @@
 package schedtest
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -528,7 +529,9 @@ func (s *State) scontrol(args []string, out, errOut io.Writer) (int, error) {
 			{"ClusterName", s.Cluster},
 			{"KillWait", strconv.FormatFloat(s.KillWait, 'f', -1, 64) + " sec"},
 			{"MinJobAge", strconv.FormatFloat(s.MinJobAge, 'f', -1, 64) + " sec"},
+			{"SlurmctldHost[0]", cmp.Or(s.Controller, "n1")},
 			{"SLURM_VERSION", s.Version},
+			{"SrunPortRange", cmp.Or(s.SrunPortRange, "0-0")},
 		} {
 			fmt.Fprintf(out, "%-23s = %s\n", kv[0], kv[1])
 		}
