@@ -432,5 +432,14 @@
   "ssh_host_command_unsafe": "Meridian no ejecutará {path} en {host}, que encuentra el PATH de allí, porque no es seguro ejecutarlo ({code}).",
   "ssh_host_id_unknown": "Meridian no puede distinguir {host} de otros hosts que pueden compartir su home: no tiene un ID de máquina que Meridian pueda leer, o no tiene nombre.",
   "ssh_loginctl_missing": "Meridian no puede saber si {host} terminaría un worker con la sesión que lo inicia: allí se ejecuta logind, pero el PATH de allí no encuentra ningún loginctl para preguntarle.",
-  "ssh_systemd_too_old": "Meridian no iniciará un worker en {host} en un scope de tu gestor de servicios: su systemd-run es de systemd {version}, y el --collect de un scope necesita systemd {minimum} o posterior."
+  "ssh_systemd_too_old": "Meridian no iniciará un worker en {host} en un scope de tu gestor de servicios: su systemd-run es de systemd {version}, y el --collect de un scope necesita systemd {minimum} o posterior.",
+
+  "member_setting_invalid": "El ajuste {key} del miembro “{member}” {reason, select, unknown {no es uno que su backend acepte} type {tiene un valor del tipo equivocado} value {tiene un valor que su backend no puede usar} partition {es más largo de lo que su partición permite} required {es necesario, porque el clúster no tiene una partición predeterminada} other {no se puede usar}}.",
+  "scheduler_partition_unknown": "El miembro “{member}” envía trabajos a la partición {partition}, que su clúster no tiene.",
+  "scheduler_partition_down": "La partición {partition} del miembro “{member}” no acepta trabajos: su planificador dice que está {state}.",
+  "scheduler_rejected": "El planificador rechazó el trabajo para el miembro “{member}”: {reason}.",
+  "scheduler_job_cannot_start": "El trabajo {id} del planificador nunca podría empezar: esperaba por {reason}, que no cambia por sí solo, así que Meridian lo canceló.",
+  "scheduler_job_vanished": "El planificador ya no conoce el trabajo {id}, y ni su contabilidad ni los registros del trabajo dicen cómo terminó.",
+  "scheduler_worker_not_started": "El trabajo {id} del planificador terminó sin iniciar el worker de Meridian. La última línea que escribió fue: {said}.",
+  "scheduler_relay_unreachable": "El nodo del trabajo, {node}, no pudo conectarse al relé del coordinador en {addresses} en un minuto, así que se detuvo antes de que empezara su worker."
 }

@@ -432,5 +432,14 @@
   "ssh_host_command_unsafe": "Meridian は {host} で、そこの PATH が見つけた {path} を実行しません。実行するのが安全ではないためです（{code}）。",
   "ssh_host_id_unknown": "Meridian は {host} を、ホームを共有しているかもしれないほかのホストと区別できません。Meridian が読めるマシン ID がないか、名前がありません。",
   "ssh_loginctl_missing": "Meridian は、{host} がワーカーを起動したセッションとともに終了させるかどうかを判断できません。そこでは logind が動いていますが、そこの PATH には問い合わせるための loginctl が見つかりません。",
-  "ssh_systemd_too_old": "Meridian は {host} でサービスマネージャーのスコープにワーカーを起動しません。そこの systemd-run は systemd {version} のもので、スコープの --collect には systemd {minimum} 以降が必要です。"
+  "ssh_systemd_too_old": "Meridian は {host} でサービスマネージャーのスコープにワーカーを起動しません。そこの systemd-run は systemd {version} のもので、スコープの --collect には systemd {minimum} 以降が必要です。",
+
+  "member_setting_invalid": "メンバー「{member}」の設定 {key} は{reason, select, unknown {そのバックエンドが受け付けるものではありません} type {値の型が違います} value {バックエンドが使えない値です} partition {パーティションが許すより長くなっています} required {クラスターに既定のパーティションがないため必要です} other {使えません}}。",
+  "scheduler_partition_unknown": "メンバー「{member}」はパーティション {partition} にジョブを投入しますが、そのクラスターにはそのパーティションがありません。",
+  "scheduler_partition_down": "メンバー「{member}」のパーティション {partition} はジョブを受け付けません。スケジューラーによると状態は {state} です。",
+  "scheduler_rejected": "スケジューラーはメンバー「{member}」のジョブを拒否しました: {reason}。",
+  "scheduler_job_cannot_start": "スケジューラーのジョブ {id} は開始できませんでした。{reason} のために待っていましたが、これは自然には変わらないため、Meridian はジョブを取り消しました。",
+  "scheduler_job_vanished": "スケジューラーはもうジョブ {id} を把握しておらず、アカウンティングもジョブの記録も、それがどう終わったかを示していません。",
+  "scheduler_worker_not_started": "スケジューラーのジョブ {id} は Meridian のワーカーを起動せずに終了しました。最後に書いた行は次のとおりです: {said}。",
+  "scheduler_relay_unreachable": "ジョブのノード {node} は 1 分以内に {addresses} にあるコーディネーターの中継に接続できなかったため、ワーカーが開始する前に停止しました。"
 }

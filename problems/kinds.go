@@ -724,6 +724,28 @@ var (
 	SSHTCPAddressInvalid    = define(Error, "ssh_tcp_address_invalid", "Address Meridian doesn't ask a host to connect to", "value", "port")
 )
 
+// A batch scheduler's backends, slurm's and pbs's (backend/batch), whose
+// Fit or error an attempt records, or which a check ends it with: member
+// is a member's name; key one of its settings, as groups.yaml writes it,
+// and reason what is wrong with it: unknown, a key its backend doesn't
+// take; type, a value of another type; value, one it can't use;
+// partition, a walltime longer than its partition allows; or required, a
+// partition the member must name. partition is a partition's name, and
+// state what the scheduler says of it. id is a job's ID, as its scheduler
+// gives it; and reason, of the others, and said, what the scheduler, or
+// the job, said, on one line. node is a compute node's name, and
+// addresses where a relay listens, as QuoteAll writes them.
+var (
+	MemberSettingInvalid      = define(Error, "member_setting_invalid", "Member's setting its backend can't use", "member", "key", "reason")
+	SchedulerPartitionUnknown = define(Error, "scheduler_partition_unknown", "Partition the cluster doesn't have", "member", "partition")
+	SchedulerPartitionDown    = define(Error, "scheduler_partition_down", "Partition that takes no jobs", "member", "partition", "state")
+	SchedulerRejected         = define(Error, "scheduler_rejected", "Job the scheduler refused", "member", "reason")
+	SchedulerJobCannotStart   = define(Error, "scheduler_job_cannot_start", "Job that could never start", "id", "reason")
+	SchedulerJobVanished      = define(Error, "scheduler_job_vanished", "Job the scheduler no longer knows", "id")
+	SchedulerWorkerNotStarted = define(Error, "scheduler_worker_not_started", "Job that ended without starting its worker", "id", "said")
+	SchedulerRelayUnreachable = define(Error, "scheduler_relay_unreachable", "Job that couldn't reach the coordinator's relay", "node", "addresses")
+)
+
 // The meridian command's directories. mode is a file's or directory's
 // permissions in octal, as 0755.
 var (
