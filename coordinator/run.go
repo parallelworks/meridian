@@ -240,6 +240,12 @@ type Coordinator struct {
 	stopTimeout  time.Duration
 	followEvery  time.Duration
 	followHold   time.Duration
+	// fenceCheck bounds each check of a self-fencing attempt's backend
+	// once its lease and the fence margin have passed (fencedEnd); and
+	// fenceChecks are the checks in flight, by attempt, one each
+	// (boundedCheck), which mu guards.
+	fenceCheck  time.Duration
+	fenceChecks map[string]*fenceCheck
 	// placed, if it is set, hears of each job a supervisor places, as it
 	// readied it, before the attempt's driver places it.
 	placed func(run *store.Run, attempt string, job *plan.ReadyJob)
@@ -392,9 +398,9 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	*c = Coordinator{
 		opts: opts, log: log, store: st, plans: newPlanCache(planCacheCount, planCacheBytes),
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
-		startTimeout: 5 * time.Minute, pollInterval: time.Second, sessionsPoll: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
+		startTimeout: 5 * time.Minute, pollInterval: time.Second, sessionsPoll: time.Second, stopTimeout: 5 * time.Second, fenceCheck: 10 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, seenFailed: map[string]int{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
-		outlives: map[string]bool{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
+		outlives: map[string]bool{}, fenceChecks: map[string]*fenceCheck{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
 		tls: identity,
 	}
 	if opts.SessionHost != nil && opts.Sessions == nil && !opts.ReadOnly {

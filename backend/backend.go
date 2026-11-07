@@ -179,6 +179,17 @@ type Forwarder interface {
 	Forward(ctx context.Context, m *Member) (net.Listener, error)
 }
 
+// An EndWaiter is a Driver whose Check can take a while to see how a
+// worker ended, as a batch scheduler's that answers from a snapshot of its
+// queue, and waits for a gone job's records, does. The coordinator asks
+// it again, each heartbeat period, for EndWait, before it takes a
+// self-fencing attempt's worker to be lost, rather than once (docs/
+// design.md, Leases and fencing). A Driver that isn't one is asked once.
+type EndWaiter interface {
+	Driver
+	EndWait() time.Duration
+}
+
 // Demand is what a job asks of a member.
 type Demand struct {
 	Resources Resources

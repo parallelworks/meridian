@@ -3661,10 +3661,14 @@ lease stops leading:
   grace for every coordinator, and wakes the supervisor of every readied
   job of a running run, which may have been put off by the clock that was
   ahead.
+  It can wait longer still, as long as the attempt's backend needs to
+  say how the worker ended (below), a batch scheduler's about three
+  minutes.
 - **The cost** is that such a job starts stopping when it is cut off from
   every coordinator replica for about six tenths of a lease period, 37
   seconds, even when its host is fine. Its new attempt resumes it, as its
-  `retry:` asks.
+  `retry:` asks, after a scheduler's backend has said how the worker
+  ended, which can take up to about three minutes more.
 
 Other jobs keep running while they are cut off, since nothing runs them
 again: their workers spool reports and deliver them when they reconnect
@@ -3672,7 +3676,31 @@ again: their workers spool reports and deliver them when they reconnect
 attempt ends, however long ago its lease lapsed.
 
 A worker is lost only when its backend says it is, or, for a job that
-fences itself, once its lease has lapsed and the margin passed. When the
+fences itself, once its lease has lapsed and the margin passed. Then the
+coordinator asks the attempt's backend how the worker ended, each time
+for at most 10 seconds, whether or not the backend's driver honours that,
+with one check in flight at a time, so that a scheduler that ended it at
+its time limit, or for its memory, or a backend that says why it was
+lost, as a scheduler's job that ended without a record of how, gives the
+attempt its reason, and a `retry:` that lists `worker-lost` doesn't run
+a job its scheduler timed out again; the job's `timeout:`, whose
+backstop would end the attempt, waits for it. Any other end loses it with
+`worker-lost` at once. A worker that runs, as far as its backend knows, a
+check that can't decide, and one that doesn't answer in time, it asks
+again, each heartbeat period, for as long as the backend says a check
+can take to see how a worker ended: a batch scheduler's, whose snapshot
+of its queue can be 15 seconds old, and which waits two minutes for a
+gone job's records, about three minutes; the `local` and `ssh` backends',
+whose checks see a process's end at once, none, so that their attempts
+are lost at the first such check. Then the attempt is lost with
+`worker-lost`, and the problem a check gave as its error, if one did, as
+for an attempt whose check gave one for five minutes. Waiting is safe:
+the worker has stopped the job, and the store refuses what it reports.
+An attempt whose member its group no longer has can't be asked, and is
+lost at once; one whose member can't be told now, as while the Groups
+resolver doesn't answer, is looked at again only for as long as the
+backend it was placed on says a check can take, and then lost with
+`worker-lost`. When the
 lease of an attempt that doesn't fence itself lapses, the coordinator asks
 the attempt's backend, and again every heartbeat period while the backend
 says the worker is running or queued, or can't decide, as over an SSH

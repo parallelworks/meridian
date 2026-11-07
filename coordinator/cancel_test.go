@@ -541,8 +541,9 @@ func TestStopBetweenAttempts(t *testing.T) {
 func TestStopAfterLost(t *testing.T) {
 	parallel(t)
 	clock := newFakeClock()
-	c, _ := openLease(t, clock, []bool{true, true}, []bool{true, true})
+	c, d := openLease(t, clock, []bool{true, true}, []bool{true, true})
 	id, first := startJob(t, c, retryJob, store.AttemptRunning)
+	d.says(backend.Status{State: backend.Dead}, nil)
 	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
 	if wait := look(t, c, id); wait != time.Minute {
 		t.Fatalf("once lost, the supervisor waits %v for the retry:'s interval", wait)

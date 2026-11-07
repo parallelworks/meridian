@@ -508,8 +508,12 @@ func (c *Coordinator) liveAttempt(ctx context.Context, run *store.Run, job *stor
 			return c.stoppedAttempt(ctx, run, job, a, done)
 		}
 	}
-	wait, err := c.watch(ctx, run, job, a)
-	if err != nil || a.State == store.AttemptPlacing {
+	wait, fencing, err := c.watchFenced(ctx, run, job, a)
+	// A self-fencing attempt past its lease and the margin has stopped its
+	// job: how its worker ended, not the job's timeout, decides how it
+	// ends (fencedEnd), so that a retry: that lists worker-lost runs it
+	// again.
+	if err != nil || a.State == store.AttemptPlacing || fencing {
 		return wait, err
 	}
 	timeout, err := c.backstop(ctx, run, job, a, done)

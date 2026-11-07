@@ -255,6 +255,16 @@ var defaultTiming = timing{
 	idle: 10 * time.Minute, refresh: 2 * time.Minute, now: time.Now,
 }
 
+// EndWait is how long a check can take to see how a job ended: the grace
+// a gone job's records are waited for, which counts from a check that
+// finds it gone, and two snapshots' age, one of which can be in flight.
+func (d *Driver) EndWait() time.Duration {
+	d.init()
+	return d.timing.grace + 2*d.timing.poll
+}
+
+var _ backend.EndWaiter = (*Driver)(nil)
+
 // chunk is the most job IDs one status command names.
 const chunk = 500
 
