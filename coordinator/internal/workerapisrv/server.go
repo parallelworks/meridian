@@ -313,11 +313,11 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 // that bridge, for workers that reach the listener from a network, as
 // through a relay: TLS 1.3 alone, HTTP/1.1, and no client certificate,
 // since a worker shows who it is with its token and credential, and knows
-// cert's key by its hash, not by an authority. Its key exchanges are those
-// whose every part FIPS 140-3 approves (tlsGroups). A handshake has the
-// time a request's headers have to arrive in. Without cert, as for a
-// socket the ssh backend forwards, the connections are served as they
-// come.
+// cert's key by its hash, not by an authority. Its key exchanges are the
+// ones a worker offers (workerapi.TLSGroups), whose every part FIPS 140-3
+// approves. A handshake has the time a request's headers have to arrive
+// in. Without cert, as for a socket the ssh backend forwards, the
+// connections are served as they come.
 func (s *Server) ServeMember(ctx context.Context, l net.Listener, member string, cert *tls.Certificate) error {
 	if member == "" {
 		return errors.New("workerapisrv: a member's listener without its key")
@@ -328,7 +328,7 @@ func (s *Server) ServeMember(ctx context.Context, l net.Listener, member string,
 			MinVersion:       tls.VersionTLS13,
 			Certificates:     []tls.Certificate{*cert},
 			NextProtos:       []string{"http/1.1"},
-			CurvePreferences: tlsGroups,
+			CurvePreferences: workerapi.TLSGroups,
 			// A worker never resumes a session: it would send a ticket on
 			// every connection for nothing.
 			SessionTicketsDisabled: true,
@@ -336,13 +336,6 @@ func (s *Server) ServeMember(ctx context.Context, l net.Listener, member string,
 	}
 	return s.serve(ctx, ml, ml.conns)
 }
-
-// tlsGroups are the key exchanges a member's TLS takes, which crypto/tls
-// chooses among in an order of its own: ML-KEM with ECDH on P-256 or
-// P-384, and ECDH on either alone. crypto/tls takes X25519's hybrid with
-// ML-KEM too in FIPS 140-3 mode, but X25519 isn't an algorithm FIPS 140-3
-// approves.
-var tlsGroups = []tls.CurveID{tls.SecP256r1MLKEM768, tls.SecP384r1MLKEM1024, tls.CurveP256, tls.CurveP384}
 
 // serve serves the worker API on l, whose connections conns holds, as
 // Serve says.

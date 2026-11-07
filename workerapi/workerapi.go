@@ -465,11 +465,10 @@ const (
 // TLSGroups are the key exchanges of a worker's TLS 1.3 connection to its
 // coordinator, in the order the worker offers them: ML-KEM with ECDH on
 // P-256 or on P-384, then ECDH on either alone, each of which FIPS 140-3
-// approves. The coordinator's listener takes these and no other, so a
-// worker that offered crypto/tls's own first choice, X25519's hybrid with
-// ML-KEM, would pay a HelloRetryRequest's round trip on each connection.
-// The coordinator's listener has a copy of its own, which must be the
-// same, until it reads this one.
+// approves. The coordinator's listener takes these and no other: crypto/tls
+// takes X25519's hybrid with ML-KEM too in FIPS 140-3 mode, but X25519
+// isn't an algorithm FIPS 140-3 approves, and a worker that offered it
+// first would pay a HelloRetryRequest's round trip on each connection.
 var TLSGroups = []tls.CurveID{tls.SecP256r1MLKEM768, tls.SecP384r1MLKEM1024, tls.CurveP256, tls.CurveP384}
 
 // The codes of the API's own problems: each is a kind of package problems,
