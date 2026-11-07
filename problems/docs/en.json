@@ -2729,5 +2729,38 @@
       "Check that the compute nodes can connect to the login node at the addresses the message names, as srun needs them to.",
       "Ask the cluster's administrators which network, and which ports, the compute nodes may reach the login node on."
     ]
+  },
+  "scheduler_command_missing": {
+    "why": "Meridian submits, checks and cancels a member's jobs with the scheduler's own commands on the login node: sbatch, squeue, scancel and scontrol, and sacct where the cluster keeps accounting. It runs each by its absolute path, as the PATH it runs with finds it, and this one isn't there. A session that isn't a login shell, as one a service starts, may lack what a cluster's startup files, or its modules, add to the PATH.",
+    "fix": [
+      "Run Meridian where the PATH has the scheduler's commands: after the cluster's startup files have run, or after module load slurm."
+    ]
+  },
+  "scheduler_command_unsafe": {
+    "why": "Meridian runs the scheduler's commands with what other users mustn't have: sbatch gets the job's environment, and each command acts as you on your jobs. So each must be a regular file of yours or root's that no other user can change, nor any directory on the way to it: otherwise another user could put a program of theirs in its place, as first on your PATH, and act as you. The code is the problem with it, and its page says why.",
+    "fix": [
+      "Take the directory that other users can change out of your PATH, or put it after the one that has the scheduler's commands.",
+      "Or fix what the code's page says, for the command the message names."
+    ]
+  },
+  "scheduler_unsupported": {
+    "why": "Meridian reads what Slurm's commands print, and asks them for what older releases don't have. It supports Slurm 21.08 and later, the release Ubuntu 22.04 has, both for the controller, as scontrol show config says, and for the commands on the login node, as sbatch --version says. It doesn't submit to a cluster of a federation yet: a federation's job can run on a sibling cluster, which every command Meridian runs would then have to name.",
+    "fix": [
+      "Run the job on a cluster whose Slurm is of a release Meridian supports, and isn't one of a federation, or ask the cluster's administrators to upgrade it."
+    ]
+  },
+  "scheduler_cluster_variable": {
+    "why": "A variable such as SLURM_CLUSTERS or SBATCH_CLUSTERS sends Slurm's commands to other clusters than their own, the one slurm.conf names. Meridian runs them without such variables, so that each command it runs reaches the same cluster, where it finds its jobs again by their IDs; and rather than submit to another cluster than you meant, it refuses an environment that names another.",
+    "fix": [
+      "Unset the variable the message names in the environment Meridian runs in, or set it to the cluster's own name.",
+      "To run jobs on another cluster, run Meridian on that cluster's login node."
+    ]
+  },
+  "scheduler_token_required": {
+    "why": "Some sites authenticate Slurm's commands with a JSON Web Token in SLURM_JWT, on a login node that has no munge. sbatch copies its whole environment into the job's, which the controller keeps, and may archive, and which every process of the job can read; and with any --export but ALL, NIL or NONE, it copies its SLURM_ variables back over what --export says, so no option keeps the token out. So Meridian submits jobs without SLURM_JWT, while squeue, sacct, scontrol and scancel get it. On this login node, sbatch couldn't authenticate without the token: Meridian doesn't submit there, rather than store the token in a job.",
+    "fix": [
+      "Run Meridian on a login node where munge authenticates Slurm's commands, as most sites' do.",
+      "Ask the cluster's administrators whether munge can run on this login node."
+    ]
   }
 }

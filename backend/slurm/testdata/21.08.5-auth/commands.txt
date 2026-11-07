@@ -1,0 +1,16 @@
+01-sbatch-export-all
+    env SLURM_FOO=x sbatch --parsable --export=ALL --output=/tmp/out.%j
+02-sbatch-export-all-slurm-foo-empty
+    env SLURM_FOO=x sbatch --parsable --export=ALL,SLURM_FOO= --output=/tmp/out.%j
+03-sbatch-jwt-export-all
+    env SLURM_JWT=$TOK sbatch --parsable --export=ALL --output=/tmp/out.%j
+04-sbatch-jwt-export-all-jwt-empty
+    env SLURM_JWT=$TOK sbatch --parsable --export=ALL,SLURM_JWT= --output=/tmp/out.%j
+05-squeue-jwt
+    env SLURM_JWT=$TOK squeue --noheader --states=all --format=%i
+06-sbatch-no-munge
+    sbatch --parsable --export=ALL --output=/tmp/out.%j
+07-squeue-no-munge
+    squeue --noheader --states=all --format=%i
+08-sbatch-no-munge-jwt
+    env SLURM_JWT=$TOK sbatch --parsable --export=ALL --output=/tmp/out.%j

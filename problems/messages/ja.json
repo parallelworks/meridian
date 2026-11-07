@@ -441,5 +441,11 @@
   "scheduler_job_cannot_start": "スケジューラーのジョブ {id} は開始できませんでした。{reason} のために待っていましたが、これは自然には変わらないため、Meridian はジョブを取り消しました。",
   "scheduler_job_vanished": "スケジューラーはもうジョブ {id} を把握しておらず、アカウンティングもジョブの記録も、それがどう終わったかを示していません。",
   "scheduler_worker_not_started": "スケジューラーのジョブ {id} は Meridian のワーカーを起動せずに終了しました。最後に書いた行は次のとおりです: {said}。",
-  "scheduler_relay_unreachable": "ジョブのノード {node} は 1 分以内に {addresses} にあるコーディネーターの中継に接続できなかったため、ワーカーが開始する前に停止しました。"
+  "scheduler_relay_unreachable": "ジョブのノード {node} は 1 分以内に {addresses} にあるコーディネーターの中継に接続できなかったため、ワーカーが開始する前に停止しました。",
+
+  "scheduler_command_missing": "Meridian は、{host} で、自身が実行されている PATH 上にスケジューラーのコマンド {command} を見つけられません。",
+  "scheduler_command_unsafe": "Meridian は {host} でスケジューラーのコマンド {path} を実行しません。実行するのが安全ではないためです（{code}）。",
+  "scheduler_unsupported": "Meridian は {host} の {scheduler} を使えません。{federated, select, true {そのクラスターはフェデレーションの一つで、ジョブがほかのクラスターで実行されることがあり、Meridian はまだフェデレーションにジョブを投入しません} other {{version, select, unknown {リリースがわかりません} other {リリース {version} です}}。Meridian が対応しているのは {minimum} 以降です}}。",
+  "scheduler_cluster_variable": "{host} の Slurm のコマンドは {variable} によって、既定で接続するクラスター {cluster} ではなく {value} に接続するよう設定されています。Meridian がジョブを投入するのは既定のクラスターだけです。",
+  "scheduler_token_required": "{host} の Slurm の sbatch は SLURM_JWT なしでは認証できませんが、Meridian はトークンを渡しません。sbatch がそれをジョブの環境にコピーし、スケジューラーがその環境を保存するためです。"
 }

@@ -3166,5 +3166,43 @@
       "Comprueba que los nodos de cómputo puedan conectarse al nodo de acceso en las direcciones que nombra el mensaje, como srun necesita.",
       "Pregunta a los administradores del clúster por qué red, y por qué puertos, pueden los nodos de cómputo llegar al nodo de acceso."
     ]
+  },
+  "scheduler_command_missing": {
+    "title": "Comando del planificador que no se encuentra",
+    "why": "Meridian envía, consulta y cancela los trabajos de un miembro con los propios comandos del planificador en el nodo de acceso: sbatch, squeue, scancel y scontrol, y sacct donde el clúster lleva contabilidad. Ejecuta cada uno por su ruta absoluta, como lo encuentra el PATH con el que se ejecuta, y este no está allí. Una sesión que no es un shell de inicio de sesión, como la que inicia un servicio, puede no tener lo que los archivos de inicio del clúster, o sus módulos, añaden al PATH.",
+    "fix": [
+      "Ejecuta Meridian donde el PATH tenga los comandos del planificador: después de que se ejecuten los archivos de inicio del clúster, o después de module load slurm."
+    ]
+  },
+  "scheduler_command_unsafe": {
+    "title": "Comando del planificador que no es seguro ejecutar",
+    "why": "Meridian ejecuta los comandos del planificador con lo que otros usuarios no deben tener: sbatch recibe el entorno del trabajo, y cada comando actúa como tú sobre tus trabajos. Así que cada uno debe ser un archivo normal tuyo o de root que ningún otro usuario pueda cambiar, ni ningún directorio en el camino hasta él: si no, otro usuario podría poner un programa suyo en su lugar, como el primero de tu PATH, y actuar como tú. El código es el problema que tiene, y su página dice por qué.",
+    "fix": [
+      "Quita de tu PATH el directorio que otros usuarios pueden cambiar, o ponlo después del que tiene los comandos del planificador.",
+      "O corrige lo que dice la página del código, para el comando que nombra el mensaje."
+    ]
+  },
+  "scheduler_unsupported": {
+    "title": "Planificador que Meridian no admite",
+    "why": "Meridian lee lo que imprimen los comandos de Slurm, y les pide lo que las versiones anteriores no tienen. Admite Slurm 21.08 y posteriores, la versión que tiene Ubuntu 22.04, tanto para el controlador, como dice scontrol show config, como para los comandos del nodo de acceso, como dice sbatch --version. Aún no envía trabajos a un clúster de una federación: un trabajo de una federación puede ejecutarse en un clúster hermano, que cada comando que ejecuta Meridian tendría que nombrar.",
+    "fix": [
+      "Ejecuta el trabajo en un clúster cuyo Slurm sea de una versión que Meridian admita y que no sea de una federación, o pide a los administradores del clúster que lo actualicen."
+    ]
+  },
+  "scheduler_cluster_variable": {
+    "title": "Variable que envía los comandos de Slurm a otro clúster",
+    "why": "Una variable como SLURM_CLUSTERS o SBATCH_CLUSTERS envía los comandos de Slurm a otros clústeres que el suyo, el que nombra slurm.conf. Meridian los ejecuta sin esas variables, para que cada comando que ejecuta llegue al mismo clúster, donde vuelve a encontrar sus trabajos por sus ID; y, en lugar de enviar trabajos a otro clúster que el que querías, rechaza un entorno que nombra otro.",
+    "fix": [
+      "Elimina la variable que nombra el mensaje del entorno en el que se ejecuta Meridian, o ponle el nombre del propio clúster.",
+      "Para ejecutar trabajos en otro clúster, ejecuta Meridian en el nodo de acceso de ese clúster."
+    ]
+  },
+  "scheduler_token_required": {
+    "title": "Nodo de acceso donde sbatch necesita un token",
+    "why": "Algunos sitios autentican los comandos de Slurm con un JSON Web Token en SLURM_JWT, en un nodo de acceso sin munge. sbatch copia todo su entorno al del trabajo, que el controlador guarda, y puede archivar, y que cada proceso del trabajo puede leer; y con cualquier --export que no sea ALL, NIL o NONE, vuelve a copiar sus variables SLURM_ sobre lo que dice --export, así que ninguna opción deja fuera el token. Por eso Meridian envía los trabajos sin SLURM_JWT, mientras squeue, sacct, scontrol y scancel lo reciben. En este nodo de acceso, sbatch no pudo autenticarse sin el token: Meridian no envía trabajos ahí, en lugar de guardar el token en un trabajo.",
+    "fix": [
+      "Ejecuta Meridian en un nodo de acceso donde munge autentique los comandos de Slurm, como en la mayoría de los sitios.",
+      "Pregunta a los administradores del clúster si munge puede ejecutarse en este nodo de acceso."
+    ]
   }
 }

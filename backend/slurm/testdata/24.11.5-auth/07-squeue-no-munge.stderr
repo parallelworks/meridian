@@ -1,0 +1,4 @@
+squeue: error: If munged is up, restart with --num-threads=10
+squeue: error: Munge encode failed: Failed to access "/run/munge/munge.socket.2": No such file or directory (Did you start munged?)
+squeue: error: slurm_buffers_pack_msg: auth_g_create: REQUEST_JOB_INFO has authentication error
+slurm_load_jobs error: Protocol authentication error

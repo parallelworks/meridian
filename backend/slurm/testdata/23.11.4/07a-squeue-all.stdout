@@ -1,0 +1,5 @@
+10|PENDING|InvalidAccount
+4|PENDING|PartitionTimeLimit
+3|PENDING|JobHeldUser
+9|TIMEOUT|TimeLimit
+5|PENDING|PartitionDown

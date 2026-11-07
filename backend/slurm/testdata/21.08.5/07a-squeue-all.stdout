@@ -1,0 +1,9 @@
+8|CANCELLED|None
+6|COMPLETED|None
+7|FAILED|NonZeroExitCode
+4|PENDING|PartitionTimeLimit
+10|PENDING|Resources
+3|PENDING|JobHeldUser
+2|RUNNING|None
+9|TIMEOUT|TimeLimit
+5|PENDING|PartitionDown

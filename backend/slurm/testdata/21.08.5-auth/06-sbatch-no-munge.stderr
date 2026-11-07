@@ -1,0 +1,4 @@
+sbatch: error: If munged is up, restart with --num-threads=10
+sbatch: error: Munge encode failed: Failed to access "/run/munge/munge.socket.2": No such file or directory
+sbatch: error: slurm_send_node_msg: auth_g_create: REQUEST_SUBMIT_BATCH_JOB has authentication error
+sbatch: error: Batch job submission failed: Protocol authentication error

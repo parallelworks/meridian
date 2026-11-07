@@ -1,0 +1,88 @@
+01-sbatch-version  [as alice]
+    sbatch --version
+02-scontrol-show-config  [as alice]
+    scontrol show config
+03-scontrol-show-partition  [as alice]
+    scontrol --all --oneliner show partition
+03b-scontrol-show-partition-not-all  [as alice]
+    scontrol --oneliner show partition
+04-scontrol-show-federation  [as alice]
+    scontrol show federation
+05-sbatch-stdin  [as alice, stdin = 05-sbatch-stdin.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a1-1 --output=/tmp/sub1/out --chdir=/tmp/sub1 --partition=debug --time=2 --nodes=1
+11a-squeue-start-end-running  [as alice]
+    SLURM_TIME_FORMAT=%s squeue --noheader --jobs=2 --format='%S|%e'
+11c-posixly-correct-short  [as alice]
+    POSIXLY_CORRECT=1 squeue -h -t all -j 2 -o %i
+11d-posixly-correct-long  [as alice]
+    POSIXLY_CORRECT=1 squeue --noheader --states=all --jobs=2 --format=%i
+06a-sbatch-held  [as alice, stdin = 06a-sbatch-held.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a2-1 --output=/tmp/sub2/out --chdir=/tmp/sub2 --partition=debug --time=2 --nodes=1 --hold
+06b-sbatch-over-partition-time  [as alice, stdin = 06b-sbatch-over-partition-time.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a3-1 --output=/tmp/sub3/out --chdir=/tmp/sub3 --partition=debug --time=20 --nodes=1
+06c-sbatch-partition-down  [as alice, stdin = 06c-sbatch-partition-down.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a4-1 --output=/tmp/sub4/out --chdir=/tmp/sub4 --partition=down --time=2 --nodes=1
+06d-sbatch-exit0  [as alice, stdin = 06d-sbatch-exit0.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a5-1 --output=/tmp/sub5/out --chdir=/tmp/sub5 --partition=debug --time=2 --nodes=1
+06e-sbatch-exit3  [as alice, stdin = 06e-sbatch-exit3.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a6-1 --output=/tmp/sub6/out --chdir=/tmp/sub6 --partition=debug --time=2 --nodes=1
+06f-sbatch-to-cancel  [as alice, stdin = 06f-sbatch-to-cancel.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a7-1 --output=/tmp/sub7/out --chdir=/tmp/sub7 --partition=debug --time=2 --nodes=1
+06g-scancel-running  [as alice]
+    scancel 8
+06h-sbatch-timeout  [as alice, stdin = 06h-sbatch-timeout.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a8-1 --output=/tmp/sub8/out --chdir=/tmp/sub8 --partition=debug --time=1 --nodes=1
+06i-sbatch-resources  [as alice, stdin = 06i-sbatch-resources.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a9-1 --output=/tmp/sub9/out --chdir=/tmp/sub9 --partition=debug --time=2 --nodes=1 --cpus-per-task=2
+06j-sbatch-nodes-ntasks  [as alice, stdin = 06j-sbatch-nodes-ntasks.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a12-1 --output=/tmp/sub12/out --chdir=/tmp/sub12 --partition=debug --time=2 --nodes=2 --hold --ntasks=1 --cpus-per-task=1
+06k-sbatch-nodes-ntasks-per-node  [as alice, stdin = 06k-sbatch-nodes-ntasks-per-node.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a13-1 --output=/tmp/sub13/out --chdir=/tmp/sub13 --partition=debug --time=2 --nodes=2 --hold --ntasks-per-node=1 --cpus-per-task=1
+06l-scontrol-show-job-nodes-ntasks  [as alice]
+    scontrol --oneliner show job 11
+06m-scontrol-show-job-nodes-ntasks-per-node  [as alice]
+    scontrol --oneliner show job 12
+06n-sbatch-hidden  [as alice, stdin = 06n-sbatch-hidden.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a11-1 --output=/tmp/sub11/out --chdir=/tmp/sub11 --partition=hidden --time=2 --nodes=1 --hold
+11b-squeue-start-end-pending  [as alice]
+    SLURM_TIME_FORMAT=%s squeue --noheader --jobs=3 --format='%S|%e'
+07a0-squeue-all-before-timeout  [as alice]
+    squeue --noheader --states=all --jobs=2,3,4,5,6,7,8,9,10 --format='%i|%T|%r'
+07a-squeue-all  [as alice]
+    squeue --noheader --states=all --jobs=2,3,4,5,6,7,8,9,10 --format='%i|%T|%r'
+08-squeue-unknown  [as alice]
+    squeue --noheader --states=all --jobs=999999 --format='%i|%T|%r'
+09-squeue-real-and-unknown  [as alice]
+    squeue --noheader --states=all --jobs=2,999999 --format='%i|%T|%r'
+10-squeue-user  [as alice]
+    squeue --noheader --all --user=1001 --states=all --format='%i|%j'
+10b-squeue-user-not-all  [as alice]
+    squeue --noheader --user=1001 --states=all --format='%i|%j'
+12-sacct-jobs  [as alice]
+    sacct --allocations --noheader --parsable2 --jobs=2,3,4,5,6,7,8,9,10 --format=JobIDRaw,State
+14a-scancel-completed  [as alice]
+    scancel 6
+14b-scancel-unknown  [as alice]
+    scancel 999999
+15a-sbatch-partition-nosuch  [as alice, stdin = 15a-sbatch-partition-nosuch.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-r1-1 --output=/tmp/subr/out --chdir=/tmp/subr --partition=nosuch --time=2 --nodes=1
+15b-sbatch-time-bogus  [as alice, stdin = 15b-sbatch-time-bogus.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-r2-1 --output=/tmp/subr/out --chdir=/tmp/subr --partition=debug --time=bogus --nodes=1
+15c-sbatch-nodes-5  [as alice, stdin = 15c-sbatch-nodes-5.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-r3-1 --output=/tmp/subr/out --chdir=/tmp/subr --partition=debug --time=2 --nodes=5
+15d-sbatch-mem-too-big  [as alice, stdin = 15d-sbatch-mem-too-big.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-r4-1 --output=/tmp/subr/out --chdir=/tmp/subr --partition=debug --time=2 --nodes=1 --mem=999999999
+16a-sbatch-drained  [as alice, stdin = 16a-sbatch-drained.stdin]
+    sbatch --parsable --no-requeue --export=ALL --job-name=meridian-a14-1 --output=/tmp/sub14/out --chdir=/tmp/sub14 --partition=debug --time=2 --nodes=1
+16b-squeue-drained  [as alice]
+    squeue --noheader --states=all --jobs=16 --format='%i|%T|%r'
+07b-squeue-all-after-minjobage  [as alice]
+    squeue --noheader --states=all --jobs=2,3,4,5,6,7,8,9,10 --format='%i|%T|%r'
+09b-squeue-purged-and-unknown  [as alice]
+    squeue --noheader --states=all --jobs=6,999999 --format='%i|%T|%r'
+09c-squeue-purged-alone  [as alice]
+    squeue --noheader --states=all --jobs=6 --format='%i|%T|%r'
+14c-scancel-purged  [as alice]
+    scancel 6
+12b-sacct-jobs-after-minjobage  [as alice]
+    sacct --allocations --noheader --parsable2 --jobs=2,3,4,5,6,7,8,9,10 --format=JobIDRaw,State

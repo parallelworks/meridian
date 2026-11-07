@@ -3166,5 +3166,43 @@
       "检查计算节点能否按消息所列的地址连接到登录节点，就像 srun 所需要的那样。",
       "询问集群管理员，计算节点可以通过哪个网络、哪些端口访问登录节点。"
     ]
+  },
+  "scheduler_command_missing": {
+    "title": "找不到的调度器命令",
+    "why": "Meridian 在登录节点上用调度器自己的命令提交、检查和取消成员的作业：sbatch、squeue、scancel 和 scontrol，以及集群记录记账信息时的 sacct。它按运行时所用 PATH 找到的绝对路径运行每个命令，而这个命令不在其中。不是登录 shell 的会话（例如由服务启动的会话）可能缺少集群的启动文件或其模块添加到 PATH 中的内容。",
+    "fix": [
+      "在 PATH 含有调度器命令的环境中运行 Meridian：在集群的启动文件运行之后，或在 module load slurm 之后。"
+    ]
+  },
+  "scheduler_command_unsafe": {
+    "title": "运行起来不安全的调度器命令",
+    "why": "Meridian 运行调度器的命令时，会交给它们其他用户不应拥有的东西：sbatch 会得到作业的环境，而每个命令都以你的身份操作你的作业。因此每个命令都必须是你或 root 拥有的普通文件，其他用户不能修改它，也不能修改通往它的任何目录；否则其他用户可以把自己的程序放在它的位置上（例如放在你的 PATH 的最前面），并以你的身份行事。代码表示它的问题，其页面说明了原因。",
+    "fix": [
+      "把其他用户可以修改的目录从你的 PATH 中移除，或把它放在含有调度器命令的目录之后。",
+      "或者针对消息所指的命令，修正代码页面所说的问题。"
+    ]
+  },
+  "scheduler_unsupported": {
+    "title": "Meridian 不支持的调度器",
+    "why": "Meridian 会读取 Slurm 命令的输出，并向它们询问旧版本没有的信息。它支持 Slurm 21.08 及更高版本，即 Ubuntu 22.04 所带的版本，这既适用于 scontrol show config 所说的控制器，也适用于 sbatch --version 所说的登录节点上的命令。它还不向联邦中的集群提交作业：联邦的作业可能在兄弟集群上运行，这样 Meridian 运行的每个命令都必须指明那个集群。",
+    "fix": [
+      "在 Slurm 版本受 Meridian 支持且不属于联邦的集群上运行该作业，或请集群管理员升级它。"
+    ]
+  },
+  "scheduler_cluster_variable": {
+    "title": "把 Slurm 命令指向另一个集群的变量",
+    "why": "SLURM_CLUSTERS 或 SBATCH_CLUSTERS 之类的变量会把 Slurm 命令指向它们自己的集群（slurm.conf 指定的集群）以外的集群。Meridian 运行这些命令时不带这类变量，使它运行的每个命令都访问同一个集群，并在那里按 ID 重新找到它的作业；它会拒绝指定了另一个集群的环境，而不是把作业提交到你本不想用的集群。",
+    "fix": [
+      "在 Meridian 运行的环境中取消设置消息所指的变量，或把它设为该集群自己的名字。",
+      "要在另一个集群上运行作业，请在那个集群的登录节点上运行 Meridian。"
+    ]
+  },
+  "scheduler_token_required": {
+    "title": "sbatch 需要令牌的登录节点",
+    "why": "有些站点在没有 munge 的登录节点上，用 SLURM_JWT 中的 JSON Web Token 认证 Slurm 命令。sbatch 会把自己的整个环境复制到作业的环境中，控制器会保存它，还可能归档，作业的每个进程都能读取它；而且在 ALL、NIL、NONE 以外的任何 --export 下，它都会把自己的 SLURM_ 变量重新复制到 --export 所指定的内容之上，因此没有哪个选项能把令牌排除在外。所以 Meridian 提交作业时不带 SLURM_JWT，而 squeue、sacct、scontrol 和 scancel 会得到它。在这个登录节点上，sbatch 没有令牌就无法认证：Meridian 不在这里提交作业，而不是把令牌保存在作业中。",
+    "fix": [
+      "像大多数站点那样，在由 munge 认证 Slurm 命令的登录节点上运行 Meridian。",
+      "询问集群管理员能否在这个登录节点上运行 munge。"
+    ]
   }
 }

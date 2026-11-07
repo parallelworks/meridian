@@ -447,5 +447,11 @@
   "scheduler_job_cannot_start": "The scheduler's job {id} could never start: it waited for {reason}, which doesn't change by itself, so Meridian cancelled it.",
   "scheduler_job_vanished": "The scheduler no longer knows the job {id}, and neither its accounting nor the job's records say how it ended.",
   "scheduler_worker_not_started": "The scheduler's job {id} ended without starting Meridian's worker. The last line it wrote was: {said}.",
-  "scheduler_relay_unreachable": "The job's node {node} couldn't connect to the coordinator's relay at {addresses} within a minute, so it stopped before its worker started."
+  "scheduler_relay_unreachable": "The job's node {node} couldn't connect to the coordinator's relay at {addresses} within a minute, so it stopped before its worker started.",
+
+  "scheduler_command_missing": "Meridian can't find the scheduler's command {command} on {host}, on the PATH it runs with.",
+  "scheduler_command_unsafe": "Meridian won't run the scheduler's command {path} on {host}, since it isn't safe to run ({code}).",
+  "scheduler_unsupported": "Meridian can't use {scheduler} on {host}: {federated, select, true {its cluster is one of a federation, whose jobs can run on another cluster, and Meridian doesn't submit to one yet} other {{version, select, unknown {its release can't be told} other {it is release {version}}}, and Meridian supports {minimum} and later}}.",
+  "scheduler_cluster_variable": "Slurm's commands on {host} are set to reach {value}, by {variable}, not {cluster}, the cluster they reach by default: Meridian submits to that one alone.",
+  "scheduler_token_required": "Slurm's sbatch on {host} can't authenticate without SLURM_JWT, and Meridian doesn't give it the token: sbatch would copy it into the job's environment, which the scheduler keeps."
 }
