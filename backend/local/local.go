@@ -548,6 +548,36 @@ func socketPair() (worker, ours *os.File, err error) {
 	return os.NewFile(uintptr(fds[0]), "worker's token"), os.NewFile(uintptr(fds[1]), "token"), nil
 }
 
+// TokenSocket returns the two ends of a new socket for a worker's
+// bootstrap token, as Place makes one: the worker's, which it inherits as
+// its descriptor 3 (workerapi.EnvBootstrapTokenFD), and the caller's, on
+// which GiveToken hands it the token. Neither is inherited by any other
+// process.
+func TokenSocket() (worker, ours *os.File, err error) {
+	if p := unsupported(); p != nil {
+		return nil, nil, p
+	}
+	return socketPair()
+}
+
+// GiveToken writes token to ours, the caller's end of a TokenSocket, once
+// the worker has said on its end that it has hardened itself, and closes
+// it: os.ErrDeadlineExceeded for a worker that doesn't say so within
+// wait.
+func GiveToken(ours *os.File, token string, wait time.Duration) error {
+	return giveToken(ours, token, wait)
+}
+
+// Runnable is Executable, with the path that starts the file this process
+// runs, even if another file has taken its path since: /proc/self/exe on
+// Linux.
+func Runnable() (path, run, digest string, err error) {
+	if p := unsupported(); p != nil {
+		return "", "", "", p
+	}
+	return executable()
+}
+
 // giveToken writes token to ours, once the worker has written that it is
 // ready on its end, and closes it. A worker that doesn't say so within
 // wait, which is os.ErrDeadlineExceeded, or ends first, gets no
