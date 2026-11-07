@@ -1,6 +1,9 @@
 package batch
 
-import "time"
+import (
+	"net/netip"
+	"time"
+)
 
 // Grace is how long a check waits for a job's records, and Stuck for a
 // reason it pends for to clear.
@@ -21,4 +24,15 @@ func Refresh(d *Driver) {
 	d.poll.mu.Lock()
 	defer d.poll.mu.Unlock()
 	d.poll.snap = snapshot{}
+}
+
+// SetInterfaces has d take interfaces for this machine's addresses.
+func SetInterfaces(d *Driver, interfaces func() ([]netip.Prefix, error)) {
+	d.interfaces = interfaces
+}
+
+// SetTouch has d's listeners write their address files every period.
+func SetTouch(d *Driver, period time.Duration) {
+	d.init()
+	d.timing.touch = period
 }

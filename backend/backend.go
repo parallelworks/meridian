@@ -268,6 +268,10 @@ type Fit struct {
 	MaxWalltimeSeconds    int64
 	MarginSeconds         int64
 	DefaultTimeoutSeconds int64
+	// WalltimeUnitSeconds is what the member's scheduler keeps walltimes
+	// in whole of, as Slurm keeps minutes, to which the walltime a job asks
+	// for is rounded up; 0 or 1 for seconds.
+	WalltimeUnitSeconds int64
 }
 
 // Availability is how soon a member would start a job, which placement

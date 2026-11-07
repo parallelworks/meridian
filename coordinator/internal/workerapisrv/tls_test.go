@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -204,5 +205,21 @@ func TestServeMemberWithoutTLS(t *testing.T) {
 	_, hash := newCert(t)
 	if _, err := dialTLS(t, l.Addr().String(), workerapitest.PinnedTLS(hash)); err == nil {
 		t.Error("a TLS client of a listener without a certificate made its handshake")
+	}
+}
+
+// TestServerLogHandshake checks that a failed TLS handshake, as a port
+// scan of a member's listener makes, is logged at Debug, and anything else
+// the HTTP server says of a connection at Warn.
+func TestServerLogHandshake(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	w := workerapisrv.ServerLog(t.Context(), log)
+	_, _ = io.WriteString(w, "http: TLS handshake error from 10.0.0.9:4000: EOF\n")
+	_, _ = io.WriteString(w, "http: Accept error: too many open files\n")
+	out := buf.String()
+	if !strings.Contains(out, `level=DEBUG msg="http: TLS handshake error from 10.0.0.9:4000: EOF"`) ||
+		!strings.Contains(out, `level=WARN msg="http: Accept error: too many open files"`) {
+		t.Errorf("the server's words were logged as\n%s", out)
 	}
 }

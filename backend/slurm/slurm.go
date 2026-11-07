@@ -8,6 +8,7 @@ package slurm
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -49,6 +50,29 @@ var _ batch.Scheduler = (*Scheduler)(nil)
 
 // Name is the backend's name.
 func (*Scheduler) Name() string { return "slurm" }
+
+// WalltimeUnit is a minute: Slurm keeps time limits in minutes, and
+// Submit rounds a walltime up to one.
+func (*Scheduler) WalltimeUnit() int64 { return 60 }
+
+// defaultConf is where Slurm's commands read their config without
+// SLURM_CONF, as Debian's and Ubuntu's packages and Slurm's own builds
+// put it.
+const defaultConf = "/etc/slurm/slurm.conf"
+
+// Config is the path of the config file the commands read, SLURM_CONF's
+// or the default, with its symbolic links followed where it is there; one
+// that isn't, as a configless site's, is as it is named.
+func (s *Scheduler) Config() string {
+	conf := getenv(s.environ(), "SLURM_CONF")
+	if conf == "" {
+		conf = defaultConf
+	}
+	if resolved, err := filepath.EvalSymlinks(conf); err == nil {
+		return resolved
+	}
+	return conf
+}
 
 // The commands the backend runs: sacct only where the cluster keeps
 // accounting.
@@ -275,7 +299,10 @@ func (s *Scheduler) Info(ctx context.Context) (*batch.Info, error) {
 }
 
 // parseConfig reads scontrol show config's output. Accounting is on
-// unless its storage is none, which 23.02 and later show as (null).
+// unless its storage is none, which 23.02 and later show as (null). A
+// controller is SlurmctldHost[n]'s address, where it gives one in
+// parentheses, or its name; and SrunPortRange the ports compute nodes
+// connect to a login node at, or 0-0 for any.
 func parseConfig(out string) *batch.Info {
 	info := new(batch.Info)
 	for line := range strings.Lines(out) {
@@ -291,6 +318,17 @@ func parseConfig(out string) *batch.Info {
 			info.Cluster = value
 		case "AccountingStorageType":
 			info.Accounting = strings.HasPrefix(value, "accounting_storage/") && value != "accounting_storage/none"
+		case "SrunPortRange":
+			if first, last, ok := PortRange(value); ok {
+				info.FirstPort, info.LastPort = first, last
+			}
+		default:
+			if strings.HasPrefix(key, "SlurmctldHost[") {
+				name, addr, _ := strings.Cut(strings.TrimSuffix(value, ")"), "(")
+				if host := cmp.Or(addr, name); host != "" {
+					info.Controllers = append(info.Controllers, host)
+				}
+			}
 		}
 	}
 	return info

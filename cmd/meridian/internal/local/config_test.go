@@ -87,6 +87,12 @@ gpu:
     - name: cluster
       backend: slurm
       resources: {cpu: 4}
+    - name: other
+      backend: slurm
+      settings: {partition: gpu, relay: {network: 10.1.0.0/16, ports: 60001-63000}}
+    - name: queue
+      backend: pbs
+      settings: {queue: workq}
 local:
   members:
     - {name: podman, backend: local, isolation: podman}
@@ -103,6 +109,9 @@ local:
 			MaxWalltimeSeconds: 86400, MarginSeconds: 300, DefaultTimeoutSeconds: 90,
 		},
 		{Name: "cluster", Backend: "slurm", Resources: backend.Resources{MilliCPU: 4000}},
+		{Name: "other", Backend: "slurm", Settings: []byte(`{"partition":"gpu","relay":{"network":"10.1.0.0/16","ports":"60001-63000"}}`)},
+		// A backend that isn't built checks none of its settings.
+		{Name: "queue", Backend: "pbs", Settings: []byte(`{"queue":"workq"}`)},
 	}}
 	if !reflect.DeepEqual(g, want) {
 		t.Errorf("group gpu is\n%+v, want\n%+v", g, want)
@@ -121,6 +130,20 @@ local:
 	again, _ := c.Group(t.Context(), "gpu")
 	if !reflect.DeepEqual(again, want) {
 		t.Errorf("a change to what Group gave reached the config: %+v", again)
+	}
+}
+
+// TestGroupsExample checks that docs/examples/groups.yaml is a groups
+// file, whose slurm member's settings its backend takes.
+func TestGroupsExample(t *testing.T) {
+	text, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "docs", "examples", GroupsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := load(t, map[string]string{GroupsFile: string(text)}, nil)
+	g, err := c.Group(t.Context(), "hpc")
+	if err != nil || len(g.Members) != 2 || g.Members[0].Backend != "slurm" || g.Members[0].MaxWalltimeSeconds != 86400 {
+		t.Errorf("the example's group hpc is %+v, %v", g, err)
 	}
 }
 
@@ -156,6 +179,11 @@ func TestGroupsFileRefuses(t *testing.T) {
 		"not yaml":          {"g: [", problems.ConfigYAMLSyntax, 0},
 		"not a mapping":     {"- g\n", problems.ConfigNotMapping, 1},
 		"two documents":     {"g:\n  members:\n    - {name: a, backend: local}\n---\nh: {}\n", problems.ConfigExtraDocument, 4},
+		// A slurm member's settings are checked as its backend reads them,
+		// at the key whose value it can't use.
+		"slurm setting":     {"g:\n  members:\n    - name: a\n      backend: slurm\n      settings:\n        partition: debug\n        acount: x\n", problems.MemberSettingInvalid, 7},
+		"slurm relay ports": {"g:\n  members:\n    - name: a\n      backend: slurm\n      settings:\n        relay:\n          ports: 0\n", problems.MemberSettingInvalid, 7},
+		"slurm relay":       {"g:\n  members:\n    - name: a\n      backend: slurm\n      settings:\n        relay: 10.0.0.0/8\n", problems.MemberSettingInvalid, 6},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := configDir(t, map[string]string{GroupsFile: tc.text})

@@ -75,6 +75,10 @@ type State struct {
 	Delay map[string]float64 `json:"delay,omitempty"`
 	// Federation is the federation the cluster is one of, or "".
 	Federation string `json:"federation,omitzero"`
+	// Controller is SlurmctldHost's value, as n1 or ctl(10.0.0.2), and
+	// SrunPortRange the ports srun listens at, or 0-0 for any.
+	Controller    string `json:"controller,omitzero"`
+	SrunPortRange string `json:"srunPortRange,omitzero"`
 }
 
 // A Partition is a partition. MaxTime and DefaultTime are as scontrol

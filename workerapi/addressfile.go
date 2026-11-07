@@ -38,6 +38,11 @@ type AddressFile struct {
 	// does every so often while it listens, so that a reader can tell a
 	// file whose writer has gone.
 	Updated int64 `json:"updated"`
+	// Nonce is its writer's own, random, in hex, so that a writer that
+	// finds another's there, as a listener that took its place, leaves it
+	// be; "" for none. Only a writer checks it: a worker doesn't use it,
+	// and refuses no file for it, as one a later writer writes otherwise.
+	Nonce string `json:"nonce,omitzero"`
 }
 
 // MaxAddressFile is the most bytes of an address file a reader reads, and
@@ -72,6 +77,9 @@ func (e *AddressFileError) Unwrap() error { return e.Err }
 func (f *AddressFile) Marshal() ([]byte, error) {
 	if err := f.check(); err != nil {
 		return nil, err
+	}
+	if len(f.Nonce) > 64 || strings.Trim(f.Nonce, "0123456789abcdef") != "" {
+		return nil, &AddressFileError{At: "/nonce", Err: fmt.Errorf("%q isn't a nonce", f.Nonce)}
 	}
 	data, err := jsonv2.Marshal(f, jsonv2.Deterministic(true))
 	if err != nil {

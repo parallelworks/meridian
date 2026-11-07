@@ -37,6 +37,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -337,6 +338,25 @@ func (s *Server) ServeMember(ctx context.Context, l net.Listener, member string,
 	return s.serve(ctx, ml, ml.conns)
 }
 
+// serverLog is where an HTTP server of the API says what it says of a
+// connection: at Warn, but a failed TLS handshake at Debug, as any program
+// that connects to a member's listener and goes makes, as a port scan of
+// a login node does, which would fill meridian run's output otherwise.
+type serverLog struct {
+	ctx context.Context //nolint:containedctx // the server's, which a log.Logger's Write has none of
+	log *slog.Logger
+}
+
+func (l serverLog) Write(p []byte) (int, error) {
+	msg := strings.TrimSuffix(string(p), "\n")
+	level := slog.LevelWarn
+	if strings.HasPrefix(msg, "http: TLS handshake error") {
+		level = slog.LevelDebug
+	}
+	l.log.Log(l.ctx, level, msg)
+	return len(p), nil
+}
+
 // serve serves the worker API on l, whose connections conns holds, as
 // Serve says.
 func (s *Server) serve(ctx context.Context, l net.Listener, conns *connSet) error {
@@ -354,8 +374,8 @@ func (s *Server) serve(ctx context.Context, l net.Listener, conns *connSet) erro
 		Protocols:         &protocols,
 		ConnState:         conns.setState,
 		// What the HTTP server says of a connection, as a handshake that
-		// failed, goes where the server's own words do.
-		ErrorLog: slog.NewLogLogger(s.log.Handler(), slog.LevelWarn),
+		// failed, goes where the server's own words do (serverLog).
+		ErrorLog: log.New(serverLog{context.WithoutCancel(ctx), s.log}, "", 0),
 		// The requests' context ends with ctx, which ends the control
 		// polls held, so that a shutdown waits for none of them.
 		BaseContext: func(net.Listener) context.Context { return ctx },

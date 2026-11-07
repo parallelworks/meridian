@@ -1,0 +1,76 @@
+# groups.yaml, in Meridian's config directory (~/.config/meridian on
+# Linux, ~/Library/Application Support/Meridian on macOS): the execution
+# groups a job's runs-on: { execution-group: <name> } names, or that
+# meridian run --group chooses for the jobs that name none. Only you may
+# change it. A group of the same name as the built-in local one replaces
+# it.
+#
+# Each group is its name, with members, which a job is placed on in order:
+# the first that would start it soonest, of those that can run it.
+# Each member has:
+#   name             required: letters, digits, _, - and ., as a group's.
+#   backend          required: local, ssh or slurm; kubernetes and pbs
+#                    aren't built yet.
+#   isolation        host, to run jobs on the host, as every built backend
+#                    does today; a container runtime runs no job yet, and
+#                    nor does none, a rootless container, but for a slurm
+#                    member, for which none is the host.
+#   resources        the most it offers a job: cpu, as 4 or 500m, memory,
+#                    as 8Gi, and gpu, a count.
+#   max-walltime     the longest a job may ask for, its timeout: and the
+#                    margin, as 12h; a slurm member's is its partition's
+#                    MaxTime, or less.
+#   margin           what a job asks for beyond its timeout:, to start its
+#                    worker, run its cleanup: commands and report; a slurm
+#                    member's is 5m unless it says.
+#   default-timeout  the timeout: of a job that has none.
+#   settings         its backend's own.
+#
+# A slurm member submits jobs to Slurm, 21.08 or later, on this machine,
+# which must be the cluster's login node. Its settings:
+#   partition    the partition, or the cluster's default.
+#   account, qos, reservation
+#                as sbatch's --account, --qos and --reservation.
+#   nodes        how many nodes a job asks for.
+#   exclusive    true asks for whole nodes.
+#   gpu-type     the type of GPU a job's resources: gpu asks for.
+#   walltime     a fixed time to ask for, as 4h, whatever a job's timeout:.
+#   relay        where its jobs reach Meridian on this machine: network, a
+#                private network, as 10.1.0.0/16, of whose addresses they
+#                reach it at; and ports, a range of ports to listen at, as
+#                60001-63000, which your site's firewall opens, where it
+#                doesn't set Slurm's SrunPortRange. Without them, Meridian
+#                listens on each private address, those on the network of
+#                Slurm's controller first, at a port of SrunPortRange, or
+#                any.
+#   host         a login node over SSH, which isn't built yet.
+# Meridian keeps what its jobs read in your home, which the cluster's
+# nodes must share: ${XDG_STATE_HOME:-~/.local/state}/meridian/batch and
+# runs, and ${XDG_CACHE_HOME:-~/.cache}/meridian/bin. Its own state,
+# MERIDIAN_STATE_DIR, must be on this machine's own disk.
+
+hpc:
+  members:
+    # A job that calls a workflow never runs on a scheduler's member: it
+    # would hold its allocation while the workflow it calls ran.
+    - name: gpu
+      backend: slurm
+      isolation: host
+      max-walltime: 24h
+      settings:
+        partition: gpu
+        account: proj42
+        gpu-type: a100
+        relay: {network: 10.1.0.0/16}
+    # Jobs that call workflows run here, on the login node.
+    - name: login
+      backend: local
+      isolation: host
+      resources: {cpu: 2, memory: 4Gi}
+
+lab:
+  members:
+    - name: box
+      backend: ssh
+      isolation: host
+      settings: {remoteHost: lab-login}

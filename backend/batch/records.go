@@ -449,7 +449,7 @@ func (d *Driver) newSubmission(attempt string) (string, int, error) {
 // submissionOf returns the directory of the attempt's submission whose job
 // is id, or "" if none says so.
 func (d *Driver) submissionOf(attempt, id string) (string, error) {
-	if !attemptPattern.MatchString(attempt) {
+	if !validAttempt(attempt) {
 		return "", nil
 	}
 	ns, err := d.submissions(attempt)
@@ -472,7 +472,7 @@ func (d *Driver) removeSubmission(attempt string, n int) error {
 
 // removeAttempt removes the attempt's submissions.
 func (d *Driver) removeAttempt(attempt string) error {
-	if !attemptPattern.MatchString(attempt) {
+	if !validAttempt(attempt) {
 		return nil
 	}
 	return d.removeIn(attempt)
@@ -510,7 +510,7 @@ func (d *Driver) sweep() {
 		}
 		for _, e := range entries {
 			attempt := e.Name()
-			if !e.IsDir() || !attemptPattern.MatchString(attempt) {
+			if !e.IsDir() || !validAttempt(attempt) {
 				continue
 			}
 			ns, err := d.submissions(attempt)

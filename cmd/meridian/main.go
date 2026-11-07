@@ -30,7 +30,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
-	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/backend/batch"
 	backendssh "github.com/parallelworks/meridian/backend/ssh"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator"
@@ -110,9 +110,9 @@ type cli struct {
 	// workers run on, as coordinator.ServeMembers does, which a test
 	// replaces; nil for it.
 	serveMembers func(*coordinator.Coordinator, context.Context, coordinator.Logs) error
-	// drivers are drivers a test adds to the coordinator's, of backends
-	// this release doesn't register yet, as a scheduler's; nil for none.
-	drivers map[string]backend.Driver
+	// schedulers changes how the slurm backend's driver runs, as a test
+	// has it run a fake cluster's commands; nil for nothing.
+	schedulers func(*batch.Driver)
 	// sources is what a test gives in place of the user's Git
 	// repositories (cacheSources) for the workflows a workflow's steps
 	// call, nil for theirs; and trees for the trees its checkout steps

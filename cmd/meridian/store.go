@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -38,8 +37,11 @@ func startQueue(id string) string { return "meridian.start." + id }
 // runs each job's worker as a process of the user's, which reaches the
 // coordinator on its socket, with the environment of the command but the
 // variables that hold secret variables' values (local.Config.SecretEnv);
-// and the ssh backend, which reaches hosts as the user's ssh would, and
-// names them by a key derived from the state directory's key file. It
+// the ssh backend, which reaches hosts as the user's ssh would, and
+// names them by a key derived from the state directory's key file; and
+// the slurm backend, which submits jobs to Slurm on this machine, its
+// login node, whose workers reach the coordinator over TLS
+// (slurmDriver). It
 // serves members' workers that reach it over TLS with the state
 // directory's coordinator key (local.CoordinatorKey), which every process
 // of the directory shares. It logs what no answer says to c's standard
@@ -76,6 +78,10 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	if err != nil {
 		return nil, err
 	}
+	slurm, slurmRuns, err := slurmDriver(c, keys, cfg.SecretEnv())
+	if err != nil {
+		return nil, err
+	}
 	version, _ := buildVersion()
 	opts := backendssh.Options{
 		Home: c.getenv("HOME"), Getenv: c.getenv,
@@ -107,8 +113,8 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	drivers := map[string]backend.Driver{
 		"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()},
 		"ssh":   ssh,
+		"slurm": slurm,
 	}
-	maps.Copy(drivers, c.drivers)
 	coord, err := coordinator.Open(ctx, coordinator.Options{
 		Database: db, Keys: keys,
 		Variables: cfg, Inputs: cfg, Groups: cfg, Env: platformEnv(user),
@@ -124,9 +130,9 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 		host.Close()
 		return nil, errors.Join(err, ssh.Close())
 	}
-	// The store names runs' directories on hosts, with their runs, and
-	// its sessions' secrets.
-	ssh.Store = coord.StoreID()
+	// The store names runs' directories on hosts, and on a cluster, with
+	// their runs, and its sessions' secrets.
+	ssh.Store, slurmRuns.store = coord.StoreID(), coord.StoreID()
 	host.Attach(coord.StoreID(), coord)
 	return &coordination{coord: coord, sessions: host, closeSessions: host.Close, closeCoord: coord.Close}, nil
 }

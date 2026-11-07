@@ -5,6 +5,7 @@ package batch_test
 import (
 	"crypto/rand"
 	"encoding/json/jsontext"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -60,7 +61,29 @@ func slurmDriver(t *testing.T, opts ...func(*schedtest.State)) (*batch.Driver, *
 	}
 	cl := &clock{t: time.Now()}
 	batch.SetClock(d, cl.now)
+	batch.SetInterfaces(d, func() ([]netip.Prefix, error) { return []netip.Prefix{netip.MustParsePrefix("10.9.0.5/16")}, nil })
 	return d, c, cl
+}
+
+// TestSlurmMemberKeys checks that slurm members whose relay ports differ,
+// as Slurm's settings read them, have listeners of their own, and those
+// whose other settings alone differ share one.
+func TestSlurmMemberKeys(t *testing.T) {
+	t.Parallel()
+	d, _, _ := slurmDriver(t)
+	key := func(settings string) string {
+		t.Helper()
+		k, err := d.MemberKey(&backend.Member{Name: "m", Backend: "slurm", Settings: jsontext.Value(settings)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	a, b := key(`{"partition":"debug"}`), key(`{"partition":"debug","account":"x"}`)
+	c, e := key(`{"relay":{"ports":"60001-60100"}}`), key(`{"relay":{"ports":"60001-60200"}}`)
+	if a != b || a == c || c == e {
+		t.Errorf("the keys are %s and %s alike, and %s and %s", a, b, c, e)
+	}
 }
 
 // TestSlurmCheck checks each row of the design's table of what Slurm and

@@ -1579,7 +1579,7 @@
     ]
   },
   "home_unknown": {
-    "why": "Meridian keeps its config, state and cache in directories in your home directory, unless MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR and MERIDIAN_CACHE_DIR choose others.",
+    "why": "Meridian keeps its config, state and cache in directories in your home directory, unless MERIDIAN_CONFIG_DIR, MERIDIAN_STATE_DIR and MERIDIAN_CACHE_DIR choose others. What a scheduler's jobs read, which must be in the home a cluster's nodes share, is in XDG_STATE_HOME's and XDG_CACHE_HOME's meridian directories, or else in the home, whatever MERIDIAN_STATE_DIR and MERIDIAN_CACHE_DIR say.",
     "fix": [
       "Set HOME to your home directory.",
       "Or set the variable the message names to an absolute path."
@@ -2413,10 +2413,17 @@
       "Ask for less in the job's resources:, declare what the member offers in groups.yaml, or run the job in a group with a member that offers enough."
     ]
   },
-  "backend_not_built": {
-    "why": "A member names the backend that starts workers on it: local, ssh, kubernetes, slurm or pbs. This release of Meridian has only the local backend, so placement leaves a member of another backend out, and places the job on another member of its group if there is one.",
+  "walltime_exceeds_member": {
+    "why": "A member that runs jobs within a time limit, as a scheduler's partition does, or that sets max-walltime in groups.yaml, says the longest walltime it allows a job. A job asks for its timeout:, or else the member's default timeout, and the member's margin, which is for starting the worker, running the job's cleanup: commands and sending its reports. A job that would ask for more than the member allows could never run there, or would be ended by its scheduler before its own timeout:, so placement leaves the member out, and places the job on another member of its group if one allows enough. A job with no timeout:, on a member with no default, asks for no time, and isn't left out.",
     "fix": [
-      "Run the job in a group with a member of the local backend, until a release has the member's backend."
+      "Shorten the job's timeout:, or run the job in a group with a member that allows a longer walltime.",
+      "Or let the member allow more, up to what its partition does, with its max-walltime in groups.yaml, or give it a shorter margin."
+    ]
+  },
+  "backend_not_built": {
+    "why": "A member names the backend that starts workers on it: local, ssh, kubernetes, slurm or pbs. This release of Meridian has the local, ssh and slurm backends, and the slurm backend only for a login node that Meridian runs on: so placement leaves out a member of another backend, and a slurm member that names another login node (host), and places the job on another member of its group if there is one.",
+    "fix": [
+      "Run the job in a group with a member of a backend this release has, or run Meridian on the cluster's login node and drop the member's host, until a release has what the member needs."
     ]
   },
   "worker_binary_unsafe": {
@@ -2679,7 +2686,7 @@
     ]
   },
   "member_setting_invalid": {
-    "why": "A member of the slurm backend takes these settings, in groups.yaml: partition, account, qos and reservation, as text; nodes, a whole number of at least 1; exclusive, true or false; gpu-type, as text; walltime, a duration, written as a workflow's timeout: is; and host, the login node, which a later release reaches over SSH. A key it doesn't take, a value of another type, or one it can't use, as text with a control character, is refused rather than ignored, so that a job is never submitted other than as the member says. A member's max-walltime and walltime can't be longer than its partition's MaxTime, to which the scheduler would hold a job; and where the cluster has no default partition, the member must name one.",
+    "why": "A member of the slurm backend takes these settings, in groups.yaml: partition, account, qos and reservation, as text; nodes, a whole number of at least 1; exclusive, true or false; gpu-type, as text; walltime, a duration, written as a workflow's timeout: is; relay, a mapping of network, a network in CIDR notation, as 10.1.0.0/16, every address of which is private, whose addresses of the login node the member's workers reach the coordinator at, written relay.network, and ports, a port, or a range of them, as 60001-63000, that it listens at, written relay.ports; and host, the login node, which a later release reaches over SSH. A key it doesn't take, a value of another type, or one it can't use, as text with a control character, is refused rather than ignored, so that a job is never submitted other than as the member says. A member's max-walltime and walltime can't be longer than its partition's MaxTime, to which the scheduler would hold a job; and where the cluster has no default partition, the member must name one.",
     "fix": [
       "Correct the setting in groups.yaml, as the message says.",
       "scontrol show partition shows a partition's limits, and which partition is the default."
@@ -2724,7 +2731,7 @@
     ]
   },
   "scheduler_relay_unreachable": {
-    "why": "A job's worker reaches the coordinator through a relay on the login node, whose addresses a file in your home says. The file was updated within the last three minutes, so a relay was up, but the job's node couldn't connect to any of its addresses within a minute: a firewall between the compute nodes and the login node, or addresses the nodes have no route to, can keep it out. The job stopped before its worker started, rather than hold its allocation, and is placed again.",
+    "why": "A job's worker reaches the coordinator through a relay on the login node, or the coordinator itself there, whose addresses a file in your home says, which the job reads again each second. The file was updated within the last three minutes, so a listener was up, but the job's node couldn't complete a TLS handshake with the coordinator's key at any of its addresses within a minute: a firewall between the compute nodes and the login node, or addresses the nodes have no route to, can keep it out, and a server at one of them that holds another key, as one at a port another program took, isn't the coordinator. The job stopped before its worker started, rather than hold its allocation, and is placed again.",
     "fix": [
       "Check that the compute nodes can connect to the login node at the addresses the message names, as srun needs them to.",
       "Ask the cluster's administrators which network, and which ports, the compute nodes may reach the login node on."
@@ -2735,6 +2742,19 @@
     "fix": [
       "Add a member that isn't a batch scheduler's to the job's group, as the cluster's login node through the ssh backend, where the job can wait for the workflow it calls.",
       "Or move the job's own work into a job of its own, which the calling job needs, or which needs it, and which can run on the scheduler's member: the two share files through the run's directory."
+    ]
+  },
+  "scheduler_relay_no_address": {
+    "why": "A scheduler's compute nodes reach the coordinator through its login node, where Meridian runs there: it listens for the member's workers there, and writes where to a file in the home the cluster's nodes share, which the workers read. It listens only on the login node's private addresses, those of RFC 1918 and RFC 6598 and IPv6's unique local ones, on interfaces that are up and running, never on a loopback, link-local or public one, so that nothing outside the site's own networks can reach it; where the member's relay.network names a network, only on those in it. Those the system routes to the scheduler's controller from, or in its network, come first, since compute nodes reach it. This login node has none, so the member's jobs would never reach the coordinator, and placement leaves the member out.",
+    "fix": [
+      "Run Meridian on a login node that has a private address on the network its compute nodes share, as ip address shows.",
+      "Or, where the member's relay.network names a network, name one that holds one of the login node's private addresses."
+    ]
+  },
+  "scheduler_placement_elsewhere": {
+    "why": "A placement on a scheduler's member names the cluster its job was submitted to, by a keyed hash of the cluster's name, since a job's ID means a job only on its own cluster. The scheduler's commands Meridian runs now reach another cluster, as after SLURM_CONF changed, so Meridian can't ask about the job, nor cancel it. It takes the job's worker to be running for five minutes, time to set it back, and then loses the attempt with this problem.",
+    "fix": [
+      "Run Meridian where the scheduler's commands reach the cluster the job was submitted to, as with the SLURM_CONF it ran with."
     ]
   },
   "scheduler_command_missing": {

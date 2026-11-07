@@ -7,6 +7,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"io/fs"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,6 +45,10 @@ type fakeScheduler struct {
 	infoErr  error
 	infos    int
 	infoHold chan struct{}
+	// relay is every member's relay, or nil for none.
+	relay *Relay
+	// config is what Config says.
+	config string
 }
 
 func newFake() *fakeScheduler {
@@ -56,19 +61,39 @@ func newFake() *fakeScheduler {
 
 func (f *fakeScheduler) Name() string { return "fake" }
 
-// Settings takes partition and host, as text, and walltime, as seconds.
+// WalltimeUnit is a minute, as Slurm's.
+func (f *fakeScheduler) WalltimeUnit() int64 { return 60 }
+
+// Config is the fake's config, "fake" for none.
+func (f *fakeScheduler) Config() string {
+	if f.config == "" {
+		return "fake"
+	}
+	return f.config
+}
+
+// Settings takes partition and host, as text, walltime, as seconds, and
+// network, a relay's, in CIDR notation.
 func (f *fakeScheduler) Settings(member string, raw jsontext.Value) (*Settings, error) {
 	var keys struct {
 		Partition string `json:"partition"`
 		Host      string `json:"host"`
 		Walltime  int64  `json:"walltime"`
+		Network   string `json:"network"`
 	}
 	if len(raw) > 0 {
 		if err := jsonv2.Unmarshal(raw, &keys, jsonv2.RejectUnknownMembers(true)); err != nil {
 			return nil, problems.MemberSettingInvalid.Problem(problems.Params{"member": member, "key": "?", "reason": "unknown"})
 		}
 	}
-	return &Settings{Partition: keys.Partition, Host: keys.Host, WalltimeSeconds: keys.Walltime}, nil
+	s := &Settings{Partition: keys.Partition, Host: keys.Host, WalltimeSeconds: keys.Walltime}
+	if f.relay != nil {
+		s.Relay = *f.relay
+	}
+	if keys.Network != "" {
+		s.Relay.Network = netip.MustParsePrefix(keys.Network)
+	}
+	return s, nil
 }
 
 func (f *fakeScheduler) Info(context.Context) (*Info, error) {
@@ -216,6 +241,7 @@ func newDriver(t *testing.T, f *fakeScheduler) (*Driver, *fakeClock) {
 	}
 	d.timing = defaultTiming
 	d.timing.now = clock.now
+	d.interfaces = func() ([]netip.Prefix, error) { return []netip.Prefix{netip.MustParsePrefix("10.9.0.5/16")}, nil }
 	return d, clock
 }
 
@@ -324,15 +350,15 @@ func TestProbe(t *testing.T) {
 	}{
 		{
 			name: "fits", member: *testMember,
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 3600, MarginSeconds: 300, DefaultTimeoutSeconds: 900},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 3600, MarginSeconds: 300, DefaultTimeoutSeconds: 900, WalltimeUnitSeconds: 60},
 		},
 		{
 			name: "own limits", member: backend.Member{Name: "m", Settings: jsontext.Value(`{}`), MaxWalltimeSeconds: 1800, MarginSeconds: 60, DefaultTimeoutSeconds: 100},
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1800, MarginSeconds: 60, DefaultTimeoutSeconds: 100},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1800, MarginSeconds: 60, DefaultTimeoutSeconds: 100, WalltimeUnitSeconds: 60},
 		},
 		{
 			name: "fixed walltime", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"walltime":1000}`)},
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 3600, MarginSeconds: 300, DefaultTimeoutSeconds: 700},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 3600, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60},
 		},
 		{name: "unknown partition", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"partition":"gpu"}`)}, want: problems.SchedulerPartitionUnknown},
 		{
@@ -803,6 +829,79 @@ func TestCancelForget(t *testing.T) {
 	}
 }
 
+// TestForcedSnapshots checks that callers that force a snapshot, as
+// Forget does, get one made since they asked, but no sooner than
+// timing.forced after the last, so that many that end at once, as a
+// matrix's attempts do, share them.
+func TestForcedSnapshots(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	d.timing.forced = 300 * time.Millisecond
+	p, sub := place(t, d, "a1")
+	f.set("101", JobStatus{State: backend.Running})
+	fresh(d)
+	if _, err := d.Check(t.Context(), testMember, p); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Now()
+	calls := f.calls()
+	for range 2 {
+		asked := time.Now()
+		if _, _, err := d.poll.status(t.Context(), "101", sub, asked); err != nil {
+			t.Fatal(err)
+		}
+		if d.poll.snap.at.Before(asked) {
+			t.Error("a forced snapshot was made before it was asked for")
+		}
+	}
+	if got := f.calls() - calls; got != 2 {
+		t.Errorf("two forced snapshots asked the queue %d times", got)
+	}
+	if since := time.Since(took); since < 2*d.timing.forced {
+		t.Errorf("two forced snapshots took %v, less than twice the gap", since)
+	}
+}
+
+// TestForgetEnded checks that Forget takes a job to have ended where its
+// records say so, as meridian batch's exit record does, though a snapshot
+// of the queue made before still says it runs; and that, without records,
+// it asks the scheduler again rather than go by a snapshot made before it
+// was asked, which can predate the attempt's end.
+func TestForgetEnded(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	p, sub := place(t, d, "a1")
+	f.set("101", JobStatus{State: backend.Running})
+	if st, err := d.Check(t.Context(), testMember, p); err != nil || st.State != backend.Running {
+		t.Fatalf("the job is %+v, %v", st, err)
+	}
+	calls := f.calls()
+	writeRecords(t, sub, records{exit: &Exit{Status: 0, At: time.Now()}})
+	if err := d.Forget(t.Context(), testMember, p); err != nil {
+		t.Fatalf("Forget of a job whose worker exited: %v", err)
+	}
+	if _, err := os.Lstat(sub); !errors.Is(err, fs.ErrNotExist) || f.calls() != calls {
+		t.Errorf("the submission: %v; the queue asked %d times more", err, f.calls()-calls)
+	}
+
+	d.timing.forced = 0
+	p, sub = place(t, d, "a2")
+	f.set("102", JobStatus{State: backend.Running})
+	fresh(d)
+	if st, err := d.Check(t.Context(), testMember, p); err != nil || st.State != backend.Running {
+		t.Fatalf("the job is %+v, %v", st, err)
+	}
+	f.set("102", JobStatus{State: backend.Dead, End: backend.EndExited})
+	if err := d.Forget(t.Context(), testMember, p); err != nil {
+		t.Fatalf("Forget of a job that ended since the snapshot: %v", err)
+	}
+	if _, err := os.Lstat(sub); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the submission: %v", err)
+	}
+}
+
 // TestOtherCluster checks that a placement made on another cluster isn't
 // taken for one of this cluster's jobs, whose IDs it may share.
 func TestOtherCluster(t *testing.T) {
@@ -812,11 +911,13 @@ func TestOtherCluster(t *testing.T) {
 	p, _ := place(t, d, "a1")
 	other, _ := newDriver(t, f)
 	other.Dir = d.Dir
-	if st, err := other.Check(t.Context(), testMember, p); err == nil || st.State != backend.Unknown {
+	st, err := other.Check(t.Context(), testMember, p)
+	if kindtest.Want(t, err, problems.SchedulerPlacementElsewhere); st.State != backend.Unknown {
 		t.Errorf("a check with another key: %+v, %v", st, err)
 	}
-	if err := other.Cancel(t.Context(), testMember, p); err == nil || len(f.cancelled) > 0 {
-		t.Errorf("a cancel with another key: %v, cancelled %v", err, f.cancelled)
+	err = other.Cancel(t.Context(), testMember, p)
+	if kindtest.Want(t, err, problems.SchedulerPlacementElsewhere); len(f.cancelled) > 0 {
+		t.Errorf("a cancel with another key cancelled %v", f.cancelled)
 	}
 }
 

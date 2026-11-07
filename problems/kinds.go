@@ -624,15 +624,17 @@ var (
 // backend (package backend), whose Fit or error the attempt records:
 // member is the member's name; isolation what it names, which
 // has_isolation says it does; resource is cpu, memory or gpu, with asks
-// and offers in thousandths of a core, bytes or GPUs; backend is the
-// member's; path is the meridian binary's that would start the worker, and
-// code the problem with it, whose page says why; ended says whether a
-// worker that didn't take its token ended first, with the exit status
-// exit, or didn't ask for it in time, and log is the file its standard
-// error is in.
+// and offers in thousandths of a core, bytes or GPUs; walltime is what a
+// job would ask for, its timeout and the member's margin, and max the
+// longest the member allows, in seconds; backend is the member's; path is
+// the meridian binary's that would start the worker, and code the problem
+// with it, whose page says why; ended says whether a worker that didn't
+// take its token ended first, with the exit status exit, or didn't ask for
+// it in time, and log is the file its standard error is in.
 var (
 	IsolationNotBuilt     = define(Error, "isolation_not_built", "Isolation its backend can't give yet", "member", "isolation", "has_isolation")
 	ResourcesExceedMember = define(Error, "resources_exceed_member", "Job asks for more than its member offers", "member", "resource", "asks", "offers")
+	WalltimeExceedsMember = define(Error, "walltime_exceeds_member", "Job whose time limit is longer than its member allows", "member", "walltime", "max")
 	BackendNotBuilt       = define(Error, "backend_not_built", "Backend this release doesn't have yet", "member", "backend")
 	WorkerBinaryUnsafe    = define(Error, "worker_binary_unsafe", "Meridian binary that isn't safe to start", "path", "code")
 	WorkerTokenNotTaken   = define(Error, "worker_token_not_taken", "Worker that didn't take its token", "ended", "exit", "log")
@@ -734,7 +736,8 @@ var (
 // state what the scheduler says of it. id is a job's ID, as its scheduler
 // gives it; and reason, of the others, and said, what the scheduler, or
 // the job, said, on one line. node is a compute node's name, and
-// addresses where a relay listens, as QuoteAll writes them. host is the
+// addresses where a relay listens, as QuoteAll writes them; network is a
+// member's relay network, which has_network says it names. host is the
 // login node's name, as it says it; command is one of the scheduler's
 // commands, and path where it is, with code the problem with it;
 // scheduler is slurm or pbs, version its release, or unknown, minimum the
@@ -742,20 +745,22 @@ var (
 // federation; and variable is an environment variable's name, value what
 // it holds, and cluster the cluster's own name.
 var (
-	MemberSettingInvalid      = define(Error, "member_setting_invalid", "Member's setting its backend can't use", "member", "key", "reason")
-	SchedulerCommandMissing   = define(Error, "scheduler_command_missing", "Scheduler's command not found", "host", "command")
-	SchedulerCommandUnsafe    = define(Error, "scheduler_command_unsafe", "Scheduler's command that isn't safe to run", "host", "path", "code")
-	SchedulerUnsupported      = define(Error, "scheduler_unsupported", "Scheduler Meridian doesn't support", "host", "scheduler", "version", "minimum", "federated")
-	SchedulerClusterVariable  = define(Error, "scheduler_cluster_variable", "Variable that sends Slurm's commands to another cluster", "host", "variable", "value", "cluster")
-	SchedulerTokenRequired    = define(Error, "scheduler_token_required", "Login node where sbatch needs a token", "host")
-	SchedulerPartitionUnknown = define(Error, "scheduler_partition_unknown", "Partition the cluster doesn't have", "member", "partition")
-	SchedulerPartitionDown    = define(Error, "scheduler_partition_down", "Partition that takes no jobs", "member", "partition", "state")
-	SchedulerRejected         = define(Error, "scheduler_rejected", "Job the scheduler refused", "member", "reason")
-	SchedulerJobCannotStart   = define(Error, "scheduler_job_cannot_start", "Job that could never start", "id", "reason")
-	SchedulerJobVanished      = define(Error, "scheduler_job_vanished", "Job the scheduler no longer knows", "id")
-	SchedulerWorkerNotStarted = define(Error, "scheduler_worker_not_started", "Job that ended without starting its worker", "id", "said")
-	SchedulerRelayUnreachable = define(Error, "scheduler_relay_unreachable", "Job that couldn't reach the coordinator's relay", "node", "addresses")
-	SchedulerCallerRefused    = define(Error, "scheduler_caller_refused", "Job that calls a workflow, which a batch scheduler's member doesn't run", "member")
+	MemberSettingInvalid        = define(Error, "member_setting_invalid", "Member's setting its backend can't use", "member", "key", "reason")
+	SchedulerCommandMissing     = define(Error, "scheduler_command_missing", "Scheduler's command not found", "host", "command")
+	SchedulerCommandUnsafe      = define(Error, "scheduler_command_unsafe", "Scheduler's command that isn't safe to run", "host", "path", "code")
+	SchedulerUnsupported        = define(Error, "scheduler_unsupported", "Scheduler Meridian doesn't support", "host", "scheduler", "version", "minimum", "federated")
+	SchedulerClusterVariable    = define(Error, "scheduler_cluster_variable", "Variable that sends Slurm's commands to another cluster", "host", "variable", "value", "cluster")
+	SchedulerTokenRequired      = define(Error, "scheduler_token_required", "Login node where sbatch needs a token", "host")
+	SchedulerPartitionUnknown   = define(Error, "scheduler_partition_unknown", "Partition the cluster doesn't have", "member", "partition")
+	SchedulerPartitionDown      = define(Error, "scheduler_partition_down", "Partition that takes no jobs", "member", "partition", "state")
+	SchedulerRejected           = define(Error, "scheduler_rejected", "Job the scheduler refused", "member", "reason")
+	SchedulerJobCannotStart     = define(Error, "scheduler_job_cannot_start", "Job that could never start", "id", "reason")
+	SchedulerJobVanished        = define(Error, "scheduler_job_vanished", "Job the scheduler no longer knows", "id")
+	SchedulerWorkerNotStarted   = define(Error, "scheduler_worker_not_started", "Job that ended without starting its worker", "id", "said")
+	SchedulerRelayUnreachable   = define(Error, "scheduler_relay_unreachable", "Job that couldn't reach the coordinator's relay", "node", "addresses")
+	SchedulerCallerRefused      = define(Error, "scheduler_caller_refused", "Job that calls a workflow, which a batch scheduler's member doesn't run", "member")
+	SchedulerRelayNoAddress     = define(Error, "scheduler_relay_no_address", "Login node without a private address its compute nodes reach", "member", "host", "network", "has_network")
+	SchedulerPlacementElsewhere = define(Error, "scheduler_placement_elsewhere", "Job on another cluster than the scheduler's commands reach", "host")
 )
 
 // The meridian command's directories. mode is a file's or directory's

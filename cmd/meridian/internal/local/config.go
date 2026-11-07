@@ -2,6 +2,7 @@ package local
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,9 +15,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/parallelworks/foundation/problem"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/backend/slurm"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/plan"
@@ -336,6 +339,7 @@ func (f configFile) member(group string, i int, n *yaml.Node) (backend.Member, e
 	invalid := func(at *yaml.Node, key, value string) error {
 		return f.problem(problems.MemberInvalid, at, problems.Params{"group": group, "key": key, "value": problems.Show(value)})
 	}
+	var settings *yaml.Node
 	for _, p := range pairs {
 		key, v := p.key.Value, p.value
 		switch key {
@@ -343,6 +347,7 @@ func (f configFile) member(group string, i int, n *yaml.Node) (backend.Member, e
 			if err := f.mapping(key, v); err != nil {
 				return m, err
 			}
+			settings = v
 			var settings map[string]any
 			if err := v.Decode(&settings); err != nil {
 				return m, f.problem(problems.ConfigYAMLSyntax, v, problems.Params{"reason": err.Error()})
@@ -394,7 +399,49 @@ func (f configFile) member(group string, i int, n *yaml.Node) (backend.Member, e
 	case m.Backend == "":
 		return m, invalid(n, "backend", "")
 	}
-	return m, nil
+	return m, f.backendSettings(&m, n, settings)
+}
+
+// backendSettings checks the settings of m, which n holds, under the key
+// settings holds, or none, through m's backend, as its driver decodes
+// them: a slurm member's (slurm.Scheduler.Settings). One it can't use is
+// member_setting_invalid, at the key it names, or else at the settings.
+// The others' backends check theirs as they place a job.
+func (f configFile) backendSettings(m *backend.Member, n, settings *yaml.Node) error {
+	if m.Backend != "slurm" {
+		return nil
+	}
+	_, err := new(slurm.Scheduler).Settings(m.Name, m.Settings)
+	p, ok := errors.AsType[*problem.Problem](err)
+	if !ok {
+		return err
+	}
+	at := cmp.Or(settings, n)
+	if key, _ := p.Params["key"].(string); settings != nil {
+		at = settingNode(settings, strings.Split(key, "."))
+	}
+	return f.problem(problems.MemberSettingInvalid, at, maps.Clone(p.Params))
+}
+
+// settingNode returns the key of the setting path names, as relay.ports is
+// relay's ports, in the mapping n, or the nearest mapping that holds it.
+func settingNode(n *yaml.Node, path []string) *yaml.Node {
+	for len(path) > 0 && n.Kind == yaml.MappingNode {
+		var next *yaml.Node
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if n.Content[i].Value == path[0] {
+				if len(path) == 1 {
+					return n.Content[i]
+				}
+				next = deref(n.Content[i+1])
+			}
+		}
+		if next == nil {
+			return n
+		}
+		n, path = next, path[1:]
+	}
+	return n
 }
 
 // resources reads a member's resources, which n holds, into r.
