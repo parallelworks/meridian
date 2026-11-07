@@ -88,11 +88,19 @@ type Request struct {
 }
 
 // A Demand is a backend.Demand, what a job asks a member for, with the
-// attempts that are parked (backend.Demand.Parked).
+// attempts that are parked (backend.Demand.Parked), and whether it calls a
+// workflow, which a batch scheduler's member refuses: every field but
+// Tries, which the coordinator counts, and the helper doesn't read.
 type Demand struct {
 	Resources      backend.Resources `json:"resources,omitzero"`
 	TimeoutSeconds int64             `json:"timeoutSeconds,omitzero"`
 	Parked         []string          `json:"parked,omitzero"`
+	CallsWorkflow  bool              `json:"callsWorkflow,omitzero"`
+}
+
+// DemandOf is the Demand that says d.
+func DemandOf(d backend.Demand) *Demand {
+	return &Demand{Resources: d.Resources, TimeoutSeconds: d.TimeoutSeconds, Parked: d.Parked, CallsWorkflow: d.CallsWorkflow}
 }
 
 // A Place is a backend.PlaceRequest, with the run's and the store's IDs,
@@ -260,7 +268,7 @@ func (s *Status) Status() backend.Status {
 
 // Demand is the backend.Demand d says.
 func (d *Demand) Demand() backend.Demand {
-	return backend.Demand{Resources: d.Resources, TimeoutSeconds: d.TimeoutSeconds, Parked: d.Parked}
+	return backend.Demand{Resources: d.Resources, TimeoutSeconds: d.TimeoutSeconds, Parked: d.Parked, CallsWorkflow: d.CallsWorkflow}
 }
 
 // Request is the backend.PlaceRequest p says, but its run's directory,

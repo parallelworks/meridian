@@ -2562,13 +2562,16 @@ runs as any other; none of the known calls has an `ssh:` of its own.
     back and take it again, so a caller there would hold its allocation
     while its child's jobs queue, behind it where the user's limits or the
     partition leave no room for both, until its walltime or `timeout:`
-    ends it. So, once the scheduler backends are built, placement leaves
-    a `slurm` or `pbs` member out for a job with a step whose `uses:`
-    names a workflow, whatever the step's `if:` says, as it leaves out one
-    that can't offer the job's `resources:`, and the job runs on its
-    group's next member, such as the cluster's login node through the
+    ends it. So placement leaves a `slurm` or `pbs` member out for a job
+    with a step whose `uses:` names a workflow, whatever the step's `if:`
+    says, as it leaves out one that can't offer the job's `resources:`
+    (`scheduler_caller_refused`): the coordinator tells the member's
+    driver that the job calls one (`backend.Demand.CallsWorkflow`), of
+    each matrix instance, and of a caller a step called. The job runs on
+    its group's next member, such as the cluster's login node through the
     `ssh` backend; a job no member of its group can take fails as it is
-    placed, with each member's reason ([Placement](#placement)). That is
+    placed, with each member's reason, before any of its code runs
+    ([Placement](#placement)). That is
     format 1's answer: none of the 267 known calling jobs waits in an
     allocation. 241 name a host with `ssh:`, in every one the `ip` of the
     cluster a `compute-clusters` or `compute-resources` input names, its
@@ -4070,9 +4073,9 @@ one member:
 When a job is ready, the coordinator places it on one member of its group:
 
 1. **Filter.** Members that are unhealthy, or can't offer the job's
-   `resources:`, are left out, and so, once the scheduler backends are
-   built, is a batch scheduler's member for a job that calls a workflow
-   ([Workflows a step calls](#workflows-a-step-calls)). A job that no
+   `resources:`, are left out, and so is a batch scheduler's member for a
+   job that calls a workflow (`scheduler_caller_refused`,
+   [Workflows a step calls](#workflows-a-step-calls)). A job that no
    member could ever run fails when it is placed, with each member's
    reason. Refusing it when the run is created, from the resources each
    member declares, isn't built.

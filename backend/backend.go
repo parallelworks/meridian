@@ -90,7 +90,9 @@ type Driver interface {
 	// it is healthy and can offer what the job asks for, within its longest
 	// walltime, and if so how soon it would start it. Placement leaves out
 	// a member whose Fit has a Problem, and ranks the rest by their
-	// Availability, in the group's order within each.
+	// Availability, in the group's order within each. A batch scheduler's
+	// driver, a platform's own among them, refuses a job that calls a
+	// workflow (Demand.CallsWorkflow).
 	Probe(ctx context.Context, m *Member, demand Demand) (Fit, error)
 	// Connect makes m's workers able to reach the coordinator, at
 	// coordinator, where this replica listens, and returns the endpoint
@@ -192,9 +194,16 @@ type Demand struct {
 	// job, which would still hold it when the caller went on. A driver
 	// that counts what it placed against its member, as local does, leaves
 	// these out, and ignores the IDs of attempts it didn't place. A batch
-	// scheduler's driver, which is never asked to place a job that calls a
-	// workflow (docs/design.md, Workflows a step calls), ignores them all.
+	// scheduler's driver, which refuses a job that calls a workflow
+	// (CallsWorkflow), ignores them all.
 	Parked []string
+	// CallsWorkflow says whether the job has a step whose uses: names a
+	// workflow, whatever its if: says. A batch scheduler's driver, a
+	// platform's own as well as Meridian's, must refuse such a job
+	// (problems.SchedulerCallerRefused): it would hold its allocation while
+	// the run it calls ran, which an allocation can't lend, nor give back
+	// and take again (docs/design.md, Workflows a step calls).
+	CallsWorkflow bool
 	// Tries is how many times, since the job was last placed, its
 	// placement found that a member's backend couldn't answer, as the
 	// coordinator counts them: a look that couldn't, once, or, for a
