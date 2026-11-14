@@ -185,7 +185,6 @@ func init() {
 		{name: "serve", summary: "Runs a coordinator that keeps running."},
 		{name: "worker", summary: "Runs one attempt of a job. Started by backends, not by people.", run: runWorker},
 		{name: "host", args: "<operation>", summary: "Runs the local backend for a coordinator on another host. Started by backends, not by people.", about: hostAbout, hidden: true, run: runHost},
-		{name: "relay", summary: "Forwards workers' connections to a coordinator. Started by backends, not by people."},
 		{name: "version", summary: "Shows Meridian's version.", run: runVersion},
 	}
 }
