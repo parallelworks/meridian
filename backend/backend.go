@@ -23,6 +23,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/parallelworks/foundation/problem"
@@ -165,11 +166,14 @@ type Forwarder interface {
 	MemberKey(m *Member) (string, error)
 	// Endpoint returns where m's workers reach the coordinator from where
 	// they run, as Forward listens there: the same each time for the same
-	// member.
+	// member. Where it is reached over TLS (Endpoint.TLS), as through a
+	// relay, the coordinator serves TLS on what Forward's listener
+	// accepts, and fills in the endpoint's KeyHash.
 	Endpoint(ctx context.Context, m *Member) (Endpoint, error)
 	// Forward listens at m's endpoint, on m, for this replica, and returns
-	// the listener, whose connections are m's workers'. It ends with the
-	// connection it is made over, or once it is closed.
+	// the listener, whose connections are m's workers', or a relay's that
+	// passes theirs on. It ends with the connection it is made over, or
+	// once it is closed.
 	Forward(ctx context.Context, m *Member) (net.Listener, error)
 }
 
@@ -261,17 +265,33 @@ const (
 	WouldQueue
 )
 
-// An Endpoint is where a worker reaches the coordinator.
+// An Endpoint is where a worker reaches the coordinator. One whose Address
+// doesn't start with /, or that has an AddressFile, is reached over TLS
+// 1.3 (TLS).
 type Endpoint struct {
 	// Address is a Unix socket's path, which starts with /, or a host and
 	// port, as in login1:7443, for TLS 1.3.
 	Address string
+	// AddressFile is the path, where the worker runs, of a file that names
+	// the addresses it reaches the coordinator at, over TLS 1.3: a relay
+	// writes it as it listens, and again wherever it listens next, as on
+	// another login node, so the worker reads it again before each
+	// connection it makes. An endpoint with one has no Address. "" for
+	// none.
+	AddressFile string
 	// KeyHash is sha256: and the hex of the SHA-256 digest of the
 	// coordinator's TLS public key, as DER SubjectPublicKeyInfo, which the
 	// worker checks the connection against; "" for a Unix socket. TLS ends
 	// at the coordinator, not at a relay, and its replicas share one key,
 	// so the hash holds whichever replica a worker reaches.
 	KeyHash string
+}
+
+// TLS reports whether a worker reaches the coordinator at e over TLS 1.3,
+// at a host and port or at the addresses of e's AddressFile, rather than
+// on a Unix socket.
+func (e Endpoint) TLS() bool {
+	return e.AddressFile != "" || !strings.HasPrefix(e.Address, "/")
 }
 
 // A PlaceRequest is what a driver starts a worker with.

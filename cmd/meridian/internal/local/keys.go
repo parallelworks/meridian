@@ -165,16 +165,49 @@ func (k *Keys) cipher(create bool) (cipher.AEAD, error) {
 
 // readKeyFile reads the key in the key file in root, which must be a
 // regular file, not a symbolic link, that belongs to the user and that
-// only they can read (safepath.CheckFileInfo). A key file that isn't there
-// is fs.ErrNotExist.
+// only they can read (readPrivate). A key file that isn't there is
+// fs.ErrNotExist.
 func readKeyFile(root *os.Root) ([]byte, error) {
-	path := filepath.Join(root.Name(), KeyFile)
+	key, err := readPrivate(root, KeyFile, keySize+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != keySize {
+		return nil, problems.KeyFileInvalid.Problem(problems.Params{"path": filepath.Join(root.Name(), KeyFile), "size": len(key)})
+	}
+	return key, nil
+}
+
+// createKeyFile creates the key file in root with a new random key,
+// readable only by the user, and returns its key; or, where another
+// process has made it meanwhile, that one's key (createPrivate).
+func createKeyFile(root *os.Root) ([]byte, error) {
+	key := make([]byte, keySize)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	created, err := createPrivate(root, KeyFile, key)
+	if err != nil {
+		return nil, err
+	}
+	if !created {
+		return readKeyFile(root)
+	}
+	return key, nil
+}
+
+// readPrivate reads at most limit bytes of the file name in root, which
+// must be a regular file, not a symbolic link, that belongs to the user
+// and that only they can read (safepath.CheckFileInfo), as a key file must.
+// A file that isn't there is fs.ErrNotExist.
+func readPrivate(root *os.Root, name string, limit int64) ([]byte, error) {
+	path := filepath.Join(root.Name(), name)
 	// A root follows a link that stays in it, which only the user can put
 	// in the state directory; a key file is never read through one.
-	if info, err := root.Lstat(KeyFile); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+	if info, err := root.Lstat(name); err == nil && info.Mode()&fs.ModeSymlink != 0 {
 		return nil, problems.FileNotRegular.Problem(problems.Params{"path": path})
 	}
-	f, err := root.OpenFile(KeyFile, os.O_RDONLY|openFlags, 0)
+	f, err := root.OpenFile(name, os.O_RDONLY|openFlags, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
@@ -189,60 +222,52 @@ func readKeyFile(root *os.Root) ([]byte, error) {
 	if err := safepath.CheckFileInfo(path, info, safepath.Private); err != nil {
 		return nil, err
 	}
-	key, err := io.ReadAll(io.LimitReader(f, keySize+1))
+	data, err := io.ReadAll(io.LimitReader(f, limit))
 	if err != nil {
 		return nil, unreadable(path, err)
 	}
-	if len(key) != keySize {
-		return nil, problems.KeyFileInvalid.Problem(problems.Params{"path": path, "size": len(key)})
-	}
-	return key, nil
+	return data, nil
 }
 
-// createKeyFile creates the key file in root with a new random key,
-// readable only by the user, and returns its key. It creates it whole or
-// not at all: it writes the key to a file of its own, and links that to
-// the key file's name, which fails if another process has made the key
-// file meanwhile, in which case it reads that one's key.
-func createKeyFile(root *os.Root) (key []byte, err error) {
-	key = make([]byte, keySize)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
+// createPrivate creates the file name in root, holding data, readable only
+// by the user, whole or not at all: it writes data to a file of its own,
+// synced, and links that to name, which fails if another process has made
+// name meanwhile; then it reports false, and that file stands.
+func createPrivate(root *os.Root, name string, data []byte) (created bool, err error) {
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return nil, err
+		return false, err
 	}
 	tmp := ".key-" + hex.EncodeToString(nonce[:])
 	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	defer func() {
 		if rmErr := root.Remove(tmp); rmErr != nil && err == nil {
-			err = rmErr
+			created, err = false, rmErr
 		}
 	}()
-	if _, err := f.Write(key); err != nil {
+	if _, err := f.Write(data); err != nil {
 		f.Close()
-		return nil, err
+		return false, err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		return nil, err
+		return false, err
 	}
 	if err := f.Close(); err != nil {
-		return nil, err
+		return false, err
 	}
-	if err := root.Link(tmp, KeyFile); errors.Is(err, fs.ErrExist) {
-		return readKeyFile(root)
+	if err := root.Link(tmp, name); errors.Is(err, fs.ErrExist) {
+		return false, nil
 	} else if err != nil {
-		return nil, err
+		return false, err
 	}
 	if err := syncDir(root, "."); err != nil {
-		return nil, err
+		return false, err
 	}
-	return key, nil
+	return true, nil
 }
 
 // syncDir makes the entries of the directory dir in root durable.

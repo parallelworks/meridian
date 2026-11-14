@@ -226,7 +226,7 @@ func serveMember(t *testing.T, srv *workerapisrv.Server, key string) string {
 	}
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	done := make(chan error, 1)
-	go func() { done <- srv.ServeMember(ctx, memberSocket{l}, key) }()
+	go func() { done <- srv.ServeMember(ctx, memberSocket{l}, key, nil) }()
 	t.Cleanup(func() {
 		cancel()
 		if err := <-done; err != nil {

@@ -298,6 +298,7 @@
   "key_file_missing": "El archivo de clave {path} no está, así que las claves de datos que envolvió no se pueden desenvolver.",
   "key_unwrap_failed": "La clave de datos de la ejecución {run} no se puede desenvolver con el archivo de clave {path}: se envolvió con otra clave o para otra ejecución, o ha cambiado.",
   "key_wrapping_unknown": "La clave de datos de la ejecución {run} se envolvió de una forma que esta versión de Meridian no conoce.",
+  "coordinator_key_invalid": "El archivo de clave del coordinador {path} no contiene una clave privada ECDSA P-256 en PKCS #8 PEM.",
   "git_unavailable": "Meridian no puede ejecutar git: {reason}.",
   "command_missing": "Nombra un comando, como meridian validate workflow.yaml.",
   "command_unknown": "No existe el comando “{command}”.{suggested, select, true { ¿Quisiste decir “{suggestion}”?} other {}}",

@@ -38,8 +38,11 @@ func startQueue(id string) string { return "meridian.start." + id }
 // coordinator on its socket, with the environment of the command but the
 // variables that hold secret variables' values (local.Config.SecretEnv);
 // and the ssh backend, which reaches hosts as the user's ssh would, and
-// names them by a key derived from the state directory's key file. It logs
-// what no answer says to c's standard error. Its session host serves the
+// names them by a key derived from the state directory's key file. It
+// serves members' workers that reach it over TLS with the state
+// directory's coordinator key (local.CoordinatorKey), which every process
+// of the directory shares. It logs what no answer says to c's standard
+// error. Its session host serves the
 // store's sessions on this machine, once ServeSessions has it serve them,
 // reaching a cluster's services through the ssh backend's connections,
 // under a key derived from the key file too, at the path of the login name
@@ -61,6 +64,10 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 		return nil, err
 	}
 	sessionKey, err := keys.Derive(sessionproxy.KeyLabel, sessionproxy.KeyLen)
+	if err != nil {
+		return nil, err
+	}
+	tlsKey, err := local.CoordinatorKey(dirs.State)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +112,7 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 			"ssh":   ssh,
 		},
 		Endpoint:    backend.Endpoint{Address: dirs.Socket()},
+		TLSKey:      tlsKey,
 		StartQueue:  startQueue,
 		SessionHost: host,
 		Log:         log,

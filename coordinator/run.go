@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"crypto"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -111,6 +112,16 @@ type Options struct {
 	// member's driver makes its workers able to reach
 	// (backend.Driver.Connect).
 	Endpoint backend.Endpoint
+	// TLSKey is the coordinator's TLS key, an ECDSA key on P-256, with
+	// which it serves the workers of members that reach it over TLS
+	// (backend.Endpoint.TLS), as through a relay: meridian's is made once,
+	// in a file of the state directory's, and a platform gives its
+	// replicas one key, since a worker is placed with its hash and may
+	// reach any replica. Each process makes its own certificate of it. A
+	// coordinator that may write the store needs one, as any replica may
+	// come to hold any member's listener; one opened only to read it
+	// doesn't.
+	TLSKey crypto.Signer
 	// StartQueue names the hopper queue the Start of the run runID goes
 	// in. A coordinator works the queue of each run it creates until the
 	// run has started, so a queue of a run's own is worked only by the
@@ -277,6 +288,9 @@ type Coordinator struct {
 	// forwarding is what ServeMembers serves members' listeners with
 	// while it runs, or nil.
 	forwarding *forwarding
+	// tls is what the coordinator serves TLS with, of Options.TLSKey, or
+	// nil for one opened only to read the store.
+	tls *tlsIdentity
 	// controls hears which attempts' controls changed: the worker API's
 	// server while ServeWorkers serves it, or nil.
 	controls controlNotifier
@@ -318,8 +332,18 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 	if err := checkFIPS(); err != nil {
 		return nil, err
 	}
-	if opts.Keys == nil && !opts.ReadOnly {
-		return nil, errors.New("coordinator: no Keys")
+	var identity *tlsIdentity
+	if !opts.ReadOnly {
+		if opts.Keys == nil {
+			return nil, errors.New("coordinator: no Keys")
+		}
+		if opts.TLSKey == nil {
+			return nil, errors.New("coordinator: no TLSKey")
+		}
+		var err error
+		if identity, err = newTLSIdentity(opts.TLSKey); err != nil {
+			return nil, err
+		}
 	}
 	log := opts.Log
 	if log == nil {
@@ -371,6 +395,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, sessionsPoll: time.Second, stopTimeout: 5 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, seenFailed: map[string]int{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
 		outlives: map[string]bool{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
+		tls: identity,
 	}
 	if opts.SessionHost != nil && opts.Sessions == nil && !opts.ReadOnly {
 		c.opts.Sessions = sessionProvider{c: c}

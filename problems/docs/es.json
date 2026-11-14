@@ -2123,6 +2123,14 @@
       "Reanuda la ejecución con la versión de Meridian que la empezó, o una más reciente."
     ]
   },
+  "coordinator_key_invalid": {
+    "title": "Archivo de clave del coordinador que no es su clave",
+    "why": "El archivo de clave del coordinador guarda la clave ECDSA P-256 con la que el coordinador sirve TLS a los workers que llegan a él desde una red, como a través de un relay en un nodo de acceso, y que lo reconocen por el hash de su clave. Meridian lo crea, y nada más debería cambiarlo.",
+    "fix": [
+      "Si tienes una copia del archivo de clave, restáurala.",
+      "Si no, quítalo: Meridian crea otro, y los workers ya iniciados con el hash de la clave anterior rechazan al coordinador (coordinator_key_mismatch)."
+    ]
+  },
   "git_unavailable": {
     "title": "No se puede ejecutar git",
     "why": "Meridian lee de repositorios Git los flujos de trabajo que nombra el uses: de un paso ejecutando git, que debe estar instalado y en PATH.",

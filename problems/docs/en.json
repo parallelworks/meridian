@@ -1828,6 +1828,13 @@
       "Resume the run with the version of Meridian that started it, or a newer one."
     ]
   },
+  "coordinator_key_invalid": {
+    "why": "The coordinator's key file holds the ECDSA P-256 key with which the coordinator serves TLS to the workers that reach it from a network, as through a relay on a login node, and which know it by its key's hash. Meridian creates it, and nothing else should change it.",
+    "fix": [
+      "If you have a copy of the key file, put it back.",
+      "Otherwise remove it: Meridian creates another, and the workers already started with the old key's hash refuse the coordinator (coordinator_key_mismatch)."
+    ]
+  },
   "git_unavailable": {
     "why": "Meridian reads the workflows that a step's uses: names from Git repositories by running git, which must be installed and on PATH.",
     "fix": [
