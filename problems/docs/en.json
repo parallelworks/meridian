@@ -1431,6 +1431,12 @@
       "Give the job a longer timeout:, or more memory with resources:, or make it need less, and rerun the run."
     ]
   },
+  "worker_killed_early": {
+    "why": "The worker's backend says its scheduler, or the kernel, ended the worker before the job's first step started: at the time limit of the allocation it ran in, or for using more memory than it may. None of the workflow's code ran, so that counts as a failure before the first step: Meridian places the job again, and fails it after a few such failures, or after the second of this kind, whether the time limit or the memory ended it each time. A worker that waits for the coordinator until its time limit, as while the coordinator is away, or can't be reached, ends so.",
+    "fix": [
+      "Check that the coordinator, or the relay that workers reach it through, can be reached from where the job runs while the job waits to start, and that the member's margin and memory leave the worker room to start."
+    ]
+  },
   "member_gone": {
     "why": "Meridian asks a member's backend whether an attempt's worker still runs once the attempt's lease lapses, or before its worker has claimed it. The member the attempt was placed on is no longer in its group, as after the group was changed in the config, so its backend can't be asked. Once the grace has passed, Meridian takes the worker for lost: if no step had started, that is a failure before the first step, and the job is placed again on a member its group has; otherwise the job fails, or runs again if its retry: lists worker-lost.",
     "fix": [

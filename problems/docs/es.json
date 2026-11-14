@@ -1664,6 +1664,13 @@
       "Da al trabajo un timeout: más largo, o más memoria con resources:, o haz que necesite menos, y repite la ejecución."
     ]
   },
+  "worker_killed_early": {
+    "title": "Worker que su planificador terminó antes del primer paso del trabajo",
+    "why": "El backend del worker dice que su planificador, o el kernel, terminó el worker antes de que empezara el primer paso del trabajo: al llegar al límite de tiempo de la asignación en la que se ejecutaba, o por usar más memoria de la que puede. No se ejecutó nada del código del flujo de trabajo, así que eso cuenta como un fallo antes del primer paso: Meridian vuelve a asignar el trabajo, y lo hace fallar tras unos cuantos fallos así, o tras el segundo de este tipo, haya terminado el worker cada vez por el límite de tiempo o por la memoria. Termina así un worker que espera al coordinador hasta su límite de tiempo, como mientras el coordinador no está o no se puede llegar a él.",
+    "fix": [
+      "Comprueba que se puede llegar al coordinador, o al relay a través del cual los workers llegan a él, desde donde se ejecuta el trabajo mientras espera para empezar, y que el margen y la memoria del miembro dejan sitio para que el worker arranque."
+    ]
+  },
   "member_gone": {
     "title": "Intento cuyo miembro ya no está en su grupo",
     "why": "Meridian pregunta al backend de un miembro si el worker de un intento sigue en marcha una vez que vence la concesión del intento, o antes de que su worker lo reclame. El miembro al que se asignó el intento ya no está en su grupo, como después de cambiar el grupo en la configuración, así que no se puede preguntar a su backend. Pasado el periodo de gracia, Meridian da el worker por perdido: si no había empezado ningún paso, es un fallo antes del primer paso, y el trabajo se vuelve a asignar a un miembro que su grupo tiene; si no, el trabajo falla, o se vuelve a ejecutar si su retry: incluye worker-lost.",

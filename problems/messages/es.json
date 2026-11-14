@@ -235,6 +235,7 @@
   "worker_lost_again": "Se volvió a perder el worker del trabajo {job}, después de que su retry: lo ejecutara de nuevo {retries} veces, tantas como permite.",
   "worker_ended_early": "El worker del trabajo {job} terminó antes del primer paso del trabajo.",
   "worker_killed": "El worker del trabajo {job} fue terminado {reason, select, timeout {por su planificador, al llegar a su límite de tiempo} other {por usar más memoria de la que puede}}.",
+  "worker_killed_early": "El worker del trabajo {job} fue terminado {reason, select, timeout {por su planificador, al llegar a su límite de tiempo} other {por usar más memoria de la que puede}}, antes del primer paso del trabajo.",
   "member_gone": "El intento del trabajo {job} se asignó a un miembro que su grupo ya no tiene, así que no se puede preguntar a su backend si su worker sigue en marcha.",
   "job_timeout_enforced": "El trabajo {job} se ejecutó más allá de su timeout, y su worker no lo detuvo, así que el coordinador terminó su intento.",
 
