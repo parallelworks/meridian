@@ -101,7 +101,15 @@ func otherKey(t *testing.T) *tls.Certificate {
 // relay writes it: whole, renamed into place.
 func writeAddresses(t *testing.T, path string, addresses ...string) {
 	t.Helper()
-	data, err := (&workerapi.AddressFile{Addresses: addresses, Name: relayName, Updated: time.Now().Unix()}).Marshal()
+	writeAddressFile(t, path, &workerapi.AddressFile{Addresses: addresses, Name: relayName, Updated: time.Now().Unix()})
+}
+
+// writeAddressFile writes f at path whole, renamed into place, so that a
+// worker reading it as it is written never finds it empty or in part,
+// which it would refuse.
+func writeAddressFile(t *testing.T, path string, f *workerapi.AddressFile) {
+	t.Helper()
+	data, err := f.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,13 +320,7 @@ func TestAddressFileStale(t *testing.T) {
 			conn.Close()
 		}
 	}()
-	data, err := (&workerapi.AddressFile{Addresses: []string{gone.Addr().String()}, Name: relayName, Updated: time.Now().Add(-time.Hour).Unix()}).Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeAddressFile(t, path, &workerapi.AddressFile{Addresses: []string{gone.Addr().String()}, Name: relayName, Updated: time.Now().Add(-time.Hour).Unix()})
 	until(t, "the worker tried the address again", done, func() bool { return accepted.Load() >= 3 })
 	writeAddresses(t, path, coordinator.Listener.Addr().String())
 	if err := workerEnded(t, done); err != nil {
