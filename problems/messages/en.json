@@ -438,5 +438,14 @@
   "ssh_host_command_unsafe": "Meridian won't run {path} on {host}, which the PATH there finds, since it isn't safe to run ({code}).",
   "ssh_host_id_unknown": "Meridian can't tell {host} from other hosts that may share its home: it has no machine ID that Meridian can read, or no name.",
   "ssh_loginctl_missing": "Meridian can't tell whether {host} would end a worker with the session that starts it: logind runs there, but the PATH there finds no loginctl to ask it.",
-  "ssh_systemd_too_old": "Meridian won't start a worker on {host} in a scope of your service manager: its systemd-run is of systemd {version}, and a scope's --collect needs systemd {minimum} or later."
+  "ssh_systemd_too_old": "Meridian won't start a worker on {host} in a scope of your service manager: its systemd-run is of systemd {version}, and a scope's --collect needs systemd {minimum} or later.",
+
+  "member_setting_invalid": "The member \"{member}\"'s setting {key} {reason, select, unknown {isn't one its backend takes} type {has a value of the wrong type} value {has a value its backend can't use} partition {is longer than its partition allows} required {is needed, since the cluster has no default partition} other {can't be used}}.",
+  "scheduler_partition_unknown": "The member \"{member}\" submits jobs to the partition {partition}, which its cluster doesn't have.",
+  "scheduler_partition_down": "The member \"{member}\"'s partition {partition} takes no jobs: its scheduler says it is {state}.",
+  "scheduler_rejected": "The scheduler refused the job for the member \"{member}\": {reason}.",
+  "scheduler_job_cannot_start": "The scheduler's job {id} could never start: it waited for {reason}, which doesn't change by itself, so Meridian cancelled it.",
+  "scheduler_job_vanished": "The scheduler no longer knows the job {id}, and neither its accounting nor the job's records say how it ended.",
+  "scheduler_worker_not_started": "The scheduler's job {id} ended without starting Meridian's worker. The last line it wrote was: {said}.",
+  "scheduler_relay_unreachable": "The job's node {node} couldn't connect to the coordinator's relay at {addresses} within a minute, so it stopped before its worker started."
 }

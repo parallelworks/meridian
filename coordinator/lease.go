@@ -166,7 +166,7 @@ func (c *Coordinator) checkWorker(ctx context.Context, run *store.Run, job *stor
 	if st.State != backend.Dead {
 		return c.waitFor(c.timing.Heartbeat), nil
 	}
-	return 0, c.lose(ctx, a, st, nil)
+	return 0, c.lose(ctx, a, st, st.Problem)
 }
 
 // errUncheckable is what placedMember returns for an attempt whose

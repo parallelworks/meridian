@@ -2677,5 +2677,57 @@
       "Ask the host's administrators to set KillUserProcesses=no in logind.conf, as most systems have it: Meridian then starts workers in a session of their own, without systemd-run.",
       "Or run the job on a host with systemd 236 or later."
     ]
+  },
+  "member_setting_invalid": {
+    "why": "A member of the slurm backend takes these settings, in groups.yaml: partition, account, qos and reservation, as text; nodes, a whole number of at least 1; exclusive, true or false; gpu-type, as text; walltime, a duration, written as a workflow's timeout: is; and host, the login node, which a later release reaches over SSH. A key it doesn't take, a value of another type, or one it can't use, as text with a control character, is refused rather than ignored, so that a job is never submitted other than as the member says. A member's max-walltime and walltime can't be longer than its partition's MaxTime, to which the scheduler would hold a job; and where the cluster has no default partition, the member must name one.",
+    "fix": [
+      "Correct the setting in groups.yaml, as the message says.",
+      "scontrol show partition shows a partition's limits, and which partition is the default."
+    ]
+  },
+  "scheduler_partition_unknown": {
+    "why": "A member submits its jobs to the partition its settings name, or to the cluster's default where they name none. The cluster's scheduler doesn't have the one named, as scontrol show partition shows, so placement leaves the member out, and places the job on another member of its group if there is one.",
+    "fix": [
+      "Name a partition that sinfo lists, in the member's settings in groups.yaml."
+    ]
+  },
+  "scheduler_partition_down": {
+    "why": "A partition that is down, drained or inactive takes no jobs, or holds them until an administrator brings it up. Placement leaves the member out while it is, rather than queue a job that may not start, and places the job on another member of its group if there is one.",
+    "fix": [
+      "Run the job once the partition is up again, or on a member with another partition.",
+      "Ask the cluster's administrators why the partition is down."
+    ]
+  },
+  "scheduler_rejected": {
+    "why": "The scheduler refused to take the job, and said why: as an account or a QoS the member can't use, a partition the account can't use, more nodes, memory or GPUs than any node has, or a time limit the partition doesn't allow. Submitting it again wouldn't change that. The job fails before its first step, and is placed again, on another member of its group if there is one.",
+    "fix": [
+      "Change the member's settings, or the job's resources:, as what the scheduler said needs."
+    ]
+  },
+  "scheduler_job_cannot_start": {
+    "why": "The job waited in the queue for a reason that doesn't change by itself: a time limit longer than its partition allows (PartitionTimeLimit), more nodes than the partition has (PartitionNodeLimit), a feature no node has (BadConstraints), an account or a QoS that isn't valid, or a dependency that can't be met. A scheduler set to queue such a job rather than refuse it (EnforcePartLimits=NO) holds it forever, so Meridian cancelled it. The job fails before its first step, and is placed again, on another member of its group if there is one.",
+    "fix": [
+      "Change what the job asks for, or the member's settings, so that the partition can run it: scontrol show partition shows its limits."
+    ]
+  },
+  "scheduler_job_vanished": {
+    "why": "A scheduler forgets a job some time after it ends (Slurm's MinJobAge, five minutes by default), and only its accounting, where the cluster keeps it, knows it after. This cluster keeps none, and the records in the job's directory, which meridian batch writes as the job runs, say that it started, but not how it ended: meridian batch ended before it could write that, as when its node failed. Meridian waited two minutes for a record that a network filesystem might not have shown yet. The worker is lost.",
+    "fix": [
+      "Read the job's output, out, in its directory under Meridian's batch directory, ~/.local/state/meridian/batch, for what happened."
+    ]
+  },
+  "scheduler_worker_not_started": {
+    "why": "The job ended without meridian batch having started on its node: the job's directory has none of its records. That happens when the compute node can't run Meridian's binary, as where the cache it is in isn't on a filesystem the nodes share, the home is mounted noexec, or the node is of another architecture; or when the job's script failed before it ran it. The job fails before its first step, and is placed again.",
+    "fix": [
+      "Read the job's output, out, in its directory under Meridian's batch directory, ~/.local/state/meridian/batch.",
+      "Check that the compute nodes see your home, and can run the meridian binary in its cache."
+    ]
+  },
+  "scheduler_relay_unreachable": {
+    "why": "A job's worker reaches the coordinator through a relay on the login node, whose addresses a file in your home says. The file was updated within the last three minutes, so a relay was up, but the job's node couldn't connect to any of its addresses within a minute: a firewall between the compute nodes and the login node, or addresses the nodes have no route to, can keep it out. The job stopped before its worker started, rather than hold its allocation, and is placed again.",
+    "fix": [
+      "Check that the compute nodes can connect to the login node at the addresses the message names, as srun needs them to.",
+      "Ask the cluster's administrators which network, and which ports, the compute nodes may reach the login node on."
+    ]
   }
 }
