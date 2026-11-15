@@ -441,5 +441,11 @@
   "scheduler_job_cannot_start": "调度器的作业 {id} 永远无法开始：它在等待 {reason}，而这不会自行改变，因此 Meridian 取消了它。",
   "scheduler_job_vanished": "调度器已不再知道作业 {id}，而其记账信息和作业的记录都没有说明它是如何结束的。",
   "scheduler_worker_not_started": "调度器的作业 {id} 在没有启动 Meridian 工作进程的情况下结束了。它写的最后一行是：{said}。",
-  "scheduler_relay_unreachable": "作业的节点 {node} 在一分钟内无法连接到位于 {addresses} 的协调器中继，因此在其工作进程启动前就停止了。"
+  "scheduler_relay_unreachable": "作业的节点 {node} 在一分钟内无法连接到位于 {addresses} 的协调器中继，因此在其工作进程启动前就停止了。",
+
+  "scheduler_command_missing": "Meridian 在 {host} 上运行时所用的 PATH 中找不到调度器的命令 {command}。",
+  "scheduler_command_unsafe": "Meridian 不会在 {host} 上运行调度器的命令 {path}，因为运行它并不安全（{code}）。",
+  "scheduler_unsupported": "Meridian 无法使用 {host} 上的 {scheduler}：{federated, select, true {它的集群属于一个联邦，作业可能在另一个集群上运行，而 Meridian 尚不向联邦提交作业} other {{version, select, unknown {无法得知其版本} other {它是版本 {version}}}，而 Meridian 支持 {minimum} 及更高版本}}。",
+  "scheduler_cluster_variable": "{host} 上的 Slurm 命令被 {variable} 设置为访问 {value}，而不是它们默认访问的集群 {cluster}：Meridian 只向默认集群提交作业。",
+  "scheduler_token_required": "{host} 上 Slurm 的 sbatch 没有 SLURM_JWT 就无法认证，而 Meridian 不会把令牌交给它：sbatch 会把令牌复制到作业的环境中，而调度器会保存该环境。"
 }

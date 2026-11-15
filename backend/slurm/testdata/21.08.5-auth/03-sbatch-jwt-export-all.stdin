@@ -1,0 +1,2 @@
+#!/bin/sh
+env | sed -E "s/^SLURM_JWT=.+/SLURM_JWT=<token>/" | sort > /tmp/env.$SLURM_JOB_ID

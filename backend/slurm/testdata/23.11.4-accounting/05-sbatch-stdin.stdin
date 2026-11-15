@@ -1,0 +1,2 @@
+#!/bin/sh
+env | sort > /tmp/sub1/env; cat /proc/self/cgroup > /tmp/sub1/cgroup; sleep 600

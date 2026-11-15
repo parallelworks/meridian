@@ -1,0 +1,1 @@
+a1=2 sleep600 running; a2=3 held; a3=4 over-partition-time; a4=5 partition-down; a5=6 exit0; a6=7 exit3; a7=8 cancelled; a8=9 timeout; a9=10 cpus-per-task=2; a11=13 hidden, held; a12=11 nodes=2 ntasks=1, held; a13=12 nodes=2 ntasks-per-node=1, held
