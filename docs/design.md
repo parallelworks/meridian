@@ -4109,10 +4109,12 @@ a worker never upgrades itself.
 
 The backend puts the binary where the job runs (copying it over SSH,
 verified by its digest, or using one on a shared filesystem), then starts it
-with three things:
+with three things, and a fourth where the job's allocation ends:
 
-- the coordinator's address, or, for a batch scheduler's job, the file
-  that says where its login node's relay listens;
+- the coordinator's address, or the path of a file that names where it is,
+  as a batch scheduler's job's file that says where its login node's relay
+  listens, which the worker reads again before each connection it makes
+  ([Running steps](#running-steps));
 - the SHA-256 hash of the coordinator's TLS public key, for a connection that
   goes over TLS;
 - a bootstrap token: random and single-use, valid for this one attempt until
@@ -4145,7 +4147,9 @@ with three things:
   withdraws the placement, which makes the token, and any copy of it in a
   snapshot or a backup, good for nothing. The user's own processes can
   read the job's environment and the user's files anyway, on a cluster
-  whose jobs run on the host.
+  whose jobs run on the host;
+- a deadline, some time before the job's allocation ends, by which the
+  worker stops the job ([Resources](#resources)).
 
 The coordinator looks for the attempt's placement before it makes the
 token, and makes one only for a placement that doesn't exist yet. When the
@@ -4794,8 +4798,26 @@ own runs.
 - **It talks only to its coordinator.** Over a Unix socket, it asks the
   system which user serves the socket, and sends a token only to its own
   user's, or root's: `SO_PEERCRED` says on Linux, and `LOCAL_PEERCRED` on
-  macOS and FreeBSD. Over TLS, it checks the coordinator's key. It follows
-  no redirect.
+  macOS and FreeBSD. Over TLS 1.3, it checks the coordinator's key, at the
+  address it was given, or at those an address file names
+  (`MERIDIAN_COORDINATOR_FILE`), as a relay on a cluster's login node
+  writes it: JSON with the addresses, the server name the worker's
+  handshake asks for, and when it was last written
+  (`workerapi.AddressFile`). It reads the file again before each
+  connection it makes, at most once a second, as it reads its bootstrap
+  token's: it stops at one that other users could read or change, or
+  that a directory on the way to it would let them replace, or a symbolic
+  link, and at one that isn't an address file
+  (`coordinator_file_invalid`). It tries the addresses in order, 32 at
+  most, giving each 10 seconds, its handshake included, as long as a
+  relay waits for it. It passes by a server there that
+  holds another key, as one at a port another user took after a relay
+  ended, before the file was written again, likely is: TLS checks the key
+  before the worker sends anything, so the server learns nothing, and the
+  worker tries the next address, and then the file again, as it does
+  while none answers, or the file isn't there yet. A server at the
+  address it was given that holds another key ends it
+  (`coordinator_key_mismatch`). It follows no redirect.
 - **It keeps its credential out of reach.** First of all, before it reads
   its bootstrap token, it keeps the user's other processes, the job's steps
   among them, from reading its memory, or tracing what it sends: on Linux
@@ -5291,8 +5313,22 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   so the job ends as timed out, with its cleanup run and its logs delivered,
   before the scheduler would end it.
 - **A job without a `timeout:`** gets the member's default, or else the
-  partition's. Either way, the worker reads the allocation's end time from
-  the scheduler and stops the job before it.
+  partition's.
+- **The worker stops the job before its allocation ends.**
+  `meridian batch`, the batch job's first process, which isn't built yet,
+  reads when the allocation ends, and starts the worker with a deadline
+  half the member's margin before it (`MERIDIAN_DEADLINE`). The worker
+  stops the job at its deadline, as at its own timeout, if that hasn't
+  come first. The margin's first half is for the worker to start, and its
+  second for the job's cleanups and its reports: a job whose worker
+  starts within half the margin reaches its own `timeout:` first, and
+  one whose worker starts later, as after the coordinator was away, is
+  stopped at its deadline, and ends as it would at its timeout. A worker
+  whose deadline passes before the job's first step starts, as one that
+  couldn't reach the coordinator until then, runs none of the job, which
+  would have no time to run, nor claims it if it hasn't
+  (`worker_deadline_passed`): the attempt fails before its first step,
+  and is placed again.
 - **A job the scheduler ends at its time limit timed out:** its worker
   wasn't lost. When the scheduler reports that it ended a job at its limit,
   such as Slurm's `TIMEOUT` state, once a step had started, the attempt's

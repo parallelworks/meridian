@@ -76,10 +76,13 @@ var testTiming = timing{
 	flush:        time.Second,
 	firstControl: 500 * time.Millisecond,
 	logPace:      5 * time.Millisecond,
+	reread:       10 * time.Millisecond,
+	dialEach:     2 * time.Second,
 }
 
 // runWorker runs a worker against f, served on a Unix socket unless
-// cfg.Environ says where it is, with its directory in a test's own unless
+// cfg.Environ says where it is, or names its address file, with its
+// directory in a test's own unless
 // cfg.Environ gives it a home, and returns what Run returns.
 func runWorker(t *testing.T, f *workerapitest.Fake, ctx context.Context, cfg Config) error {
 	t.Helper()
@@ -89,7 +92,9 @@ func runWorker(t *testing.T, f *workerapitest.Fake, ctx context.Context, cfg Con
 // runWorkerTimed is runWorker, with the worker's timing tm.
 func runWorkerTimed(t *testing.T, f *workerapitest.Fake, ctx context.Context, cfg Config, tm timing) error {
 	t.Helper()
-	if !slices.ContainsFunc(cfg.Environ, func(kv string) bool { return strings.HasPrefix(kv, workerapi.EnvCoordinator+"=") }) {
+	if !slices.ContainsFunc(cfg.Environ, func(kv string) bool {
+		return strings.HasPrefix(kv, workerapi.EnvCoordinator+"=") || strings.HasPrefix(kv, workerapi.EnvCoordinatorFile+"=")
+	}) {
 		cfg.Environ = append(cfg.Environ, workerapi.EnvCoordinator+"="+f.Serve())
 	}
 	// The token in a file, which the worker takes on every system.

@@ -18,10 +18,10 @@ import (
 	"github.com/parallelworks/meridian/workerapi/workerapitest"
 )
 
-// TestReadEnv checks how a worker reads where its coordinator is, and its
-// bootstrap token, from its environment, and that its steps get none of
-// it; and that, where the user's other processes can read its environment,
-// as on macOS, it refuses a token there.
+// TestReadEnv checks how a worker reads where its coordinator is, its
+// bootstrap token and its deadline from its environment, and that its
+// steps get none of it; and that, where the user's other processes can
+// read its environment, as on macOS, it refuses a token there.
 func TestReadEnv(t *testing.T) {
 	t.Parallel()
 	key := "sha256:" + strings.Repeat("ab", 32)
@@ -29,8 +29,12 @@ func TestReadEnv(t *testing.T) {
 		name    string
 		environ []string
 		address string
-		token   string
-		tls     bool
+		// file is the address file's path, deadline the deadline's Unix
+		// seconds, or 0 for none.
+		file     string
+		deadline int64
+		token    string
+		tls      bool
 		// fails is the kind of problem readEnv reports, if it fails.
 		fails *problems.Kind
 	}{
@@ -46,6 +50,19 @@ func TestReadEnv(t *testing.T) {
 		{name: "a key for a socket", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
 		{name: "no token", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock"}, fails: problems.WorkerEnvironmentMissing},
 		{name: "two tokens", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_BOOTSTRAP_TOKEN=t", "MERIDIAN_BOOTSTRAP_TOKEN_FILE=/x"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "an address with an underscore", environ: []string{"MERIDIAN_COORDINATOR=meridian_coordinator:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, address: "meridian_coordinator:7443", token: "t", tls: true},
+		{name: "an address with the root's dot", environ: []string{"MERIDIAN_COORDINATOR=login1.cluster.:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, address: "login1.cluster.:7443", token: "t", tls: true},
+		{name: "an address without a port", environ: []string{"MERIDIAN_COORDINATOR=login1", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "a port with a leading zero", environ: []string{"MERIDIAN_COORDINATOR=login1:07443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "an IPv6 address with a zone", environ: []string{"MERIDIAN_COORDINATOR=[fe80::1%eth0]:7443", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "an address file", environ: []string{"MERIDIAN_COORDINATOR_FILE=/home/u/c.json", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, file: "/home/u/c.json", token: "t", tls: true},
+		{name: "an address file and an address", environ: []string{"MERIDIAN_COORDINATOR=login1:7443", "MERIDIAN_COORDINATOR_FILE=/home/u/c.json", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "an address file whose path is relative", environ: []string{"MERIDIAN_COORDINATOR_FILE=c.json", "MERIDIAN_COORDINATOR_KEY_SHA256=" + key, "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "an address file without a key", environ: []string{"MERIDIAN_COORDINATOR_FILE=/home/u/c.json", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "a deadline", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_DEADLINE=1762400000", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, address: "/run/c.sock", deadline: 1762400000, token: "t"},
+		{name: "a deadline that isn't a number", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_DEADLINE=2026-11-06T12:00:00Z", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "a deadline of 0", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_DEADLINE=0", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
+		{name: "a deadline past 64 bits", environ: []string{"MERIDIAN_COORDINATOR=/run/c.sock", "MERIDIAN_DEADLINE=99999999999999999999", "MERIDIAN_BOOTSTRAP_TOKEN=t"}, fails: problems.WorkerEnvironmentInvalid},
 	} {
 		environ := append(slices.Clone(tc.environ), "PATH=/bin", "HOME=/home/u")
 		// Where others can read the environment, a token there is refused.
@@ -63,8 +80,11 @@ func TestReadEnv(t *testing.T) {
 			t.Errorf("%s: %v", tc.name, err)
 			continue
 		}
-		if ep.address != tc.address || ep.token != tc.token || ep.socket() == tc.tls || (len(ep.keyHash) == 32) != tc.tls {
+		if ep.address != tc.address || ep.file != tc.file || ep.token != tc.token || ep.socket() == tc.tls || (len(ep.keyHash) == 32) != tc.tls {
 			t.Errorf("%s: got %+v", tc.name, ep)
+		}
+		if got := ep.deadline; tc.deadline == 0 && !got.IsZero() || tc.deadline != 0 && got.Unix() != tc.deadline {
+			t.Errorf("%s: the deadline is %v", tc.name, got)
 		}
 		if tc.tls && hex.EncodeToString(ep.keyHash) != strings.Repeat("ab", 32) {
 			t.Errorf("%s: the key's hash is %x", tc.name, ep.keyHash)
