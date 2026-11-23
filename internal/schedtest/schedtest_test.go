@@ -249,8 +249,18 @@ func TestRemove(t *testing.T) {
 	}
 	t.Run("tries again", func(t *testing.T) {
 		dir, locked := cluster(t)
+		// A file remove's first try takes, which says that it has tried
+		// once, and failed, before the directory can be removed.
+		first := filepath.Join(dir, "first")
+		if err := os.WriteFile(first, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		go func() {
-			time.Sleep(200 * time.Millisecond)
+			for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); <-time.After(10 * time.Millisecond) {
+				if _, err := os.Lstat(first); errors.Is(err, os.ErrNotExist) {
+					break
+				}
+			}
 			_ = os.Chmod(locked, 0o700)
 		}()
 		if err := remove(dir, 10*time.Second); err != nil {

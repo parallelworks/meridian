@@ -158,11 +158,11 @@ type Cluster struct {
 // removed (remove).
 func New(t testing.TB, opts ...func(*State)) *Cluster {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "schedtest-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
 	c := &Cluster{Bin: filepath.Join(dir, "bin"), state: filepath.Join(dir, "cluster.json")}
+	// After t.TempDir's own cleanup, so it runs first: the jobs are killed,
+	// and the directory removed, before the test's other temporary
+	// directories, which a job may write in, are.
 	t.Cleanup(func() {
 		c.kill()
 		if err := remove(dir, removeFor); err != nil {
@@ -200,9 +200,10 @@ const removeFor = time.Minute
 // remove removes the directory dir, trying again until it can, or for d.
 // A command of the cluster's can run as its test ends, and write the
 // cluster's file as the directory is removed: a backend's refresh of its
-// jobs' states goes on once the caller that started it stops waiting, for
-// its other callers. Once the directory is gone, such a command makes
-// nothing: its lock's file can't be made where there is no directory.
+// jobs' states, or of the cluster's facts, goes on once the caller that
+// started it stops waiting, for its other callers. Once the directory is
+// gone, such a command makes nothing: its lock's file can't be made where
+// there is no directory.
 func remove(dir string, d time.Duration) error {
 	deadline := time.Now().Add(d)
 	for {
