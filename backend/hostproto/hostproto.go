@@ -219,6 +219,7 @@ type Fit struct {
 	MaxWalltimeSeconds    int64            `json:"maxWalltimeSeconds,omitzero"`
 	MarginSeconds         int64            `json:"marginSeconds,omitzero"`
 	DefaultTimeoutSeconds int64            `json:"defaultTimeoutSeconds,omitzero"`
+	WalltimeUnitSeconds   int64            `json:"walltimeUnitSeconds,omitzero"`
 }
 
 // FitOf is f on the wire.
@@ -226,6 +227,7 @@ func FitOf(f backend.Fit) *Fit {
 	return &Fit{
 		Problem: f.Problem, Availability: int(f.Availability),
 		MaxWalltimeSeconds: f.MaxWalltimeSeconds, MarginSeconds: f.MarginSeconds, DefaultTimeoutSeconds: f.DefaultTimeoutSeconds,
+		WalltimeUnitSeconds: f.WalltimeUnitSeconds,
 	}
 }
 
@@ -234,6 +236,7 @@ func (f *Fit) Fit() backend.Fit {
 	return backend.Fit{
 		Problem: f.Problem, Availability: backend.Availability(f.Availability),
 		MaxWalltimeSeconds: f.MaxWalltimeSeconds, MarginSeconds: f.MarginSeconds, DefaultTimeoutSeconds: f.DefaultTimeoutSeconds,
+		WalltimeUnitSeconds: f.WalltimeUnitSeconds,
 	}
 }
 

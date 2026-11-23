@@ -44,7 +44,8 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
-	"io"
+	"net/netip"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -101,6 +102,15 @@ type Scheduler interface {
 	// allocation ends, as the job's environment, getenv, says or the
 	// scheduler does: End is zero where neither says.
 	Allocation(ctx context.Context, getenv func(string) string) (Allocation, error)
+	// WalltimeUnit is the seconds the scheduler keeps walltimes in whole
+	// of, as Slurm keeps minutes, to which it rounds up the walltime a job
+	// asks for.
+	WalltimeUnit() int64
+	// Config says which cluster the commands reach as this machine knows
+	// it without asking the cluster's controller, as the path of Slurm's
+	// config file does: what keeps what one cluster said apart from
+	// another's, in a home two clusters' login nodes share.
+	Config() string
 }
 
 // Settings are a member's settings, as its scheduler decodes them.
@@ -122,6 +132,18 @@ type Settings struct {
 	GPUType string
 	// WalltimeSeconds fixes the walltime asked for, or is 0.
 	WalltimeSeconds int64
+	// Relay is where the member's workers reach the coordinator on the
+	// login node.
+	Relay Relay
+}
+
+// A Relay is where a member's workers reach the coordinator on the login
+// node: on its private addresses in Network, or on any where Network is
+// the zero Prefix; at a port from FirstPort to LastPort, or, where they
+// are 0, in the scheduler's range, or any.
+type Relay struct {
+	Network             netip.Prefix
+	FirstPort, LastPort int
 }
 
 // Info is what a cluster's scheduler says of itself.
@@ -133,6 +155,13 @@ type Info struct {
 	// Accounting says whether the cluster keeps accounting, which knows
 	// jobs that the queue has forgotten.
 	Accounting bool
+	// Controllers are the hosts of the cluster's controllers, as
+	// addresses or names, whose networks the compute nodes reach.
+	Controllers []string
+	// FirstPort and LastPort are the ports the cluster's compute nodes
+	// connect to its login nodes at, as Slurm's SrunPortRange says, which
+	// a site's firewall opens; or 0 for any.
+	FirstPort, LastPort int
 }
 
 // A Partition is a partition, or a PBS queue.
@@ -210,9 +239,18 @@ type Driver struct {
 	// nil. The scheduler keeps a job's environment, and may archive it.
 	Environ  []string
 	Withhold []string
-	// Key keys the hash that names a cluster in a placement's ID: at least
-	// MinKeyLen bytes, the same for every replica, and kept.
+	// Key keys the hash that names a cluster in a placement's ID, and the
+	// members' key: at least MinKeyLen bytes, the same for every replica,
+	// and kept.
 	Key []byte
+	// RunDir chooses the run's directory for req, in the home the
+	// cluster's nodes share, where the compute nodes see it, and makes
+	// what of it needs making; nil takes req.RunDir as it is.
+	RunDir func(req backend.PlaceRequest) (string, error)
+
+	// interfaces are this machine's addresses (InterfaceAddresses for
+	// nil), which a test gives.
+	interfaces func() ([]netip.Prefix, error)
 
 	once    sync.Once
 	timing  timing
@@ -246,13 +284,21 @@ type timing struct {
 	idle time.Duration
 	// refresh bounds one snapshot's commands.
 	refresh time.Duration
+	// touch is how often a member's listener writes its address file
+	// again: a reader takes one written within a few minutes for one whose
+	// listener is up.
+	touch time.Duration
+	// forced is the least time between snapshots that a caller forces,
+	// as Forget does, so that many attempts that end at once, as a
+	// matrix's, don't run the status command back to back.
+	forced time.Duration
 	// now is the clock grace is counted by.
 	now func() time.Time
 }
 
 var defaultTiming = timing{
 	poll: 15 * time.Second, grace: 2 * time.Minute, stuck: 2 * time.Minute, facts: time.Minute, failed: 15 * time.Second,
-	idle: 10 * time.Minute, refresh: 2 * time.Minute, now: time.Now,
+	idle: 10 * time.Minute, refresh: 2 * time.Minute, touch: 30 * time.Second, forced: 5 * time.Second, now: time.Now,
 }
 
 // EndWait is how long a check can take to see how a job ended: the grace
@@ -286,6 +332,12 @@ func (d *Driver) init() {
 // jobs.
 var attemptPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
+// validAttempt reports whether attempt is an ID that can name its
+// directory: not RelaysDir, which holds the listeners' address files.
+func validAttempt(attempt string) bool {
+	return attemptPattern.MatchString(attempt) && attempt != RelaysDir
+}
+
 // kindJob is the kind of a placement that is a batch job.
 const kindJob = "job"
 
@@ -310,11 +362,16 @@ func parseID(s string) (tag, id string, ok bool) {
 // placement's ID, so that a placement's ID says which cluster it is on
 // without naming it.
 func (d *Driver) tag(info *Info) (string, error) {
+	return d.hash("cluster\x00" + d.Scheduler.Name() + "\x00" + info.Cluster)
+}
+
+// hash returns the keyed hash of what, which names it without saying it.
+func (d *Driver) hash(what string) (string, error) {
 	if len(d.Key) < MinKeyLen {
 		return "", fmt.Errorf("batch: the driver's key has %d bytes, fewer than %d", len(d.Key), MinKeyLen)
 	}
 	mac := hmac.New(sha256.New, d.Key)
-	mac.Write([]byte("cluster\x00" + d.Scheduler.Name() + "\x00" + info.Cluster))
+	mac.Write([]byte(what))
 	return hex.EncodeToString(mac.Sum(nil)[:16]), nil
 }
 
@@ -520,8 +577,9 @@ func (d *Driver) member(ctx context.Context, m *backend.Member) (*Settings, Part
 // Probe says whether m can run a job that asks for demand: whether the
 // job calls no workflow, whose run it would hold its allocation for; and
 // whether its scheduler's commands are there, safe to run and of a release
-// the driver supports, its partition is there and up, and its walltimes
-// fit the partition's. A job that fits would queue: the scheduler decides
+// the driver supports, its partition is there and up, its walltimes fit
+// the partition's, and this machine has an address its workers can reach
+// it at. A job that fits would queue: the scheduler decides
 // when it starts. Demand.Parked is ignored: an allocation can't lend what
 // it holds.
 func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.Demand) (backend.Fit, error) {
@@ -537,6 +595,7 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 	if prob != nil {
 		return backend.Fit{Problem: prob}, nil //nolint:nilerr // what is wrong with the member is the Fit's, not the call's
 	}
+	fit.WalltimeUnitSeconds = d.Scheduler.WalltimeUnit()
 	for _, r := range []struct {
 		name        string
 		asks, offer int64
@@ -550,6 +609,11 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 			fit.Problem = problems.ResourcesExceedMember.Problem(problems.Params{"member": m.Name, "resource": r.name, "asks": r.asks, "offers": r.offer})
 			return fit, nil
 		}
+	}
+	// Without an address the compute nodes can reach, its workers would
+	// never reach the coordinator.
+	if _, err := d.addresses(ctx, m, s, nil); err != nil {
+		return fitOf(err)
 	}
 	if err := ensureDir(d.Dir); err != nil {
 		return fitOf(err)
@@ -570,23 +634,13 @@ func fitOf(err error) (backend.Fit, error) {
 	return backend.Fit{}, err
 }
 
-// Connect returns coordinator itself, for compute nodes that reach it
-// there, as this machine's own do. A listener on the login node, and the
-// address file workers find it by, are a later release's.
-func (d *Driver) Connect(_ context.Context, _ *backend.Member, coordinator backend.Endpoint) (backend.Endpoint, io.Closer, error) {
-	return coordinator, nopCloser{}, nil
-}
-
-type nopCloser struct{}
-
-func (nopCloser) Close() error { return nil }
-
 // Place submits a job that runs meridian batch for req's attempt, in a new
-// submission's directory, which holds the attempt's spec and its token,
-// and returns once the scheduler has the job.
+// submission's directory, which holds the attempt's spec, with where its
+// worker reaches the coordinator and the run's directory RunDir chooses,
+// and its token; and returns once the scheduler has the job.
 func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.PlaceRequest) (backend.Placement, error) {
 	d.init()
-	if !attemptPattern.MatchString(req.Attempt) {
+	if !validAttempt(req.Attempt) {
 		return backend.Placement{}, fmt.Errorf("batch: an attempt's ID that can't name a job: %q", req.Attempt)
 	}
 	s, _, err := d.member(ctx, m)
@@ -605,15 +659,22 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	if err != nil {
 		return backend.Placement{}, err
 	}
+	runDir := req.RunDir
+	if d.RunDir != nil {
+		if runDir, err = d.RunDir(req); err != nil {
+			return backend.Placement{}, err
+		}
+	}
 	d.sweep()
 	sub, n, err := d.newSubmission(req.Attempt)
 	if err != nil {
 		return backend.Placement{}, err
 	}
+	co := req.Coordinator
 	spec := &Spec{
 		Attempt: req.Attempt, Submission: n, Scheduler: d.Scheduler.Name(), Digest: digest,
-		Coordinator:   Coordinator{Address: req.Coordinator.Address, KeyHash: req.Coordinator.KeyHash},
-		MarginSeconds: margin(m), WalltimeSeconds: walltime(m, s, req.TimeoutSeconds), RunDir: req.RunDir,
+		Coordinator:   Coordinator{Address: co.Address, AddressFile: co.AddressFile, KeyHash: co.KeyHash},
+		MarginSeconds: margin(m), WalltimeSeconds: walltime(m, s, req.TimeoutSeconds), RunDir: runDir,
 	}
 	if err := writeJSON(sub, SpecFile, spec); err != nil {
 		return backend.Placement{}, err
@@ -640,7 +701,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		return backend.Placement{}, err
 	}
 	d.poll.watch(id, sub)
-	return backend.Placement{Attempt: req.Attempt, ID: placementID(tag, id), WorkerDigest: digest, RunDir: req.RunDir}, nil
+	return backend.Placement{Attempt: req.Attempt, ID: placementID(tag, id), WorkerDigest: digest, RunDir: runDir}, nil
 }
 
 // submit submits job, maxSubmits at a time.
@@ -684,7 +745,7 @@ func (d *Driver) environ() []string {
 // stopped between submitting it and recording its ID, are cancelled.
 func (d *Driver) Find(ctx context.Context, m *backend.Member, attempt string) (backend.Placement, bool, error) {
 	d.init()
-	if !attemptPattern.MatchString(attempt) {
+	if !validAttempt(attempt) {
 		return backend.Placement{}, false, nil
 	}
 	if _, err := d.settings(m); err != nil {
@@ -796,7 +857,10 @@ func (d *Driver) placement(ctx context.Context, p backend.Placement) (id, sub st
 		return "", "", err
 	}
 	if tag != ours {
-		return "", "", fmt.Errorf("batch: the placement of %s is on another cluster than the one the scheduler's commands reach", p.Attempt)
+		// A cause that won't pass by itself, which the coordinator gives
+		// a while, and then loses the attempt with.
+		host, _ := os.Hostname()
+		return "", "", problems.SchedulerPlacementElsewhere.Problem(problems.Params{"host": host})
 	}
 	// The poller keeps a job's submission once it is known, so that a
 	// check doesn't look through the attempt's each time.
@@ -821,7 +885,7 @@ func (d *Driver) Check(ctx context.Context, m *backend.Member, p backend.Placeme
 	if err != nil {
 		return unknown, err
 	}
-	st, listed, err := d.poll.status(ctx, id, sub)
+	st, listed, err := d.poll.status(ctx, id, sub, time.Time{})
 	if err != nil {
 		return unknown, err
 	}
@@ -949,11 +1013,15 @@ func (d *Driver) Cancel(ctx context.Context, m *backend.Member, p backend.Placem
 }
 
 // Forget removes the attempt's submissions, its token among them, once its
-// job has ended: the scheduler lists it as ended, or no longer lists it.
-// One whose job may still run, or that the scheduler can't say of, is
-// kept, and an error.
+// job has ended: its records say how, as meridian batch's exit record or
+// a withdrawal does, or the scheduler lists it as ended, or no longer
+// lists it, in a snapshot made since Forget was asked, since the
+// coordinator asks once the attempt has ended, which an older snapshot can
+// predate. One whose job may still run, or that the scheduler can't say
+// of, is kept, and an error.
 func (d *Driver) Forget(ctx context.Context, m *backend.Member, p backend.Placement) error {
 	d.init()
+	asked := time.Now()
 	if _, err := d.settings(m); err != nil {
 		return err
 	}
@@ -961,12 +1029,14 @@ func (d *Driver) Forget(ctx context.Context, m *backend.Member, p backend.Placem
 	if err != nil {
 		return err
 	}
-	st, listed, err := d.poll.status(ctx, id, sub)
-	if err != nil {
-		return err
-	}
-	if listed && st.State != backend.Dead {
-		return fmt.Errorf("batch: the job of %s hasn't ended", p.Attempt)
+	if r := readRecords(sub); r.exit == nil && r.withdrawn == nil {
+		st, listed, err := d.poll.status(ctx, id, sub, asked)
+		if err != nil {
+			return err
+		}
+		if listed && st.State != backend.Dead {
+			return fmt.Errorf("batch: the job of %s hasn't ended", p.Attempt)
+		}
 	}
 	if sub != "" {
 		if err := removeToken(sub); err != nil {

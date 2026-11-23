@@ -1,4 +1,4 @@
-package main
+package machineid
 
 import (
 	"os"
@@ -6,11 +6,10 @@ import (
 	"testing"
 )
 
-// TestMachineID checks which ID a Linux host has: that of the first of its
-// files that holds one, systemd's, else D-Bus's, where one that isn't
-// there, is empty, or says uninitialized holds none; and none where
-// neither does.
-func TestMachineID(t *testing.T) {
+// TestOf checks which ID a Linux host has: that of the first of its files
+// that holds one, systemd's, else D-Bus's, where one that isn't there, is
+// empty, or says uninitialized holds none; and none where neither does.
+func TestOf(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	file := func(name, data string) string {
@@ -32,11 +31,11 @@ func TestMachineID(t *testing.T) {
 		{[]string{uninitialized, dbus}, "dbus0123"},
 		{[]string{empty, missing}, ""},
 	} {
-		if got, err := machineIDOf(tc.files); err != nil || got != tc.want {
-			t.Errorf("machineIDOf(%q) = %q, %v; want %q", tc.files, got, err, tc.want)
+		if got, err := Of(tc.files); err != nil || got != tc.want {
+			t.Errorf("Of(%q) = %q, %v; want %q", tc.files, got, err, tc.want)
 		}
 	}
-	if len(machineIDFiles) != 2 || machineIDFiles[0] != "/etc/machine-id" {
-		t.Errorf("a host's ID is read from %q", machineIDFiles)
+	if len(Files) != 2 || Files[0] != "/etc/machine-id" {
+		t.Errorf("a host's ID is read from %q", Files)
 	}
 }

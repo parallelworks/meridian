@@ -3,9 +3,20 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	jsonv2 "encoding/json/v2"
+	"errors"
+	"fmt"
+	"io/fs"
+	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,13 +27,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/backend/batch"
 	localbackend "github.com/parallelworks/meridian/backend/local"
 	"github.com/parallelworks/meridian/backend/slurm"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
 	"github.com/parallelworks/meridian/internal/conformancetest"
 	"github.com/parallelworks/meridian/internal/porttest"
+	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/internal/schedtest"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
@@ -210,7 +221,7 @@ func TestBatchKilled(t *testing.T) {
 // TestBatchNotStarted checks that meridian batch records why it didn't
 // start the worker, and removes the token, which no worker takes now.
 func TestBatchNotStarted(t *testing.T) {
-	parallel(t)
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		setUp func(*testing.T, *batchTest)
@@ -367,49 +378,65 @@ func TestBatchAllocationEnd(t *testing.T) {
 	}
 }
 
-// TestBatchRelay checks that a job that can't reach a relay that is up
-// stops before its worker starts, with scheduler_relay_unreachable; and
-// that one that can, or whose relay is down, starts it, with the address
-// file.
+// TestBatchRelay checks that a job that can't reach the coordinator
+// through a relay that is up, as at an address that refuses it, or one at
+// which a server holds another key, stops before its worker starts, with
+// scheduler_relay_unreachable and the addresses the file said last; and
+// that one that completes a TLS handshake with the coordinator's key
+// there, or at the addresses the file says once it is written again, as
+// by a listener another process took over, or whose relay is down,
+// starts it, with the address file.
 func TestBatchRelay(t *testing.T) {
-	parallel(t)
+	t.Parallel()
 	refused := "127.0.0.1:" + strconv.Itoa(porttest.Refusing(t))
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { listener.Close() })
+	refusedToo := "127.0.0.1:" + strconv.Itoa(porttest.Refusing(t))
+	coordinator, hash := tlsServer(t)
+	other, _ := tlsServer(t)
 	for _, tc := range []struct {
 		name    string
 		address string
 		age     time.Duration
+		// moveTo, if it is set, is where the file says the relay listens
+		// once it is written again, as the job waits for it.
+		moveTo  string
 		started bool
 	}{
-		{"unreachable", refused, 0, false},
-		{"reachable", listener.Addr().String(), 0, true},
-		{"down", refused, 10 * time.Minute, true},
+		{name: "unreachable", address: refused},
+		{name: "another key", address: other},
+		{name: "reachable", address: coordinator, started: true},
+		{name: "down", address: refused, age: 10 * time.Minute, started: true},
+		{name: "moved", address: refused, moveTo: coordinator, started: true},
+		{name: "moved, unreachable", address: refused, moveTo: refusedToo},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			parallel(t)
 			b := newBatchTest(t, "")
 			file := filepath.Join(filepath.Dir(b.dir), "relay.json")
-			data, err := (&workerapi.AddressFile{Addresses: []string{tc.address}, Name: "r.meridian", Updated: time.Now().Unix()}).Marshal()
-			if err != nil {
-				t.Fatal(err)
+			write := func(address string) {
+				data, err := (&workerapi.AddressFile{Addresses: []string{address}, Name: "r.meridian", Updated: time.Now().Unix()}).Marshal()
+				if err == nil {
+					err = safepath.WriteFile(file, data)
+				}
+				if err != nil {
+					t.Error(err)
+				}
 			}
-			if err := os.WriteFile(file, data, 0o600); err != nil {
-				t.Fatal(err)
-			}
+			write(tc.address)
 			old := time.Now().Add(-tc.age)
 			if err := os.Chtimes(file, old, old); err != nil {
 				t.Fatal(err)
 			}
-			b.spec.Coordinator = batch.Coordinator{AddressFile: file, KeyHash: "sha256:" + strings.Repeat("0", 64)}
+			last := tc.address
+			if tc.moveTo != "" {
+				b.sys.relayWait, last = 3*time.Second, tc.moveTo
+				time.AfterFunc(300*time.Millisecond, func() { write(tc.moveTo) })
+			}
+			b.spec.Coordinator = batch.Coordinator{AddressFile: file, KeyHash: hash}
 			r := endedWithin(t, b.start(t))
 			_, _, exit := b.records(t)
 			if !tc.started {
 				if r.code != exitError || exit == nil || exit.Problem == nil || exit.Problem.Code != problems.SchedulerRelayUnreachable.Code() ||
-					exit.Problem.Params["node"] != "n1" || exit.Problem.Params["addresses"] != `"`+refused+`"` {
+					exit.Problem.Params["node"] != "n1" || exit.Problem.Params["addresses"] != `"`+last+`"` {
 					t.Errorf("%+v: exit.json %+v", r, exit)
 				}
 				return
@@ -420,6 +447,51 @@ func TestBatchRelay(t *testing.T) {
 			}
 		})
 	}
+	// A spec whose key hash isn't one starts no worker.
+	b := newBatchTest(t, "")
+	b.spec.Coordinator = batch.Coordinator{AddressFile: filepath.Join(filepath.Dir(b.dir), "relay.json"), KeyHash: "sha256:00"}
+	if r := endedWithin(t, b.start(t)); r.code != exitError {
+		t.Errorf("meridian batch with a spec whose key hash isn't one: %+v", r)
+	}
+}
+
+// tlsServer serves TLS 1.3 on the loopback with a key of its own, as the
+// coordinator does, completing each handshake and ending the connection;
+// and returns its address, and its key's hash, as a spec says it.
+func tlsServer(t *testing.T) (address, hash string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	l, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.(*tls.Conn).Handshake()
+			c.Close()
+		}
+	}()
+	return l.Addr().String(), "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func TestBatchArguments(t *testing.T) {
@@ -497,9 +569,13 @@ func TestOOMKills(t *testing.T) {
 // group, hpc-here, of that member and then one of the local backend,
 // here, which offers a job one CPU; and returns its environment, the
 // cluster, what sets meridian run up to drive it, and the directory of
-// its submissions.
+// its submissions. The slurm backend's driver is meridian run's own, but for
+// the cluster's commands, which it runs and submits jobs with. Its
+// workers reach the coordinator at this machine's private addresses: a
+// test skips without one, but in CI.
 func batchRun(t *testing.T, opts ...func(*schedtest.State)) (map[string]string, *schedtest.Cluster, func(*cli), string) {
 	t.Helper()
+	needPrivateAddress(t)
 	env := runEnv(t)
 	c := schedtest.New(t, opts...)
 	config := env[local.EnvConfigDir]
@@ -511,14 +587,31 @@ func batchRun(t *testing.T, opts ...func(*schedtest.State)) (map[string]string, 
 	if err := os.WriteFile(filepath.Join(config, local.GroupsFile), []byte(groups), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	key := make([]byte, batch.MinKeyLen)
-	_, _ = rand.Read(key)
-	dir := filepath.Join(env["HOME"], "batch")
-	d := &batch.Driver{
-		Scheduler: &slurm.Scheduler{Environ: c.Env(nil)}, Dir: dir, Key: key,
-		Binary: localbackend.Executable, Environ: c.Env(nil),
+	setUp := func(cl *cli) {
+		cl.schedulers = func(d *batch.Driver) {
+			d.Scheduler = &slurm.Scheduler{Environ: c.Env(nil)}
+			d.Environ = c.Env(nil)
+		}
 	}
-	return env, c, func(c *cli) { c.drivers = map[string]backend.Driver{"slurm": d} }, dir
+	return env, c, setUp, filepath.Join(env["HOME"], ".local", "state", "meridian", "batch")
+}
+
+// needPrivateAddress skips a test whose scheduler's workers reach the
+// coordinator at this machine's private addresses where it has none, but
+// in CI, which must run it.
+func needPrivateAddress(t *testing.T) {
+	t.Helper()
+	addrs, err := batch.InterfaceAddresses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(addrs, func(p netip.Prefix) bool { return p.Addr().IsPrivate() }) {
+		return
+	}
+	if os.Getenv("CI") != "" {
+		t.Fatal("this machine has no private address for a scheduler's workers to reach the coordinator at")
+	}
+	t.Skip("this machine has no private address for a scheduler's workers to reach the coordinator at")
 }
 
 // jobOutput returns what the cluster's jobs wrote, for a test that fails.
@@ -533,20 +626,252 @@ func jobOutput(dir string) string {
 }
 
 // TestBatchEndToEnd checks that meridian run runs a job on a member of the
-// slurm backend, of a fake Slurm cluster on this machine: the driver
-// submits the job, whose script runs meridian batch, which starts
-// meridian worker, which claims the attempt at the coordinator's socket,
-// runs its step and completes it.
+// slurm backend, of a fake Slurm cluster on this machine, its login node:
+// the driver copies meridian into the cache in the home the cluster's
+// nodes share, listens for the member's workers on this machine's
+// private addresses, and writes where to the member's address file there;
+// it submits the job, whose script runs the copy's meridian batch, which
+// starts meridian worker, which claims the attempt over TLS, at the
+// addresses the file names, pinned to the coordinator's key, runs its
+// step in the run's directory in that home, and completes it. The driver
+// forgets the job's submission, and the address file goes with meridian
+// run.
 func TestBatchEndToEnd(t *testing.T) {
 	parallel(t)
 	env, cluster, setUp, dir := batchRun(t)
-	workflow := writeFile(t, "w.yaml", "jobs:\n  main:\n    runs-on: {execution-group: hpc}\n    steps:\n      - run: echo hello from $SLURM_JOB_ID\n")
-	r := endedWithin(t, startCommand(t, env, setUp, "run", workflow))
-	if r.code != exitOK || !strings.Contains(r.stdout, "hello from 2") {
+	release := filepath.Join(t.TempDir(), "release")
+	workflow := writeFile(t, "w.yaml", fmt.Sprintf(`jobs:
+  main:
+    runs-on: {execution-group: hpc}
+    steps:
+      - run: |
+          echo hello from $SLURM_JOB_ID in $PWD
+          while [ ! -e %s ]; do sleep 0.05; done
+`, quoted(t, release)))
+	cmd := startCommand(t, env, setUp, "run", workflow)
+	detail := func() string { return cmd.stdout.String() + cmd.stderr.String() + jobOutput(dir) }
+	waitUntil(t, "the step to start", func() bool { return strings.Contains(cmd.stdout.String(), "main step 0| hello from 2") }, detail)
+	specs, _ := filepath.Glob(filepath.Join(dir, "*", "1", batch.SpecFile))
+	if len(specs) != 1 {
+		t.Fatalf("the submissions' specs are %v", specs)
+	}
+	spec, err := batch.ReadSpec(filepath.Dir(specs[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	co := spec.Coordinator
+	if co.Address != "" || filepath.Dir(co.AddressFile) != filepath.Join(dir, batch.RelaysDir) || !strings.HasPrefix(co.KeyHash, "sha256:") {
+		t.Errorf("the job reaches the coordinator at %+v", co)
+	}
+	data, err := os.ReadFile(co.AddressFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := workerapi.UnmarshalAddressFile(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range f.Addresses {
+		if ap, err := netip.ParseAddrPort(a); err != nil || !ap.Addr().IsPrivate() {
+			t.Errorf("the coordinator listens at %s", a)
+		}
+	}
+	runs := filepath.Join(env["HOME"], ".local", "state", "meridian", "runs")
+	if !strings.HasPrefix(spec.RunDir, runs+string(filepath.Separator)) || !strings.Contains(cmd.stdout.String(), "in "+spec.RunDir+"\n") {
+		t.Errorf("the run's directory is %s, not in %s\n%s", spec.RunDir, runs, cmd.stdout.String())
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := endedWithin(t, cmd)
+	if r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
 		t.Fatalf("meridian run: %+v\nthe job's output:\n%s", r, jobOutput(dir))
 	}
-	if j := cluster.Job(t, 2); j == nil || j.State != "COMPLETED" || !strings.HasPrefix(j.Name, "meridian-") {
-		t.Errorf("the cluster's job is %+v\n%s", j, jobOutput(dir))
+	// The job ends as its worker does, which can be after the run's end.
+	waitUntil(t, "the cluster's job to complete", func() bool { j := cluster.Job(t, 2); return j != nil && j.State == "COMPLETED" })
+	j := cluster.Job(t, 2)
+	binaries := filepath.Join(env["HOME"], ".cache", "meridian", "bin") + string(filepath.Separator)
+	if !strings.HasPrefix(j.Name, "meridian-") || !strings.Contains(j.Script, "exec '"+binaries) {
+		t.Errorf("the cluster's job is %s, of the script %q", j.Name, j.Script)
+	}
+	gone := func(path string) func() bool {
+		return func() bool {
+			_, err := os.Lstat(path)
+			return errors.Is(err, fs.ErrNotExist)
+		}
+	}
+	waitUntil(t, "the attempt's submissions to be forgotten", gone(filepath.Dir(filepath.Dir(specs[0]))))
+	waitUntil(t, "the address file to go with meridian run", gone(co.AddressFile))
+}
+
+// addressFile reads the address file of the slurm backend's members of
+// this machine in the home home, and returns what it says, or nil while
+// there is none.
+func addressFile(t *testing.T, home string) *workerapi.AddressFile {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(home, ".local", "state", "meridian", "batch", batch.RelaysDir, "*.json"))
+	if len(files) == 0 {
+		return nil
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		return nil
+	}
+	f, err := workerapi.UnmarshalAddressFile(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// TestBatchResumeKilled checks that a job on a slurm member goes on as its
+// meridian run is killed, its step running, and that meridian resume takes
+// it up: it takes the member's listener over, at another port, since the
+// test holds the old one, as another user could, where its connections
+// end at once; writes it to the address file; and the job's worker, which
+// reads the file again before each connection it makes, reaches it there,
+// delivers what its step wrote meanwhile, and completes the job, whose one
+// attempt and one batch job run it once.
+func TestBatchResumeKilled(t *testing.T) {
+	parallel(t)
+	needPrivateAddress(t)
+	env := runEnv(t)
+	cluster := schedtest.New(t)
+	for _, kv := range cluster.Env(nil) {
+		if name, value, _ := strings.Cut(kv, "="); name == "PATH" || name == schedtest.EnvState {
+			env[name] = value
+		}
+	}
+	if err := os.MkdirAll(env[local.EnvConfigDir], 0o700); err != nil {
+		t.Fatal(err)
+	}
+	groups := "hpc:\n  members:\n    - {name: cluster, backend: slurm, isolation: host, settings: {partition: debug}}\n"
+	if err := os.WriteFile(filepath.Join(env[local.EnvConfigDir], local.GroupsFile), []byte(groups), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release := filepath.Join(t.TempDir(), "release")
+	workflow := writeFile(t, "w.yaml", fmt.Sprintf(`jobs:
+  main:
+    runs-on: {execution-group: hpc}
+    steps:
+      - run: |
+          echo one
+          while [ ! -e %s ]; do sleep 0.05; done
+          echo two
+`, quoted(t, release)))
+	killed := meridianProcess(t, env, "run", "--format", "json", workflow)
+	dir := filepath.Join(env["HOME"], ".local", "state", "meridian", "batch")
+	waitUntil(t, "the step to start", func() bool { return strings.Contains(killed.stdout.String(), `"kind":"step.started"`) },
+		func() string { return killed.stdout.String() + killed.stderr.String() + jobOutput(dir) })
+	before := addressFile(t, env["HOME"])
+	if before == nil {
+		t.Fatal("no address file as the job runs")
+	}
+	if err := killed.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = killed.cmd.Wait()
+	// The old ports are another's now, which ends each connection.
+	for _, a := range before.Addresses {
+		l, err := net.Listen("tcp", a)
+		if err != nil {
+			continue
+		}
+		t.Cleanup(func() { l.Close() })
+		go func() {
+			for {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				c.Close()
+			}
+		}()
+	}
+	resumed := meridianProcess(t, env, "resume", "1")
+	waitUntil(t, "the address file to name another port", func() bool {
+		f := addressFile(t, env["HOME"])
+		return f != nil && f.Updated >= before.Updated && !slices.Equal(f.Addresses, before.Addresses)
+	}, func() string { return resumed.stdout.String() + resumed.stderr.String() + jobOutput(dir) })
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.cmd.Wait(); err != nil {
+		t.Fatalf("meridian resume 1: %v\n%s%s\n%s", err, resumed.stdout.String(), resumed.stderr.String(), jobOutput(dir))
+	}
+	if out := resumed.stdout.String(); !strings.Contains(out, "main step 0| two\n") || !strings.HasSuffix(out, "run 1 finished: success\n") {
+		t.Errorf("meridian resume showed\n%s%s", out, resumed.stderr.String())
+	}
+	if log := stepLog(t, env, "1"); log != "one\ntwo\n" {
+		t.Errorf("the step's log is %q", log)
+	}
+	waitUntil(t, "the cluster's job to complete", func() bool { j := cluster.Job(t, 2); return j != nil && j.State == "COMPLETED" })
+	if cluster.Job(t, 3) != nil {
+		t.Errorf("the cluster's jobs are %+v", cluster.State(t).Jobs)
+	}
+}
+
+// TestBatchPrivate checks a job whose group a variable names, which makes
+// where it runs private, on a slurm member: the group and the member are
+// never in the clear, in what meridian run shows, or meridian status or
+// logs, or in the state directory, and the run's directory the member
+// chose isn't in the store's; and a job that no member can run, as one
+// whose time limit is longer than the member allows, fails with the
+// member's reason, masked.
+func TestBatchPrivate(t *testing.T) {
+	parallel(t)
+	env, _, setUp, dir := batchRun(t)
+	const group, member = "h1dd3n", "m3mb3r"
+	config := env[local.EnvConfigDir]
+	groups := group + ":\n  members:\n    - {name: " + member + ", backend: slurm, isolation: host, max-walltime: 1h, settings: {partition: debug}}\n"
+	if err := os.WriteFile(filepath.Join(config, local.GroupsFile), []byte(groups), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, local.VariablesFile), []byte("vars:\n  GROUP: "+group+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	job := "jobs:\n  main:\n    runs-on: {execution-group: \"${{ vars.GROUP }}\"}\n%s    steps:\n      - run: echo in $PWD\n"
+	hides := func(what, out string, secret ...string) {
+		t.Helper()
+		for _, s := range append(secret, group, member) {
+			if strings.Contains(out, s) {
+				t.Errorf("%s shows %q:\n%s", what, s, out)
+			}
+		}
+	}
+	r := endedWithin(t, startCommand(t, env, setUp, "run", writeFile(t, "w.yaml", fmt.Sprintf(job, ""))))
+	if r.code != exitOK || !strings.HasSuffix(r.stdout, "run 1 finished: success\n") {
+		t.Fatalf("meridian run: %+v\n%s", r, jobOutput(dir))
+	}
+	hides("meridian run", r.stdout+r.stderr)
+	r = endedWithin(t, startCommand(t, env, setUp, "run", writeFile(t, "long.yaml", fmt.Sprintf(job, "    timeout: 1h\n"))))
+	if r.code != exitInvalid || !strings.Contains(r.stdout+r.stderr, string(problems.WalltimeExceedsMember.Code())) {
+		t.Fatalf("meridian run of a job longer than its member allows: %+v", r)
+	}
+	hides("meridian run of a job longer than its member allows", r.stdout+r.stderr)
+	for _, args := range [][]string{{"logs", "1"}, {"status", "-all"}, {"status", "--format", "json", "1"}, {"status", "--format", "json", "2"}} {
+		r := commandTest(t, env, args...)
+		hides("meridian "+strings.Join(args, " "), r.stdout+r.stderr)
+	}
+	if logs := commandTest(t, env, "logs", "1"); !strings.Contains(logs.stdout, "| in "+env["HOME"]) {
+		t.Errorf("the step didn't run in the home: %+v", logs)
+	}
+	if err := filepath.WalkDir(env[local.EnvStateDir], func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Type()&fs.ModeSocket != 0 {
+			return err
+		}
+		data, err := os.ReadFile(path) //nolint:gosec // a test's
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(d.Name(), local.DatabaseFile) {
+			hides(path, string(data), filepath.Join(".local", "state", "meridian", "runs"))
+		} else {
+			hides(path, string(data))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -570,7 +895,8 @@ func TestBatchCaller(t *testing.T) {
 	if r.code != exitOK || !strings.Contains(r.stdout, "main step 0| main in job none\n") || !strings.Contains(r.stdout, "main step 1 › leaf step 0| leaf in job 2\n") {
 		t.Fatalf("meridian run of a caller in hpc-here: %+v\nthe jobs' output:\n%s", r, jobOutput(dir))
 	}
-	if j := cluster.Job(t, 2); j == nil || j.State != "COMPLETED" || cluster.Job(t, 3) != nil {
+	waitUntil(t, "the cluster's job to complete", func() bool { j := cluster.Job(t, 2); return j != nil && j.State == "COMPLETED" })
+	if cluster.Job(t, 3) != nil {
 		t.Errorf("the cluster's jobs are %+v", cluster.State(t).Jobs)
 	}
 	r = endedWithin(t, startCommand(t, env, withSources, "run", caller("hpc")))

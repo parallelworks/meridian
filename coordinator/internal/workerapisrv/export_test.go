@@ -1,6 +1,9 @@
 package workerapisrv
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"time"
 )
 
@@ -78,3 +81,7 @@ func SetChildRecheck(s *Server, d time.Duration) { s.childRecheck = d }
 // SetAfterEndRead sets what s calls as a poll for a child's end has read
 // the child.
 func SetAfterEndRead(s *Server, f func()) { s.afterEndRead = f }
+
+// ServerLog is what an HTTP server of the API writes what it says of a
+// connection to, which logs to log.
+func ServerLog(ctx context.Context, log *slog.Logger) io.Writer { return serverLog{ctx, log} }

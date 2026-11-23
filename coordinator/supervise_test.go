@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -310,6 +311,67 @@ func TestPlacementImpossible(t *testing.T) {
 	}
 	if j.Diagnostics[0].Params["job"] != "main" || j.Diagnostics[1].Params["member"] != "m1" {
 		t.Errorf("the job's diagnostics are %v", j.Diagnostics)
+	}
+}
+
+// TestWalltimeExceedsMember checks that placement leaves out a member
+// whose longest walltime is shorter than the job's timeout, or else the
+// member's default, and the member's margin, whatever its backend says of
+// the job otherwise: the job runs on the group's next member, or fails,
+// where none is left, with walltime_exceeds_member among the reasons. A
+// job without a timeout, on a member without a default, asks for no
+// time, and isn't left out.
+func TestWalltimeExceedsMember(t *testing.T) {
+	t.Parallel()
+	timed := "jobs:\n  main:\n    timeout: %s\n    steps:\n      - run: echo\n"
+	for _, tc := range []struct {
+		name, workflow string
+		m1             backend.Fit
+		// on is the member the job ran on, or "" for none.
+		on string
+	}{
+		{"too long", fmt.Sprintf(timed, "10m"), backend.Fit{MaxWalltimeSeconds: 600, MarginSeconds: 60}, "m2"},
+		{"fits", fmt.Sprintf(timed, "9m"), backend.Fit{MaxWalltimeSeconds: 600, MarginSeconds: 60}, "m1"},
+		{"the default too long", oneJob, backend.Fit{MaxWalltimeSeconds: 600, MarginSeconds: 60, DefaultTimeoutSeconds: 600}, "m2"},
+		{"no time asked", oneJob, backend.Fit{MaxWalltimeSeconds: 600, MarginSeconds: 60}, "m1"},
+		{"no other", fmt.Sprintf(timed, "10m"), backend.Fit{MaxWalltimeSeconds: 600, MarginSeconds: 60}, ""},
+		// A scheduler that keeps minutes asks for 600 seconds, rounded up.
+		{"rounded up", fmt.Sprintf(timed, "539s"), backend.Fit{MaxWalltimeSeconds: 599, MarginSeconds: 60, WalltimeUnitSeconds: 60}, "m2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parallel(t)
+			members := []backend.Member{{Name: "m1", Backend: testBackend}, {Name: "m2", Backend: testBackend}}
+			if tc.on == "" {
+				members = members[:1]
+			}
+			c := open(t, Options{Groups: groupsOf{"local": {Name: "local", Members: members}}})
+			driverOf(c).set(func(d *testDriver) {
+				d.probe = func(m *backend.Member) (backend.Fit, error) {
+					fit := backend.Fit{Availability: backend.StartsNow}
+					if m.Name == "m1" {
+						fit.MaxWalltimeSeconds, fit.MarginSeconds, fit.DefaultTimeoutSeconds = tc.m1.MaxWalltimeSeconds, tc.m1.MarginSeconds, tc.m1.DefaultTimeoutSeconds
+						fit.WalltimeUnitSeconds = tc.m1.WalltimeUnitSeconds
+					}
+					return fit, nil
+				}
+			})
+			r := runToEnd(t, c, tc.workflow, nil)
+			_, on := driverOf(c).requests()
+			if tc.on != "" {
+				if r.Outcome != plan.OutcomeSuccess || !slices.Equal(on, []string{tc.on}) {
+					t.Errorf("the run ended %s, its job placed on %v, want %s", r.Outcome, on, tc.on)
+				}
+				return
+			}
+			j := storedJob(t, c, r.ID, "main")
+			if r.Outcome != plan.OutcomeFailure || len(on) != 0 || len(j.Diagnostics) != 2 ||
+				j.Diagnostics[0].Code != problems.PlacementImpossible.Code() || j.Diagnostics[1].Code != problems.WalltimeExceedsMember.Code() {
+				t.Fatalf("the run ended %s, placed on %v, with %v", r.Outcome, on, j.Diagnostics)
+			}
+			if p := j.Diagnostics[1].Params; p["member"] != "m1" || p["walltime"] != float64(660) || p["max"] != float64(600) {
+				t.Errorf("the reason's params are %v", p)
+			}
+		})
 	}
 }
 

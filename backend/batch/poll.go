@@ -122,14 +122,18 @@ func (p *poller) subOf(id string) string {
 // sub, from a snapshot that covers it, at most timing.poll old or made
 // since it was asked, and false where neither the queue nor accounting
 // lists it. It waits for the snapshot: one that a caller's refresh, or the
-// next once the current one is old, makes.
-func (p *poller) status(ctx context.Context, id, sub string) (JobStatus, bool, error) {
+// next once the current one is old, makes. A snapshot made before newer,
+// where it isn't zero, is old, however recent: one that may predate what
+// the caller knows has happened. Such a caller forces a snapshot no
+// sooner than timing.forced after the last, so that many that ask at once
+// share one.
+func (p *poller) status(ctx context.Context, id, sub string, newer time.Time) (JobStatus, bool, error) {
 	asked := time.Now()
 	p.watch(id, sub)
 	for {
 		p.mu.Lock()
 		s := p.snap
-		fresh := !s.at.IsZero() && time.Since(s.at) < p.d.timing.poll
+		fresh := !s.at.IsZero() && time.Since(s.at) < p.d.timing.poll && !s.at.Before(newer)
 		// A refresh slower than timing.poll gives a snapshot that is old
 		// already: it is the newest there is.
 		if s.covered[id] && (fresh || !s.at.Before(asked)) {
@@ -140,14 +144,19 @@ func (p *poller) status(ctx context.Context, id, sub string) (JobStatus, bool, e
 			st, ok := s.jobs[id]
 			return st, ok, nil
 		}
-		wait := p.running
-		if wait == nil && !fresh {
+		wait, next := p.running, s.at.Add(p.d.timing.poll)
+		switch {
+		case wait != nil || fresh:
+		case !newer.IsZero() && !s.at.IsZero() && time.Since(s.at) < p.d.timing.forced:
+			// Too soon for another: it waits for its time.
+			next = s.at.Add(p.d.timing.forced)
+		default:
 			wait = make(chan struct{})
 			p.running = wait
 			go p.refresh(ctx, wait)
 		}
 		p.mu.Unlock()
-		if err := p.await(ctx, wait, s.at.Add(p.d.timing.poll)); err != nil {
+		if err := p.await(ctx, wait, next); err != nil {
 			return JobStatus{}, false, err
 		}
 	}
