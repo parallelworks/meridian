@@ -442,6 +442,7 @@
   "scheduler_job_vanished": "El planificador ya no conoce el trabajo {id}, y ni su contabilidad ni los registros del trabajo dicen cómo terminó.",
   "scheduler_worker_not_started": "El trabajo {id} del planificador terminó sin iniciar el worker de Meridian. La última línea que escribió fue: {said}.",
   "scheduler_relay_unreachable": "El nodo del trabajo, {node}, no pudo conectarse al relé del coordinador en {addresses} en un minuto, así que se detuvo antes de que empezara su worker.",
+  "scheduler_caller_refused": "El trabajo llama a un flujo de trabajo, así que el miembro “{member}” de un planificador de lotes no lo ejecuta: retendría su asignación mientras se ejecutara el flujo de trabajo al que llama. Añade a su grupo un miembro que no sea de un planificador de lotes, o pasa lo que el trabajo hace por sí mismo a un trabajo aparte.",
 
   "scheduler_command_missing": "Meridian no encuentra el comando {command} del planificador en {host}, en el PATH con el que se ejecuta.",
   "scheduler_command_unsafe": "Meridian no ejecuta el comando del planificador {path} en {host}, porque no es seguro ejecutarlo ({code}).",

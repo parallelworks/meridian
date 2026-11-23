@@ -2,6 +2,7 @@ package hostproto
 
 import (
 	jsonv2 "encoding/json/v2"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -64,5 +65,41 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if d := (&Demand{Resources: backend.Resources{Memory: 1}, TimeoutSeconds: 2, Parked: []string{"a1"}}).Demand(); d.Resources.Memory != 1 || d.TimeoutSeconds != 2 || !slices.Equal(d.Parked, []string{"a1"}) {
 		t.Errorf("the demand is %+v", d)
+	}
+}
+
+// TestDemandCrosses checks that every field of a backend.Demand but Tries,
+// which the coordinator counts, crosses to meridian host and back: one
+// added to backend.Demand fails here until it does, or says why not.
+func TestDemandCrosses(t *testing.T) {
+	var d backend.Demand
+	v := reflect.ValueOf(&d).Elem()
+	for i := range v.NumField() {
+		f := v.Field(i)
+		switch name := v.Type().Field(i).Name; f.Kind() {
+		case reflect.Struct:
+			f.Field(0).SetInt(1)
+		case reflect.Int, reflect.Int64:
+			if name != "Tries" {
+				f.SetInt(7)
+			}
+		case reflect.Slice:
+			f.Set(reflect.ValueOf([]string{"a1"}))
+		case reflect.Bool:
+			f.SetBool(true)
+		default:
+			t.Fatalf("backend.Demand.%s is of a kind the test doesn't set: %s", name, f.Kind())
+		}
+	}
+	data, err := jsonv2.Marshal(DemandOf(d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Demand
+	if err := jsonv2.Unmarshal(data, &back, jsonv2.RejectUnknownMembers(true)); err != nil {
+		t.Fatal(err)
+	}
+	if got := back.Demand(); !reflect.DeepEqual(got, d) {
+		t.Errorf("%+v came back %+v", d, got)
 	}
 }

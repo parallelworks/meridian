@@ -3167,6 +3167,14 @@
       "Pregunta a los administradores del clúster por qué red, y por qué puertos, pueden los nodos de cómputo llegar al nodo de acceso."
     ]
   },
+  "scheduler_caller_refused": {
+    "title": "Trabajo que llama a un flujo de trabajo, que el miembro de un planificador de lotes no ejecuta",
+    "why": "Un trabajo con un paso cuyo uses: nombra un flujo de trabajo espera a la ejecución que llama, y un planificador de lotes no puede prestar parte de la asignación de un trabajo en marcha a otro trabajo, ni devolverla y tomarla de nuevo. En un miembro slurm o pbs, el trabajo retendría su asignación mientras se ejecutara el flujo de trabajo al que llama, cuyos trabajos esperarían en la cola detrás de él donde los límites del usuario o la partición no dejan sitio para ambos. Así que la colocación deja fuera a un miembro así para un trabajo que llama a un flujo de trabajo, diga lo que diga el if: del paso que llama, y coloca el trabajo en el siguiente miembro de su grupo, como el nodo de acceso del clúster mediante el backend ssh. Un trabajo que ningún miembro de su grupo puede aceptar falla al colocarse, con el motivo de cada miembro, antes de que se ejecute nada de su código. Los trabajos del flujo de trabajo al que llama se colocan como cualquier trabajo, también en el miembro de un planificador.",
+    "fix": [
+      "Añade al grupo del trabajo un miembro que no sea de un planificador de lotes, como el nodo de acceso del clúster mediante el backend ssh, donde el trabajo pueda esperar al flujo de trabajo al que llama.",
+      "O pasa lo que el trabajo hace por sí mismo a un trabajo aparte, que el trabajo que llama necesite, o que lo necesite a él, y que pueda ejecutarse en el miembro del planificador: los dos comparten archivos a través del directorio de la ejecución."
+    ]
+  },
   "scheduler_command_missing": {
     "title": "Comando del planificador que no se encuentra",
     "why": "Meridian envía, consulta y cancela los trabajos de un miembro con los propios comandos del planificador en el nodo de acceso: sbatch, squeue, scancel y scontrol, y sacct donde el clúster lleva contabilidad. Ejecuta cada uno por su ruta absoluta, como lo encuentra el PATH con el que se ejecuta, y este no está allí. Una sesión que no es un shell de inicio de sesión, como la que inicia un servicio, puede no tener lo que los archivos de inicio del clúster, o sus módulos, añaden al PATH.",

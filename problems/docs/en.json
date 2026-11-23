@@ -2730,6 +2730,13 @@
       "Ask the cluster's administrators which network, and which ports, the compute nodes may reach the login node on."
     ]
   },
+  "scheduler_caller_refused": {
+    "why": "A job with a step whose uses: names a workflow waits for the run it calls, and a batch scheduler can't lend part of a running job's allocation to another job, nor give it back and take it again. On a slurm or pbs member the job would hold its allocation while the workflow it calls ran, whose jobs would queue behind it where the user's limits or the partition leave no room for both. So placement leaves such a member out for a job that calls a workflow, whatever the calling step's if: says, and places the job on the next member of its group, as the cluster's login node through the ssh backend. A job that no member of its group can take fails as it is placed, with each member's reason, before any of its code runs. The jobs of the workflow it calls are placed as any job is, on a scheduler's member too.",
+    "fix": [
+      "Add a member that isn't a batch scheduler's to the job's group, as the cluster's login node through the ssh backend, where the job can wait for the workflow it calls.",
+      "Or move the job's own work into a job of its own, which the calling job needs, or which needs it, and which can run on the scheduler's member: the two share files through the run's directory."
+    ]
+  },
   "scheduler_command_missing": {
     "why": "Meridian submits, checks and cancels a member's jobs with the scheduler's own commands on the login node: sbatch, squeue, scancel and scontrol, and sacct where the cluster keeps accounting. It runs each by its absolute path, as the PATH it runs with finds it, and this one isn't there. A session that isn't a login shell, as one a service starts, may lack what a cluster's startup files, or its modules, add to the PATH.",
     "fix": [
