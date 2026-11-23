@@ -249,8 +249,11 @@ func TestRemove(t *testing.T) {
 	}
 	t.Run("tries again", func(t *testing.T) {
 		dir, locked := cluster(t)
-		// A file remove's first try takes, which says that it has tried
-		// once, and failed, before the directory can be removed.
+		// A file remove's first try takes, so that the directory can be
+		// removed only once remove has begun. Its first try almost always
+		// fails on locked, so the test sees it try again; where it reached
+		// first a moment before locked was made writable, it passes all the
+		// same, without that.
 		first := filepath.Join(dir, "first")
 		if err := os.WriteFile(first, nil, 0o600); err != nil {
 			t.Fatal(err)
