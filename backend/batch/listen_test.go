@@ -250,8 +250,18 @@ func TestForwardOwnFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(filepath.Dir(e.AddressFile)); err != nil {
-		t.Fatal(err)
+	// The listener makes the directory again, and writes its file in it,
+	// every period: a removal that has emptied the directory can find a
+	// new file in it before it removes the directory, and is tried again.
+	dir := filepath.Dir(e.AddressFile)
+	for deadline := time.Now().Add(10 * time.Second); ; <-time.After(time.Millisecond) {
+		err := os.RemoveAll(dir)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
 	}
 	waitFor(t, func() bool {
 		_, err := os.Lstat(e.AddressFile)
@@ -262,25 +272,30 @@ func TestForwardOwnFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A write of the listener's own that read the file just before can
-	// land after it, once: the next finds the other's, and writes no more.
+	// A write of the listener's own that read the file just before ours
+	// can land after it, and the listener then goes on: its read and its
+	// write aren't one step (touch). So the other's file is written again
+	// until it outlasts twenty of the listener's periods, as it does once
+	// the listener has read it, and written no more.
 	others := func() bool {
 		got, err := os.ReadFile(e.AddressFile)
 		return err == nil && string(got) == string(data)
 	}
-	for range 5 {
+	for deadline := time.Now().Add(10 * time.Second); ; {
 		if err := safepath.WriteFile(e.AddressFile, data); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(50 * time.Millisecond) //nolint:forbidigo // five periods of a listener that would write it again
+		time.Sleep(100 * time.Millisecond) //nolint:forbidigo // ten periods of a listener that would write it again
 		if others() {
-			break
+			time.Sleep(100 * time.Millisecond) //nolint:forbidigo // ten periods more
+			if others() {
+				break
+			}
 		}
-	}
-	time.Sleep(100 * time.Millisecond) //nolint:forbidigo // ten periods more
-	if !others() {
-		got, err := os.ReadFile(e.AddressFile)
-		t.Errorf("another listener's file is %s, %v", got, err)
+		if time.Now().After(deadline) {
+			got, err := os.ReadFile(e.AddressFile)
+			t.Fatalf("another listener's file is %s, %v", got, err)
+		}
 	}
 }
 
