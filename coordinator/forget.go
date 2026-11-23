@@ -66,11 +66,13 @@ func (c *Coordinator) unremember(id string) {
 // its placement, if the coordinator recorded it (remember): what the
 // backend keeps of it, such as the local backend's files, so that what it
 // keeps doesn't grow. Nothing asks the backend about an attempt that has
-// ended, nor withdraws it.
+// ended, nor withdraws it: its check in flight, if any, is let go
+// (dropCheck).
 func (c *Coordinator) forgetLater(id string) {
 	c.mu.Lock()
 	pl, ok := c.kept[id]
 	c.unremember(id)
+	delete(c.fenceChecks, id)
 	c.mu.Unlock()
 	if ok {
 		c.forget(pl.cand, pl.placement)

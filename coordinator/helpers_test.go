@@ -21,6 +21,7 @@ import (
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
 	"github.com/parallelworks/meridian/internal/conformancetest"
+	"github.com/parallelworks/meridian/internal/schedtest"
 	"github.com/parallelworks/meridian/plan"
 )
 
@@ -78,8 +79,10 @@ var storeTemplate = coordtest.StoreTemplate{Make: func(ctx context.Context, path
 }}
 
 // TestMain runs the package's tests, and removes the store template, if a
-// test made it.
+// test made it; or, run as a fake Slurm cluster's command, that command
+// (schedtest).
 func TestMain(m *testing.M) {
+	schedtest.Main()
 	code := m.Run()
 	storeTemplate.Remove()
 	os.Exit(code)
