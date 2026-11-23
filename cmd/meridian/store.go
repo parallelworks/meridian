@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -103,14 +104,16 @@ func coordinate(ctx context.Context, c *cli, dirs local.Dirs, cfg *local.Config,
 	if c.trees != nil {
 		trees = c.trees
 	}
+	drivers := map[string]backend.Driver{
+		"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()},
+		"ssh":   ssh,
+	}
+	maps.Copy(drivers, c.drivers)
 	coord, err := coordinator.Open(ctx, coordinator.Options{
 		Database: db, Keys: keys,
 		Variables: cfg, Inputs: cfg, Groups: cfg, Env: platformEnv(user),
-		Trees: trees,
-		Drivers: map[string]backend.Driver{
-			"local": &localbackend.Driver{State: dirs.State, Withhold: cfg.SecretEnv()},
-			"ssh":   ssh,
-		},
+		Trees:       trees,
+		Drivers:     drivers,
 		Endpoint:    backend.Endpoint{Address: dirs.Socket()},
 		TLSKey:      tlsKey,
 		StartQueue:  startQueue,
