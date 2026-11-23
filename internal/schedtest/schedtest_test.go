@@ -221,3 +221,61 @@ func TestOptions(t *testing.T) {
 		t.Errorf("a federation: %q", out)
 	}
 }
+
+// TestRemove checks that remove tries again until it can remove a
+// cluster's directory, as while a command that outlived its test writes
+// in it, and gives up with the error once its time has passed; and that a
+// command that runs once the directory is gone makes nothing.
+func TestRemove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove a file from a directory it can't write")
+	}
+	// cluster returns a cluster's directory that can't be removed until
+	// the directory it returns too is writable again.
+	cluster := func(t *testing.T) (string, string) {
+		dir := filepath.Join(t.TempDir(), "cluster")
+		locked := filepath.Join(dir, "locked")
+		if err := os.MkdirAll(locked, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(locked, "file"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+		return dir, locked
+	}
+	t.Run("tries again", func(t *testing.T) {
+		dir, locked := cluster(t)
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			_ = os.Chmod(locked, 0o700)
+		}()
+		if err := remove(dir, 10*time.Second); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the cluster's directory is still there: %v", err)
+		}
+		// A command that runs now can't make its lock's file.
+		state := filepath.Join(dir, "cluster.json")
+		if err := update(t.Context(), state, func(*State) error { return nil }); err == nil {
+			t.Error("a command ran in a cluster whose directory is gone")
+		}
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a command made the cluster's directory again: %v", err)
+		}
+	})
+	t.Run("gives up", func(t *testing.T) {
+		dir, _ := cluster(t)
+		start := time.Now()
+		if err := remove(dir, 100*time.Millisecond); !errors.Is(err, os.ErrPermission) {
+			t.Errorf("remove gave %v, not the error that stopped it", err)
+		}
+		if d := time.Since(start); d < 100*time.Millisecond {
+			t.Errorf("remove gave up after %s", d)
+		}
+	})
+}

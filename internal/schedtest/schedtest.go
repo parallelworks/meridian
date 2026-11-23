@@ -154,11 +154,21 @@ type Cluster struct {
 
 // New makes a cluster for the test t, as the State Slurm 23.11.4 with one
 // partition, debug, up and the default, set has it, and then as each of
-// opts changes it. Its jobs are killed as the test ends.
+// opts changes it. Its jobs are killed as the test ends, and its directory
+// removed (remove).
 func New(t testing.TB, opts ...func(*State)) *Cluster {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("", "schedtest-")
+	if err != nil {
+		t.Fatal(err)
+	}
 	c := &Cluster{Bin: filepath.Join(dir, "bin"), state: filepath.Join(dir, "cluster.json")}
+	t.Cleanup(func() {
+		c.kill()
+		if err := remove(dir, removeFor); err != nil {
+			t.Errorf("schedtest: removing the cluster's directory: %v", err)
+		}
+	})
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -181,8 +191,27 @@ func New(t testing.TB, opts ...func(*State)) *Cluster {
 	if err := save(c.state, s); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.kill() })
 	return c
+}
+
+// removeFor is how long remove tries to remove a cluster's directory.
+const removeFor = time.Minute
+
+// remove removes the directory dir, trying again until it can, or for d.
+// A command of the cluster's can run as its test ends, and write the
+// cluster's file as the directory is removed: a backend's refresh of its
+// jobs' states goes on once the caller that started it stops waiting, for
+// its other callers. Once the directory is gone, such a command makes
+// nothing: its lock's file can't be made where there is no directory.
+func remove(dir string, d time.Duration) error {
+	deadline := time.Now().Add(d)
+	for {
+		err := os.RemoveAll(dir)
+		if err == nil || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // Env returns the environment the cluster's commands run with: environ,
