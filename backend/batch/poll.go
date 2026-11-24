@@ -27,6 +27,9 @@ type poller struct {
 	running chan struct{}
 	// gen counts the snapshots made.
 	gen uint64
+	// waiting counts, by job, the callers waiting for its status, while
+	// which a check that found it ended doesn't stop watching it (forget).
+	waiting map[string]int
 }
 
 // A watch is a job the driver watches.
@@ -67,11 +70,15 @@ func (p *poller) watch(id, sub string) {
 	w.asked = time.Now()
 }
 
-// forget stops watching the job id.
+// forget stops watching the job id, unless a caller is waiting for its
+// status, as Forget waits for a snapshot made since it asked: the refresh
+// it waits for covers only the jobs watched.
 func (p *poller) forget(id string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.live, id)
+	if p.waiting[id] == 0 {
+		delete(p.live, id)
+	}
 }
 
 // stuckFor reports whether the job id, which a check finds stuck or not,
@@ -138,9 +145,23 @@ func (p *poller) status(ctx context.Context, id, sub string, newer time.Time) (J
 	// starting another as one ends would have a slow scheduler asked
 	// without a pause.
 	var joined uint64
+	p.mu.Lock()
+	if p.waiting == nil {
+		p.waiting = map[string]int{}
+	}
+	p.waiting[id]++
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		if p.waiting[id]--; p.waiting[id] <= 0 {
+			delete(p.waiting, id)
+		}
+		p.mu.Unlock()
+	}()
 	for {
-		// Each pass watches the job again: a check that found it ended
-		// stops watching it, and a refresh covers only the jobs watched.
+		// Each pass watches the job again: one that a check stopped
+		// watching before this caller came is watched once more, and one
+		// that waits long isn't let go as idle.
 		p.watch(id, sub)
 		p.mu.Lock()
 		s := p.snap

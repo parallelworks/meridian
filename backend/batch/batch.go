@@ -805,8 +805,14 @@ func (d *Driver) Find(ctx context.Context, m *backend.Member, attempt string) (b
 	// The newest job of the newest submission is the placement; any other
 	// holds a token that is no longer the attempt's. Another job of the
 	// newest submission is only cancelled: the submission, its token and
-	// its records, are the placement's.
+	// its records, are the placement's, which it records first, so that
+	// meridian batch of the other, as it starts, finds it isn't.
 	id := newestID(newest.ids)
+	if recordedJob(newest.sub) == "" {
+		if err := writeFile(newest.sub, JobFile, []byte(id+"\n")); err != nil {
+			return backend.Placement{}, false, err
+		}
+	}
 	for _, f := range known {
 		for _, other := range f.ids {
 			sub := f.sub
@@ -819,11 +825,6 @@ func (d *Driver) Find(ctx context.Context, m *backend.Member, attempt string) (b
 			if err := d.withdraw(ctx, sub, other, ""); err != nil {
 				return backend.Placement{}, false, err
 			}
-		}
-	}
-	if recordedJob(newest.sub) == "" {
-		if err := writeFile(newest.sub, JobFile, []byte(id+"\n")); err != nil {
-			return backend.Placement{}, false, err
 		}
 	}
 	spec, err := ReadSpec(newest.sub)

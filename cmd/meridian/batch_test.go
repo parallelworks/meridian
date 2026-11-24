@@ -372,6 +372,39 @@ func TestBatchStoppedBeforeCaught(t *testing.T) {
 	}
 }
 
+// TestBatchOtherJob checks that meridian batch of a job the submission
+// doesn't record, as a duplicate of the one it does, ends without taking
+// the token, writing a record, or starting a worker: they are the
+// placement's own job's.
+func TestBatchOtherJob(t *testing.T) {
+	parallel(t)
+	b := newBatchTest(t, "")
+	if err := os.WriteFile(filepath.Join(b.dir, batch.JobFile), []byte("13\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := endedWithin(t, b.start(t)); r.code != exitError || !strings.Contains(r.stderr, "13") {
+		t.Errorf("%+v", r)
+	}
+	if token, err := os.ReadFile(filepath.Join(b.dir, batch.TokenFile)); err != nil || string(token) != "the-token" {
+		t.Errorf("the token's file: %q, %v", token, err)
+	}
+	for _, name := range []string{batch.StartedFile, batch.TermFile, batch.ExitFile} {
+		if _, err := os.Lstat(filepath.Join(b.dir, name)); err == nil {
+			t.Errorf("%s was written", name)
+		}
+	}
+	if _, err := os.Lstat(b.report); err == nil {
+		t.Error("a worker started")
+	}
+	// The job the submission records runs.
+	if err := os.WriteFile(filepath.Join(b.dir, batch.JobFile), []byte("12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := endedWithin(t, b.start(t)); r.code != 0 {
+		t.Errorf("the submission's own job: %+v", r)
+	}
+}
+
 // TestBatchAllocationEnd checks the deadline where the scheduler says when
 // the job started, but not when it ends: its start and its walltime; and
 // that there is none, nor an end in started.json, where it says neither.

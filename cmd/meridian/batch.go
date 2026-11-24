@@ -191,6 +191,12 @@ func (b *batchJob) run(ctx context.Context) (int, error) {
 	if err != nil {
 		fmt.Fprintf(b.c.stderr, "meridian batch: when the allocation ends can't be told: %v\n", err)
 	}
+	// Another job of the submission, as a duplicate the scheduler made,
+	// isn't the placement, whose ID the submission records: it leaves the
+	// token, and the records, to the placement's own job, and ends.
+	if other := b.otherJob(alloc.Job); other != "" {
+		return exitError, fmt.Errorf("batch: this job, %s, isn't the submission's, %s", alloc.Job, other)
+	}
 	// The job's own start and its walltime, where the scheduler doesn't say
 	// its end; or nothing, rather than a guess a check would read.
 	if alloc.End.IsZero() && !alloc.Start.IsZero() && spec.WalltimeSeconds > 0 {
@@ -282,6 +288,24 @@ func (b *batchJob) signalled() os.Signal {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.termed
+}
+
+// otherJob returns the job the submission's job file records, where that
+// is another than job, this process's; or "" where it is this one, or
+// none is recorded yet, as before the driver has written it, or job isn't
+// told. Only the job file says: started.json may be another job's.
+func (b *batchJob) otherJob(job string) string {
+	if job == "" {
+		return ""
+	}
+	data, err := safepath.ReadFile(filepath.Join(b.dir, batch.JobFile), safepath.Private, 256)
+	if err != nil {
+		return ""
+	}
+	if recorded := strings.TrimSpace(string(data)); recorded != "" && recorded != job {
+		return recorded
+	}
+	return ""
 }
 
 // startWorker starts meridian worker, from the file this process runs,

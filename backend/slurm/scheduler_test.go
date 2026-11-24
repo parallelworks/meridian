@@ -513,14 +513,14 @@ func TestCommandEnviron(t *testing.T) {
 }
 
 // TestJobIDsChecked checks that an ID that isn't a job's, as a damaged
-// record could give, never reaches a command's arguments: Cancel refuses
-// it, and Statuses and Accounting take it for missing.
+// record could give, never reaches a command's arguments: Cancel,
+// Statuses and Accounting take it for missing.
 func TestJobIDsChecked(t *testing.T) {
 	t.Parallel()
 	s, c := newScheduler(t)
 	for _, id := range []string{"--user=1001", "", "2,3", "-1"} {
-		if err := s.Cancel(t.Context(), id); err == nil {
-			t.Errorf("Cancel(%q)", id)
+		if err := s.Cancel(t.Context(), id); err != nil {
+			t.Errorf("Cancel(%q): %v", id, err)
 		}
 	}
 	if calls := c.Calls(t, "scancel"); len(calls) != 0 {

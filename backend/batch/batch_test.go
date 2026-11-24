@@ -1317,6 +1317,11 @@ func TestFindSeveralNewest(t *testing.T) {
 	if r := readRecords(sub); r.withdrawn != nil {
 		t.Error("the placement's submission is recorded as withdrawn")
 	}
+	// Recorded, so that the older job's meridian batch, as it starts,
+	// finds it isn't the placement.
+	if id := recordedJob(sub); id != "102" {
+		t.Errorf("the submission records job %q", id)
+	}
 	if _, err := os.Lstat(filepath.Join(sub, TokenFile)); err != nil {
 		t.Errorf("the placement's token: %v", err)
 	}
