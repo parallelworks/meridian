@@ -728,6 +728,9 @@ func TestFind(t *testing.T) {
 		if err != nil || !found || p != placed {
 			t.Errorf("Find: %+v, %v, %v; placed %+v", p, found, err, placed)
 		}
+		if data, err := os.ReadFile(filepath.Join(sub, JobFile)); err != nil || string(data) != "101\n" {
+			t.Errorf("the job file: %q, %v", data, err)
+		}
 	})
 	t.Run("by name", func(t *testing.T) {
 		t.Parallel()

@@ -44,8 +44,10 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -808,7 +810,9 @@ func (d *Driver) Find(ctx context.Context, m *backend.Member, attempt string) (b
 	// its records, are the placement's, which it records first, so that
 	// meridian batch of the other, as it starts, finds it isn't.
 	id := newestID(newest.ids)
-	if recordedJob(newest.sub) == "" {
+	// The job file itself: an ID recordedJob read from started.json, which
+	// a job writes as it starts, isn't one meridian batch compares with.
+	if _, err := os.Lstat(filepath.Join(newest.sub, JobFile)); errors.Is(err, fs.ErrNotExist) {
 		if err := writeFile(newest.sub, JobFile, []byte(id+"\n")); err != nil {
 			return backend.Placement{}, false, err
 		}
