@@ -428,8 +428,14 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 		return 0, err
 	}
 	demand.Tries = job.PlaceTries
-	if cand.fit, err = cand.driver.Probe(ctx, m, demand); err == nil && cand.fit.Problem != nil {
-		err = cand.fit.Problem
+	// The member is asked again as the job is placed, and held to the
+	// walltime rule as rank holds it: either may have changed since.
+	if cand.fit, err = cand.driver.Probe(ctx, m, demand); err == nil {
+		if cand.fit.Problem != nil {
+			err = cand.fit.Problem
+		} else if p := walltimeExceeds(m, demand, cand.fit); p != nil {
+			err = p
+		}
 	}
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
 		c.forgetSeen(run.ID, job.Key)

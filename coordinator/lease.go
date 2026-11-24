@@ -92,7 +92,7 @@ func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.
 	cand, p, err := c.placedMember(ctx, run, job, a)
 	switch {
 	case errors.Is(err, errMemberGone):
-		return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, nil)
+		return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, problems.MemberGone.Problem(problems.Params{"job": a.Job}))
 	case err != nil && !errors.Is(err, errUncheckable):
 		return 0, err
 	}

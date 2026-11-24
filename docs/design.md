@@ -5507,13 +5507,14 @@ fencing](#leases-and-fencing) says.
 **Forgetting.** Cancel records the job as withdrawn, removes its token,
 and then cancels it (`scancel`); Forget removes the attempt's
 submissions once their records say how its job ended, as `meridian
-batch`'s exit record or a withdrawal does, or else once Slurm lists the
-job as ended, or no longer lists it, in a snapshot made since Forget was
-asked, since the coordinator asks once the attempt has ended, which an
-older snapshot can predate. Such snapshots are made no sooner than five
-seconds apart, so that many attempts that end at once, as a matrix's,
-share them. A submission no coordinator had the backend forget, the next
-to place a
+batch`'s exit record does, or else once Slurm lists the job as ended, or
+no longer lists it, in a snapshot made since Forget was asked, since the
+coordinator asks once the attempt has ended, which an older snapshot can
+predate. A withdrawal isn't an end: Slurm signals a cancelled job and
+kills it only its KillWait later, as it may still write its records and
+output. Such snapshots are made no sooner than five seconds apart, so
+that many attempts that end at once, as a matrix's, share them. A
+submission no coordinator had the backend forget, the next to place a
 job removes once its exit record or its withdrawal is a day old, or its
 allocation ended a day ago, or, where its end isn't told, once nothing in
 it has changed for 30 days.

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -338,6 +339,36 @@ func TestBatchStoppedInHandoff(t *testing.T) {
 	_, term, exit := b.records(t)
 	if r.code != 128+int(syscall.SIGTERM) || term == nil || exit == nil || exit.Problem != nil {
 		t.Errorf("%+v: term.json %+v, exit.json %+v", r, term, exit)
+	}
+}
+
+// TestBatchStoppedBeforeCaught checks that a signal that came before
+// meridian batch caught its own, which only the command's context saw,
+// stops the job, as the scheduler's SIGTERM, rather than start the worker.
+func TestBatchStoppedBeforeCaught(t *testing.T) {
+	parallel(t)
+	b := newBatchTest(t, "")
+	if err := batch.WriteRecord(b.dir, batch.SpecFile, b.spec); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	c := &cli{
+		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
+		lookupEnv: func(name string) (string, bool) { v, ok := b.vars[name]; return v, ok },
+	}
+	c.batch, c.signals = &b.sys, b.signals
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	code := run(ctx, c, []string{"batch", b.dir})
+	_, term, exit := b.records(t)
+	if code != 128+int(syscall.SIGTERM) || term == nil || term.Signal != int(syscall.SIGTERM) || exit == nil {
+		t.Errorf("exited %d (%s): term.json %+v, exit.json %+v", code, stderr.String(), term, exit)
+	}
+	if _, err := os.Lstat(filepath.Join(b.dir, batch.TokenFile)); err == nil {
+		t.Error("the token's file is there")
+	}
+	if _, err := os.Lstat(b.report); err == nil {
+		t.Error("a worker started")
 	}
 }
 

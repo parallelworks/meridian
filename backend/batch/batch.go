@@ -393,9 +393,10 @@ type cached[T any] struct {
 
 // get returns the value, kept for keep, or the failure, kept for retry,
 // or else what fetch, which one caller at a time runs, gives. While fetch
-// runs, a caller gets the last good value at once, if there is one, rather
-// than wait for a fetch that may be failing; and a failure that isn't a
-// problem, as a busy controller, gives the last good value, however old.
+// runs, a caller gets the last good value at once, if there is one and no
+// problem has been kept since it, rather than wait for a fetch that may be
+// failing; and a failure that isn't a problem, as a busy controller, gives
+// the last good value, however old.
 func (c *cached[T]) get(ctx context.Context, keep, retry, bound time.Duration, fetch func(context.Context) (T, error)) (T, error) {
 	c.mu.Lock()
 	switch {
@@ -413,8 +414,9 @@ func (c *cached[T]) get(ctx context.Context, keep, retry, bound time.Duration, f
 		go c.fetch(ctx, bound, wait, fetch)
 	}
 	if !c.good.IsZero() {
+		// A problem kept since the last good value isn't hidden by it.
 		defer c.mu.Unlock()
-		return c.val, nil
+		return c.result()
 	}
 	c.mu.Unlock()
 	select {
@@ -666,6 +668,14 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		}
 	}
 	d.sweep()
+	// The slot comes first: a placement that gives up waiting for one
+	// leaves no submission, and no token, behind.
+	select {
+	case d.submits <- struct{}{}:
+	case <-ctx.Done():
+		return backend.Placement{}, ctx.Err()
+	}
+	defer func() { <-d.submits }()
 	sub, n, err := d.newSubmission(req.Attempt)
 	if err != nil {
 		return backend.Placement{}, err
@@ -686,7 +696,7 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 		Name: jobName(req.Attempt, n), Dir: sub, Script: Script(binary, sub), Environ: d.environ(),
 		WalltimeSeconds: spec.WalltimeSeconds, Resources: req.Resources, Settings: s, Cluster: info.Cluster,
 	}
-	id, err := d.submit(ctx, job)
+	id, err := d.Scheduler.Submit(ctx, job)
 	if r, ok := errors.AsType[*Rejected](err); ok {
 		// No job will read the token: the submission goes, with it.
 		_ = d.removeSubmission(req.Attempt, n)
@@ -702,17 +712,6 @@ func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.Place
 	}
 	d.poll.watch(id, sub)
 	return backend.Placement{Attempt: req.Attempt, ID: placementID(tag, id), WorkerDigest: digest, RunDir: runDir}, nil
-}
-
-// submit submits job, maxSubmits at a time.
-func (d *Driver) submit(ctx context.Context, job *Job) (string, error) {
-	select {
-	case d.submits <- struct{}{}:
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-	defer func() { <-d.submits }()
-	return d.Scheduler.Submit(ctx, job)
 }
 
 // jobName is the name of the attempt's nth job.
@@ -804,14 +803,20 @@ func (d *Driver) Find(ctx context.Context, m *backend.Member, attempt string) (b
 		}
 	}
 	// The newest job of the newest submission is the placement; any other
-	// holds a token that is no longer the attempt's.
+	// holds a token that is no longer the attempt's. Another job of the
+	// newest submission is only cancelled: the submission, its token and
+	// its records, are the placement's.
 	id := newestID(newest.ids)
 	for _, f := range known {
 		for _, other := range f.ids {
-			if f.n == newest.n && other == id {
-				continue
+			sub := f.sub
+			if f.n == newest.n {
+				if other == id {
+					continue
+				}
+				sub = ""
 			}
-			if err := d.withdraw(ctx, f.sub, other, ""); err != nil {
+			if err := d.withdraw(ctx, sub, other, ""); err != nil {
 				return backend.Placement{}, false, err
 			}
 		}
@@ -1013,12 +1018,14 @@ func (d *Driver) Cancel(ctx context.Context, m *backend.Member, p backend.Placem
 }
 
 // Forget removes the attempt's submissions, its token among them, once its
-// job has ended: its records say how, as meridian batch's exit record or
-// a withdrawal does, or the scheduler lists it as ended, or no longer
-// lists it, in a snapshot made since Forget was asked, since the
-// coordinator asks once the attempt has ended, which an older snapshot can
-// predate. One whose job may still run, or that the scheduler can't say
-// of, is kept, and an error.
+// job has ended: its records say how, as meridian batch's exit record
+// does, or the scheduler lists it as ended, or no longer lists it, in a
+// snapshot made since Forget was asked, since the coordinator asks once
+// the attempt has ended, which an older snapshot can predate. A withdrawal
+// isn't an end: the scheduler signals a cancelled job and kills it only
+// its KillWait later, as it writes its records and output. One whose job
+// may still run, or that the scheduler can't say of, is kept, and an
+// error.
 func (d *Driver) Forget(ctx context.Context, m *backend.Member, p backend.Placement) error {
 	d.init()
 	asked := time.Now()
@@ -1029,7 +1036,7 @@ func (d *Driver) Forget(ctx context.Context, m *backend.Member, p backend.Placem
 	if err != nil {
 		return err
 	}
-	if r := readRecords(sub); r.exit == nil && r.withdrawn == nil {
+	if r := readRecords(sub); r.exit == nil {
 		st, listed, err := d.poll.status(ctx, id, sub, asked)
 		if err != nil {
 			return err

@@ -1214,3 +1214,194 @@ func TestGoneProblemFirst(t *testing.T) {
 	}
 	kindtest.Want(t, st.Problem, problems.WorkerBinaryUnsafe)
 }
+
+// TestForgetCheckEnded checks that a Forget that waits for a snapshot made
+// since it asked gets one, though a check of the same job, which found it
+// ended as the refresh it waited for ended, stops watching it.
+func TestForgetCheckEnded(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	d.timing.forced = 0
+	p, sub := place(t, d, "a1")
+	f.set("101", JobStatus{State: backend.Running})
+	fresh(d)
+	f.mu.Lock()
+	hold := make(chan struct{})
+	f.hold = hold
+	f.mu.Unlock()
+	checked := make(chan error, 1)
+	go func() {
+		_, err := d.Check(t.Context(), testMember, p)
+		checked <- err
+	}()
+	waitFor(t, func() bool { return f.calls() == 1 })
+	// Forget asks as the check's refresh runs: it needs a newer one.
+	asking := time.Now()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	forgot := make(chan error, 1)
+	go func() { forgot <- d.Forget(ctx, testMember, p) }()
+	waitFor(t, func() bool {
+		d.poll.mu.Lock()
+		defer d.poll.mu.Unlock()
+		w := d.poll.live["101"]
+		return w != nil && !w.asked.Before(asking)
+	})
+	// An end of the scheduler's own: the check finds it Dead, and stops
+	// watching it.
+	f.set("101", JobStatus{State: backend.Dead, End: backend.EndNodeFailed})
+	f.mu.Lock()
+	f.hold = nil
+	f.mu.Unlock()
+	close(hold)
+	if err := <-checked; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-forgot; err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if _, err := os.Lstat(sub); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the submission: %v", err)
+	}
+}
+
+// TestForgetWithdrawn checks that a withdrawal isn't taken for the job's
+// end: the scheduler signals a cancelled job and kills it only its KillWait
+// later, so Forget keeps its submission while the queue lists it running.
+func TestForgetWithdrawn(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	d.timing.forced = 0
+	p, sub := place(t, d, "a1")
+	if err := d.Cancel(t.Context(), testMember, p); err != nil {
+		t.Fatal(err)
+	}
+	// scancel signalled it, and it runs on until its KillWait.
+	f.set("101", JobStatus{State: backend.Running})
+	if err := d.Forget(t.Context(), testMember, p); err == nil {
+		t.Error("Forget of a withdrawn job that still runs")
+	}
+	if _, err := os.Lstat(sub); err != nil {
+		t.Errorf("the submission of a job that still runs: %v", err)
+	}
+	f.set("101", JobStatus{State: backend.Dead, End: backend.EndExited, Cancelled: true})
+	if err := d.Forget(t.Context(), testMember, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(sub); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the submission: %v", err)
+	}
+}
+
+// TestFindSeveralNewest checks that where the scheduler has two jobs of the
+// newest submission's name, Find cancels the older, and keeps the
+// submission, whose token and records are the placement's.
+func TestFindSeveralNewest(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	_, sub := place(t, d, "a1")
+	if err := os.Remove(filepath.Join(sub, JobFile)); err != nil {
+		t.Fatal(err)
+	}
+	f.named["meridian-a1-1"] = []string{"101", "102"}
+	p, found, err := d.Find(t.Context(), testMember, "a1")
+	if err != nil || !found || !strings.HasSuffix(p.ID, "/102") {
+		t.Fatalf("Find: %+v, %v, %v", p, found, err)
+	}
+	if !slices.Equal(f.cancelled, []string{"101"}) {
+		t.Errorf("cancelled %v, want the older job", f.cancelled)
+	}
+	if r := readRecords(sub); r.withdrawn != nil {
+		t.Error("the placement's submission is recorded as withdrawn")
+	}
+	if _, err := os.Lstat(filepath.Join(sub, TokenFile)); err != nil {
+		t.Errorf("the placement's token: %v", err)
+	}
+}
+
+// TestInfoProblemKept checks that a problem that came after a good Info,
+// as a command of the scheduler's that became unsafe, isn't hidden by the
+// good Info as the next fetch starts.
+func TestInfoProblemKept(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	if _, err := d.info(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	d.timing.facts = time.Nanosecond
+	d.timing.failed = time.Nanosecond
+	f.mu.Lock()
+	f.infoErr = problems.WorkerBinaryUnsafe.Problem(problems.Params{"path": "/usr/bin/sbatch", "code": "file_changeable"})
+	f.mu.Unlock()
+	_, _ = d.info(t.Context())
+	waitFor(t, func() bool {
+		d.infos.mu.Lock()
+		defer d.infos.mu.Unlock()
+		return d.infos.err != nil && d.infos.running == nil
+	})
+	_, err := d.info(t.Context())
+	kindtest.Want(t, err, problems.WorkerBinaryUnsafe)
+}
+
+// TestPlaceNoSlot checks that a placement that gives up waiting for a
+// submit slot leaves no submission, and no token, behind.
+func TestPlaceNoSlot(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	place(t, d, "a1")
+	for range maxSubmits {
+		d.submits <- struct{}{}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := d.Place(ctx, testMember, backend.PlaceRequest{Attempt: "a2", BootstrapToken: "token-a2", RunDir: "/runs/1"})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Place: %v", err)
+	}
+	if subs, err := d.submissions("a2"); err != nil || len(subs) != 0 {
+		t.Errorf("a placement that got no slot left submissions %v, %v", subs, err)
+	}
+}
+
+// TestPollSlowRefresh checks that a check that joins a refresh slower than
+// timing.poll takes its snapshot, rather than ask the scheduler again.
+func TestPollSlowRefresh(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	d.timing.poll = 50 * time.Millisecond
+	p1, _ := place(t, d, "a1")
+	p2, _ := place(t, d, "a2")
+	fresh(d)
+	f.mu.Lock()
+	hold := make(chan struct{})
+	f.hold = hold
+	f.mu.Unlock()
+	var wg sync.WaitGroup
+	check := func(p backend.Placement) {
+		if _, err := d.Check(t.Context(), testMember, p); err != nil {
+			t.Error(err)
+		}
+	}
+	wg.Go(func() { check(p1) })
+	waitFor(t, func() bool { return f.calls() == 1 })
+	started := time.Now()
+	asking := time.Now()
+	wg.Go(func() { check(p2) })
+	waitFor(t, func() bool {
+		d.poll.mu.Lock()
+		defer d.poll.mu.Unlock()
+		w := d.poll.live["102"]
+		return w != nil && !w.asked.Before(asking) && time.Since(started) > 2*d.timing.poll
+	})
+	close(hold)
+	wg.Wait()
+	if n := f.calls(); n != 1 {
+		t.Errorf("a check that joined a slow refresh asked the queue again: %d calls", n)
+	}
+}

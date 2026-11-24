@@ -249,11 +249,15 @@ func (c *Cluster) Update(t testing.TB, f func(*State)) {
 	}
 }
 
-// State returns the cluster as it is.
+// State returns the cluster as it is. It reads the cluster's file
+// without taking its lock, or writing it: save replaces the file whole,
+// so a read finds it as one save or another left it.
 func (c *Cluster) State(t testing.TB) *State {
 	t.Helper()
-	var s *State
-	c.Update(t, func(st *State) { s = st })
+	s, err := load(c.state)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
 

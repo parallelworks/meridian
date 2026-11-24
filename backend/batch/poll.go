@@ -25,6 +25,8 @@ type poller struct {
 	snap snapshot
 	// running is closed once the refresh in flight ends, or nil.
 	running chan struct{}
+	// gen counts the snapshots made.
+	gen uint64
 }
 
 // A watch is a job the driver watches.
@@ -41,7 +43,9 @@ type watch struct {
 
 // A snapshot is what the scheduler said of the jobs it covers, at at.
 type snapshot struct {
-	at      time.Time
+	at time.Time
+	// gen is which of the poller's snapshots it is.
+	gen     uint64
 	covered map[string]bool
 	// jobs are those the queue, or accounting, lists.
 	jobs map[string]JobStatus
@@ -129,14 +133,21 @@ func (p *poller) subOf(id string) string {
 // share one.
 func (p *poller) status(ctx context.Context, id, sub string, newer time.Time) (JobStatus, bool, error) {
 	asked := time.Now()
-	p.watch(id, sub)
+	// joined is the snapshot of the refresh this caller waited for, which
+	// it takes however long the refresh took, where it needn't be newer:
+	// starting another as one ends would have a slow scheduler asked
+	// without a pause.
+	var joined uint64
 	for {
+		// Each pass watches the job again: a check that found it ended
+		// stops watching it, and a refresh covers only the jobs watched.
+		p.watch(id, sub)
 		p.mu.Lock()
 		s := p.snap
 		fresh := !s.at.IsZero() && time.Since(s.at) < p.d.timing.poll && !s.at.Before(newer)
 		// A refresh slower than timing.poll gives a snapshot that is old
 		// already: it is the newest there is.
-		if s.covered[id] && (fresh || !s.at.Before(asked)) {
+		if s.covered[id] && (fresh || !s.at.Before(asked) || newer.IsZero() && joined != 0 && s.gen >= joined) {
 			p.mu.Unlock()
 			if s.err != nil {
 				return JobStatus{}, false, s.err
@@ -145,6 +156,9 @@ func (p *poller) status(ctx context.Context, id, sub string, newer time.Time) (J
 			return st, ok, nil
 		}
 		wait, next := p.running, s.at.Add(p.d.timing.poll)
+		if wait != nil {
+			joined = p.gen + 1
+		}
 		switch {
 		case wait != nil || fresh:
 		case !newer.IsZero() && !s.at.IsZero() && time.Since(s.at) < p.d.timing.forced:
@@ -205,6 +219,8 @@ func (p *poller) refresh(ctx context.Context, done chan struct{}) {
 	}
 	s.err = p.collect(ctx, ids, subs, s.jobs)
 	p.mu.Lock()
+	p.gen++
+	s.gen = p.gen
 	p.snap = s
 	p.running = nil
 	p.mu.Unlock()

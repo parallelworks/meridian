@@ -349,6 +349,7 @@ func TestNoShell(t *testing.T) {
 			t.Fatalf("meridian batch didn't run: %v, %+v", err, c.Job(t, 2))
 		}
 		_, _ = s.Statuses(t.Context(), []string{"2"}, false)
+		<-time.After(10 * time.Millisecond)
 	}
 	var got []string
 	if err := jsonv2.Unmarshal(data, &got); err != nil || !slices.Equal(got, []string{"batch", dir}) {
@@ -508,5 +509,48 @@ func TestCommandEnviron(t *testing.T) {
 	}, "SLURM_TIME_FORMAT=%s")
 	if want := []string{"SLURM_JWT=t", "SLURM_CONF=/etc/slurm.conf", "HOME=/home/u", "SLURM_TIME_FORMAT=%s"}; !slices.Equal(got, want) {
 		t.Errorf("commandEnviron = %q, want %q", got, want)
+	}
+}
+
+// TestJobIDsChecked checks that an ID that isn't a job's, as a damaged
+// record could give, never reaches a command's arguments: Cancel refuses
+// it, and Statuses and Accounting take it for missing.
+func TestJobIDsChecked(t *testing.T) {
+	t.Parallel()
+	s, c := newScheduler(t)
+	for _, id := range []string{"--user=1001", "", "2,3", "-1"} {
+		if err := s.Cancel(t.Context(), id); err == nil {
+			t.Errorf("Cancel(%q)", id)
+		}
+	}
+	if calls := c.Calls(t, "scancel"); len(calls) != 0 {
+		t.Errorf("scancel ran with %q", calls)
+	}
+	jobs, err := s.Statuses(t.Context(), []string{"--user=1001"}, false)
+	if err != nil || len(jobs) != 0 || len(c.Calls(t, "squeue")) != 0 {
+		t.Errorf("Statuses of no job's ID: %v, %v, squeue %q", jobs, err, c.Calls(t, "squeue"))
+	}
+	if _, err := s.Statuses(t.Context(), []string{"--user=1001", "7"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if calls := c.Calls(t, "squeue"); len(calls) != 1 || !slices.Contains(calls[0], "--jobs=7") {
+		t.Errorf("squeue ran with %q", calls)
+	}
+	jobs, err = s.Accounting(t.Context(), []string{"--user=1001"})
+	if err != nil || len(jobs) != 0 || len(c.Calls(t, "sacct")) != 0 {
+		t.Errorf("Accounting of no job's ID: %v, %v, sacct %q", jobs, err, c.Calls(t, "sacct"))
+	}
+}
+
+// TestLimitedWrite checks that a command's output past maxOutput is an
+// error of the write that crosses it, which keeps what fits.
+func TestLimitedWrite(t *testing.T) {
+	t.Parallel()
+	var l limited
+	if n, err := l.Write(make([]byte, maxOutput-1)); n != maxOutput-1 || err != nil {
+		t.Fatalf("a write that fits: %d, %v", n, err)
+	}
+	if n, err := l.Write([]byte("abc")); n != 1 || !errors.Is(err, errTruncated) || !l.over || l.buf.Len() != maxOutput {
+		t.Errorf("a write past the limit: %d, %v, over %t, %d kept", n, err, l.over, l.buf.Len())
 	}
 }
