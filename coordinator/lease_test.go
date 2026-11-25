@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -65,6 +66,10 @@ type leaseDriver struct {
 	// network filesystem that hangs can.
 	hold  bool
 	stuck chan struct{}
+	// late, if it isn't 0, holds each Check until its context is done, and
+	// that long more, and then says what Check says, as a driver that
+	// honours its context, and stops the command it runs, does.
+	late time.Duration
 	// endWait is what EndWait says: how long a check can take to see how
 	// a worker ended, 0 for a backend that sees it at once.
 	endWait time.Duration
@@ -83,12 +88,16 @@ func (d *leaseDriver) Check(ctx context.Context, _ *backend.Member, p backend.Pl
 	d.mu.Lock()
 	d.checks++
 	d.asked = append(d.asked, p)
-	st, err, hold, stuck := d.status, d.err, d.hold, d.stuck
+	st, err, hold, stuck, late := d.status, d.err, d.hold, d.stuck, d.late
 	d.mu.Unlock()
 	switch {
 	case stuck != nil:
 		<-stuck
 		return backend.Status{State: backend.Unknown}, errors.New("stuck")
+	case late > 0:
+		<-ctx.Done()
+		time.Sleep(late) //nolint:forbidigo // the delay is the test: an answer that comes just after the check's deadline, as a stopped command's does
+		return st, err
 	case hold:
 		<-ctx.Done()
 		return backend.Status{State: backend.Unknown}, ctx.Err()
@@ -583,6 +592,96 @@ func TestSelfFenceEnd(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSelfFenceEndLastProblem checks that a self-fencing attempt whose
+// backend's check gave a problem, and whose last check didn't answer in
+// time, is lost with the problem.
+func TestSelfFenceEndLastProblem(t *testing.T) {
+	parallel(t)
+	elsewhere := problems.SSHPlacementElsewhere.Problem(problems.Params{"host": "farm"})
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true}, []bool{true})
+	c.fenceCheck = 50 * time.Millisecond
+	id, first := startJob(t, c, retryJob, store.AttemptRunning)
+	d.says(backend.Status{State: backend.Unknown}, elsewhere)
+	d.mu.Lock()
+	d.endWait = 2 * time.Minute
+	d.mu.Unlock()
+	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+	look(t, c, id)
+	if a := latestAttempt(t, c, id, "main"); a.State != store.AttemptRunning {
+		t.Fatalf("at a check that gave a problem, the attempt is %s", a.State)
+	}
+	d.mu.Lock()
+	d.hold = true
+	d.mu.Unlock()
+	clock.Advance(d.EndWait() + c.fenceCheck + c.timing.Heartbeat)
+	look(t, c, id)
+	lost := latestAttempt(t, c, id, "main")
+	if lost.ID != first.ID || lost.End.Kind != store.EndLost || lost.End.Reason != plan.ReasonWorkerLost || lost.End.Problem == nil || lost.End.Problem.Code != elsewhere.Code {
+		t.Errorf("the attempt ended %+v", lost.End)
+	}
+	c.mu.Lock()
+	kept := len(c.fenceProblems)
+	c.mu.Unlock()
+	if kept != 0 {
+		t.Errorf("of an attempt that was lost, the coordinator keeps problems: %d", kept)
+	}
+}
+
+// TestSelfFenceCheckLate checks that the answer of a driver that honours
+// its check's context, given just after its deadline, is taken by the look
+// that asked, rather than read as no answer.
+func TestSelfFenceCheckLate(t *testing.T) {
+	parallel(t)
+	clock := newFakeClock()
+	c, d := openLease(t, clock, []bool{true}, []bool{true})
+	c.fenceCheck = 500 * time.Millisecond
+	id, first := startJob(t, c, retryJob, store.AttemptRunning)
+	d.says(backend.Status{State: backend.Dead, End: backend.EndTimedOut}, nil)
+	d.mu.Lock()
+	d.endWait = 2 * time.Minute
+	d.late = 20 * time.Millisecond
+	d.mu.Unlock()
+	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+	look(t, c, id)
+	if a := latestAttempt(t, c, id, "main"); a.ID != first.ID || a.End.Kind != store.EndLost || a.End.Reason != plan.ReasonTimeout {
+		t.Errorf("the attempt is %s, and ended %+v", a.State, a.End)
+	}
+}
+
+// TestFenceChecksFull checks that a coordinator that keeps as many checks
+// as it can lets go only of those that have answered, and, where none has,
+// doesn't keep a new one, rather than let go of one in flight.
+func TestFenceChecksFull(t *testing.T) {
+	t.Parallel()
+	c := &Coordinator{fenceCheck: time.Second, fenceChecks: map[string]*fenceCheck{}}
+	for i := range maxMembers {
+		c.fenceChecks["a"+strconv.Itoa(i)] = &fenceCheck{done: make(chan struct{})}
+	}
+	a0 := c.fenceChecks["a0"]
+	cand := &candidate{driver: newTestDriver(), member: &backend.Member{Name: "m1", Backend: testBackend}}
+	if _, err := c.boundedCheck(t.Context(), "new", cand, backend.Placement{}); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	n, kept := len(c.fenceChecks), c.fenceChecks["new"] != nil
+	c.mu.Unlock()
+	if n != maxMembers || kept {
+		t.Errorf("with every check in flight, the coordinator keeps %d, and the new one: %v", n, kept)
+	}
+	close(a0.done)
+	if _, err := c.boundedCheck(t.Context(), "newer", cand, backend.Placement{Attempt: "newer"}); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	_, answered := c.fenceChecks["a0"]
+	n = len(c.fenceChecks)
+	c.mu.Unlock()
+	if answered || n != maxMembers-1 {
+		t.Errorf("with a check that answered, the coordinator keeps it: %v, and %d checks", answered, n)
 	}
 }
 

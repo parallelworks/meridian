@@ -373,13 +373,9 @@ func (s *Scheduler) Partition(ctx context.Context, name string) (batch.Partition
 	if err != nil {
 		return batch.Partition{}, false, err
 	}
-	ps, err := parsePartitions(out)
-	if err != nil {
-		return batch.Partition{}, false, err
-	}
-	for _, p := range ps {
+	for _, p := range parsePartitions(out) {
 		if p.Name == name || name == "" && p.isDefault {
-			return p.Partition, true, nil
+			return p.Partition, true, p.err
 		}
 	}
 	return batch.Partition{}, false, nil
@@ -388,12 +384,15 @@ func (s *Scheduler) Partition(ctx context.Context, name string) (batch.Partition
 type partition struct {
 	batch.Partition
 	isDefault bool
+	// err says which of its times can't be read, or is nil.
+	err error
 }
 
 // parsePartitions reads scontrol --oneliner show partition's output: a
-// line of Key=Value fields for each. A time it can't read is an error,
-// never taken for none.
-func parsePartitions(out string) ([]partition, error) {
+// line of Key=Value fields for each. A time it can't read is the
+// partition's error, never taken for none, which only the partition asked
+// for fails with: another's doesn't keep a member from its own.
+func parsePartitions(out string) []partition {
 	var ps []partition
 	for line := range strings.Lines(out) {
 		fields := map[string]string{}
@@ -412,11 +411,11 @@ func parsePartitions(out string) ([]partition, error) {
 		p.MaxSeconds, ok1 = duration(fields["MaxTime"])
 		p.DefaultSeconds, ok2 = duration(fields["DefaultTime"])
 		if !ok1 || !ok2 {
-			return nil, fmt.Errorf("slurm: the partition %s has a MaxTime %q or a DefaultTime %q that can't be read", p.Name, fields["MaxTime"], fields["DefaultTime"])
+			p.err = fmt.Errorf("slurm: the partition %s has a MaxTime %q or a DefaultTime %q that can't be read", p.Name, fields["MaxTime"], fields["DefaultTime"])
 		}
 		ps = append(ps, p)
 	}
-	return ps, nil
+	return ps
 }
 
 // duration reads a time as Slurm shows it, [days-]hours:minutes:seconds,
@@ -454,8 +453,8 @@ func duration(s string) (int64, bool) {
 // SLURM_JOB_START_TIME, which 23.02 and later set, or else what squeue
 // says. Each is zero where neither says.
 func (s *Scheduler) Allocation(ctx context.Context, getenv func(string) string) (batch.Allocation, error) {
-	a := batch.Allocation{Job: getenv("SLURM_JOB_ID")}
-	if !jobID(a.Job) {
+	a := batch.Allocation{Job: JobID(getenv)}
+	if a.Job == "" {
 		return batch.Allocation{}, errors.New("slurm: the process isn't a Slurm job's: SLURM_JOB_ID isn't set")
 	}
 	a.Start, _ = epoch(getenv("SLURM_JOB_START_TIME"))
@@ -476,6 +475,15 @@ func (s *Scheduler) Allocation(ctx context.Context, getenv func(string) string) 
 		a.End = t
 	}
 	return a, nil
+}
+
+// JobID returns the ID of the job the process runs in, as the job's
+// environment, getenv, says it, SLURM_JOB_ID; or "" where it says none.
+func JobID(getenv func(string) string) string {
+	if id := getenv("SLURM_JOB_ID"); jobID(id) {
+		return id
+	}
+	return ""
 }
 
 // epoch reads Unix seconds, as SLURM_JOB_END_TIME, or squeue's %e with

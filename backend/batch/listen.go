@@ -166,7 +166,9 @@ func (d *Driver) factsFile() (string, error) {
 // Info: its controllers, and its ports, which it keeps in factsFile as
 // it gets them, and gives as they were kept where the scheduler doesn't
 // answer, as while its controller is down, but for a problem, which is
-// one with the cluster that a kept answer doesn't hide.
+// one with the cluster that a kept answer doesn't hide. Kept ports that
+// aren't a range of them (validPorts), as a file edited by hand can have,
+// count as nothing kept.
 func (d *Driver) listenFacts(ctx context.Context) (*Info, error) {
 	file, ferr := d.factsFile()
 	if ferr != nil {
@@ -186,10 +188,16 @@ func (d *Driver) listenFacts(ctx context.Context) (*Info, error) {
 	}
 	data, rerr := safepath.ReadFile(file, safepath.Private, maxRecord)
 	kept := new(Info)
-	if rerr != nil || jsonv2.Unmarshal(data, kept) != nil {
+	if rerr != nil || jsonv2.Unmarshal(data, kept) != nil || !validPorts(kept.FirstPort, kept.LastPort) {
 		return nil, err
 	}
 	return kept, nil
+}
+
+// validPorts reports whether first and last are a range of ports, from 1
+// to 65535, the first no greater than the last; or 0 and 0, for any.
+func validPorts(first, last int) bool {
+	return first == 0 && last == 0 || 1 <= first && first <= last && last <= 65535
 }
 
 // addresses returns the addresses m's workers reach this machine at: its
@@ -387,10 +395,14 @@ func listenAll(ctx context.Context, addrs []netip.Addr, first, last int) ([]net.
 
 // listenIn listens on a at a port from first to last, starting at one
 // chosen at random, as another user's listener can hold any of them; or,
-// where first is 0, at one the system chooses.
+// where first is 0, at one the system chooses. Ports that aren't a range
+// of them (validPorts) are an error.
 func listenIn(a netip.Addr, first, last int, listen func(netip.Addr, int) (net.Listener, error)) (net.Listener, error) {
-	if first == 0 {
+	switch {
+	case first == 0:
 		return listen(a, 0)
+	case !validPorts(first, last):
+		return nil, fmt.Errorf("ports from %d to %d aren't a range of them", first, last)
 	}
 	n := last - first + 1
 	start, err := rand.Int(rand.Reader, big.NewInt(int64(n)))

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/parallelworks/foundation/problem"
 	"github.com/parallelworks/hopper"
 
 	"github.com/parallelworks/meridian/backend"
@@ -114,12 +115,12 @@ type Options struct {
 	Endpoint backend.Endpoint
 	// TLSKey is the coordinator's TLS key, an ECDSA key on P-256, with
 	// which it serves the workers of members that reach it over TLS
-	// (backend.Endpoint.TLS), as through a relay: meridian's is made once,
-	// in a file of the state directory's, and a platform gives its
-	// replicas one key, since a worker is placed with its hash and may
-	// reach any replica. Each process makes its own certificate of it. A
-	// coordinator that may write the store needs one, as any replica may
-	// come to hold any member's listener; one opened only to read it
+	// (backend.Endpoint.TLS), as a scheduler's compute nodes do: meridian's
+	// is made once, in a file of the state directory's, and a platform
+	// gives its replicas one key, since a worker is placed with its hash
+	// and may reach any replica. Each process makes its own certificate of
+	// it. A coordinator that may write the store needs one, as any replica
+	// may come to hold any member's listener; one opened only to read it
 	// doesn't.
 	TLSKey crypto.Signer
 	// StartQueue names the hopper queue the Start of the run runID goes
@@ -243,9 +244,11 @@ type Coordinator struct {
 	// fenceCheck bounds each check of a self-fencing attempt's backend
 	// once its lease and the fence margin have passed (fencedEnd); and
 	// fenceChecks are the checks in flight, by attempt, one each
-	// (boundedCheck), which mu guards.
-	fenceCheck  time.Duration
-	fenceChecks map[string]*fenceCheck
+	// (boundedCheck), and fenceProblems the last problem each attempt's
+	// checks gave (fenceProblem), which mu guards.
+	fenceCheck    time.Duration
+	fenceChecks   map[string]*fenceCheck
+	fenceProblems map[string]*problem.Problem
 	// placed, if it is set, hears of each job a supervisor places, as it
 	// readied it, before the attempt's driver places it.
 	placed func(run *store.Run, attempt string, job *plan.ReadyJob)
@@ -400,7 +403,7 @@ func Open(ctx context.Context, opts Options) (*Coordinator, error) {
 		timing: timing, retry: defaultStartRetry, supervision: defaultSupervision,
 		startTimeout: 5 * time.Minute, pollInterval: time.Second, sessionsPoll: time.Second, stopTimeout: 5 * time.Second, fenceCheck: 10 * time.Second, followEvery: defaultFollowEvery, followHold: defaultFollowHold,
 		queues: map[string]func(){}, connections: map[string]connection{}, members: map[string]memberEntry{}, seenFailed: map[string]int{}, kept: map[string]keptPlace{}, timeouts: map[string]time.Duration{},
-		outlives: map[string]bool{}, fenceChecks: map[string]*fenceCheck{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
+		outlives: map[string]bool{}, fenceChecks: map[string]*fenceCheck{}, fenceProblems: map[string]*problem.Problem{}, checkoutWaits: checkoutWaits, sessionsWake: make(chan struct{}, 1),
 		tls: identity,
 	}
 	if opts.SessionHost != nil && opts.Sessions == nil && !opts.ReadOnly {

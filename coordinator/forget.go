@@ -73,6 +73,7 @@ func (c *Coordinator) forgetLater(id string) {
 	pl, ok := c.kept[id]
 	c.unremember(id)
 	delete(c.fenceChecks, id)
+	delete(c.fenceProblems, id)
 	c.mu.Unlock()
 	if ok {
 		c.forget(pl.cand, pl.placement)

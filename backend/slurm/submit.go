@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -129,6 +130,11 @@ const authFailed = "Protocol authentication error"
 // sbatch says before it names, as QOSMaxSubmitJobPerUserLimit.
 const policy = "Job violates accounting/QOS policy"
 
+// submitLimitPattern is a reason Slurm names a limit on how many jobs the
+// user may submit by, as a whole line: a job_submit plugin's own line can
+// mention one.
+var submitLimitPattern = regexp.MustCompile(`^(Assoc|QOS)\w*SubmitJob\w*Limit$`)
+
 // classify returns the error of a failed sbatch, whose environment had a
 // token withheld or not: scheduler_token_required where the token was,
 // and sbatch couldn't authenticate without it; a *batch.Rejected with what
@@ -152,7 +158,7 @@ func classify(e *exitError, withheld bool) error {
 			continue
 		}
 		said = append(said, rest)
-		submitLimit = submitLimit || strings.Contains(rest, "SubmitJob")
+		submitLimit = submitLimit || submitLimitPattern.MatchString(rest)
 	}
 	switch {
 	case failed == authFailed && withheld:

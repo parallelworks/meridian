@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -80,14 +81,15 @@ func (c *Coordinator) watchFenced(ctx context.Context, run *store.Run, job *stor
 // asks again a heartbeat period later, for as long as the backend can take
 // to see how a worker ended (endWait), as a scheduler's whose snapshot of
 // its queue, or the records it waits for, don't show the job's end yet:
-// then it loses the attempt with worker-lost, and the problem the last
-// check gave as its error, if it gave one, as checkWorker does once
-// CheckGrace has passed. A backend that needs no while, as one whose
-// workers are processes, decides at the first check. Waiting is safe: the
-// worker has stopped the job, and the store refuses what it reports. A
-// member its group no longer has can't be asked, and is worker-lost at
-// once; one that can't be told now, as while Groups doesn't answer, is
-// asked again only while its place's driver's endWait lasts.
+// then it loses the attempt with worker-lost, and the last problem a check
+// gave as its error since lost, if one did (fenceProblem), as checkWorker
+// does once CheckGrace has passed. A backend that needs no while, as one
+// whose workers are processes, decides at the first check. Waiting is
+// safe: the worker has stopped the job, and the store refuses what it
+// reports. A member its group no longer has can't be asked, and is
+// worker-lost at once; one that can't be told now, as while Groups
+// doesn't answer, is asked again only while its place's driver's endWait
+// lasts.
 func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, now, lost time.Time) (time.Duration, error) {
 	cand, p, err := c.placedMember(ctx, run, job, a)
 	switch {
@@ -104,6 +106,7 @@ func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.
 		// Stopped as it asked, as a coordinator that shuts down is.
 		return 0, ctx.Err()
 	}
+	why := c.fenceProblem(a.ID, err)
 	if err == nil && st.State == backend.Dead {
 		return 0, c.lose(ctx, a, st, st.Problem)
 	}
@@ -115,8 +118,23 @@ func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.
 	} else {
 		c.log.InfoContext(ctx, "coordinator: a self-fencing attempt's backend didn't say how its worker ended, which is lost", "attempt", a.ID, "error", err)
 	}
-	why, _ := errors.AsType[*problem.Problem](err)
 	return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, why)
+}
+
+// fenceProblem keeps err, a check's of the self-fencing attempt id, where
+// it is a problem, and returns the last problem a check of id gave, or
+// nil: a later check that doesn't answer in time, or can't decide, doesn't
+// hide it. It keeps maxMembers attempts' at most, and an attempt's goes as
+// its check in flight does (dropCheck).
+func (c *Coordinator) fenceProblem(id string, err error) *problem.Problem {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		if _, kept := c.fenceProblems[id]; kept || len(c.fenceProblems) < maxMembers {
+			c.fenceProblems[id] = p
+		}
+	}
+	return c.fenceProblems[id]
 }
 
 // endWait is how long past its lease and the fence margin a self-fencing
@@ -141,22 +159,39 @@ type fenceCheck struct {
 	err  error
 }
 
+// answered reports whether the check has answered.
+func (fc *fenceCheck) answered() bool {
+	select {
+	case <-fc.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // boundedCheck asks cand's driver what has become of the placement p of
 // the attempt id, for at most fenceCheck, whether or not the driver
-// honours its context, as one that reads a network filesystem may not. A
-// check that hasn't answered by then gives Unknown, with the context's
-// error; it goes on, the attempt's one check in flight, whose answer the
-// next look takes, rather than start another against a driver that is
-// stuck. It keeps maxMembers checks at most, as placedMember does members.
+// honours its context, as one that reads a network filesystem may not. It
+// waits a fifth longer than that for the answer, so that a driver that
+// honours its context, and answers as its deadline passes, isn't taken for
+// one that doesn't answer. A check that hasn't answered by then gives
+// Unknown, with the context's error; it goes on, the attempt's one check in
+// flight, whose answer the next look takes, rather than start another
+// against a driver that is stuck. It keeps maxMembers checks at most, as
+// placedMember does members: at that many, those that have answered go,
+// and where none has, a new check isn't kept, so that the next look of its
+// attempt asks again, rather than one in flight be let go.
 func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candidate, p backend.Placement) (backend.Status, error) {
 	c.mu.Lock()
 	fc := c.fenceChecks[id]
 	if fc == nil {
 		if len(c.fenceChecks) >= maxMembers {
-			clear(c.fenceChecks)
+			maps.DeleteFunc(c.fenceChecks, func(_ string, fc *fenceCheck) bool { return fc.answered() })
 		}
 		fc = &fenceCheck{done: make(chan struct{})}
-		c.fenceChecks[id] = fc
+		if len(c.fenceChecks) < maxMembers {
+			c.fenceChecks[id] = fc
+		}
 		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.fenceCheck)
 		go func() {
 			defer cancel()
@@ -165,7 +200,7 @@ func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candida
 		}()
 	}
 	c.mu.Unlock()
-	timer := time.NewTimer(c.fenceCheck)
+	timer := time.NewTimer(c.fenceCheck + c.fenceCheck/5)
 	defer timer.Stop()
 	select {
 	case <-fc.done:
@@ -182,11 +217,13 @@ func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candida
 	}
 }
 
-// dropCheck lets go of the attempt id's check in flight (boundedCheck), as
-// of an attempt that has ended, whose answer nothing will take.
+// dropCheck lets go of the attempt id's check in flight (boundedCheck), and
+// the problem its checks gave (fenceProblem), as of an attempt that has
+// ended, whose answer nothing will take.
 func (c *Coordinator) dropCheck(id string) {
 	c.mu.Lock()
 	delete(c.fenceChecks, id)
+	delete(c.fenceProblems, id)
 	c.mu.Unlock()
 }
 

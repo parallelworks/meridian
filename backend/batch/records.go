@@ -499,29 +499,37 @@ const (
 	abandonedAfter = 30 * 24 * time.Hour
 )
 
-// sweep removes, once a driver, as it first places a job, the submissions
-// of attempts whose jobs all ended long ago, which no coordinator had the
-// driver forget (stale).
+// sweepEvery is how often a driver that runs on sweeps (sweep).
+const sweepEvery = 24 * time.Hour
+
+// sweep removes, as a driver first places a job, and again as it places
+// one once sweepEvery has passed since, the submissions of attempts whose
+// jobs all ended long ago, which no coordinator had the driver forget
+// (stale).
 func (d *Driver) sweep() {
-	d.swept.Do(func() {
-		entries, err := os.ReadDir(d.Dir)
-		if err != nil {
-			return
+	d.sweepMu.Lock()
+	defer d.sweepMu.Unlock()
+	if !d.swept.IsZero() && time.Since(d.swept) < sweepEvery {
+		return
+	}
+	d.swept = time.Now()
+	entries, err := os.ReadDir(d.Dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		attempt := e.Name()
+		if !e.IsDir() || !validAttempt(attempt) {
+			continue
 		}
-		for _, e := range entries {
-			attempt := e.Name()
-			if !e.IsDir() || !validAttempt(attempt) {
-				continue
-			}
-			ns, err := d.submissions(attempt)
-			if err != nil || len(ns) == 0 {
-				continue
-			}
-			if !slices.ContainsFunc(ns, func(n int) bool { return !d.stale(d.submissionDir(attempt, n)) }) {
-				_ = d.removeAttempt(attempt)
-			}
+		ns, err := d.submissions(attempt)
+		if err != nil || len(ns) == 0 {
+			continue
 		}
-	})
+		if !slices.ContainsFunc(ns, func(n int) bool { return !d.stale(d.submissionDir(attempt, n)) }) {
+			_ = d.removeAttempt(attempt)
+		}
+	}
 }
 
 // stale reports whether the submission sub's job ended long ago: its exit

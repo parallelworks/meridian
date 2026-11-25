@@ -111,7 +111,7 @@ func runBatch(ctx context.Context, c *cli, fs *flag.FlagSet, args []string) int 
 		signal.Notify(signals, syscall.SIGTERM, os.Interrupt)
 		defer signal.Stop(signals)
 	}
-	b := &batchJob{c: c, sys: sys, dir: filepath.Clean(positional[0]), signals: signals}
+	b := &batchJob{c: c, sys: sys, dir: filepath.Clean(positional[0]), signals: signals, job: slurm.JobID(c.getenv)}
 	code, err := b.run(ctx)
 	if err != nil {
 		return c.fail(err)
@@ -125,6 +125,10 @@ type batchJob struct {
 	sys     batchSystem
 	dir     string
 	signals chan os.Signal
+	// job is the ID of the job the process runs in, as Slurm, the only
+	// scheduler there is, says it, before the spec, which names the
+	// scheduler, is read; or "" where it says none.
+	job string
 
 	mu sync.Mutex
 	// worker is the worker's process, once it has started.
@@ -194,8 +198,8 @@ func (b *batchJob) run(ctx context.Context) (int, error) {
 	// Another job of the submission, as a duplicate the scheduler made,
 	// isn't the placement, whose ID the submission records: it leaves the
 	// token, and the records, to the placement's own job, and ends.
-	if other := b.otherJob(alloc.Job); other != "" {
-		return exitError, fmt.Errorf("batch: this job, %s, isn't the submission's, %s", alloc.Job, other)
+	if other := b.otherJob(); other != "" {
+		return exitError, fmt.Errorf("batch: this job, %s, isn't the submission's, %s", b.job, other)
 	}
 	// The job's own start and its walltime, where the scheduler doesn't say
 	// its end; or nothing, rather than a guess a check would read.
@@ -258,8 +262,13 @@ func (b *batchJob) run(ctx context.Context) (int, error) {
 
 // fail records err, or a stop for nil, as how the job ended, before its
 // worker started, with its problem where it has one, and removes the
-// token, which no worker will take now; and returns it.
+// token, which no worker will take now; and returns it. Of another job
+// than the submission's (otherJob), it does neither: the token and the
+// records are the placement's own job's.
 func (b *batchJob) fail(err error) (int, error) {
+	if b.otherJob() != "" {
+		return exitError, err
+	}
 	exit := &batch.Exit{Status: -1, At: time.Now()}
 	if p, ok := errors.AsType[*problem.Problem](err); ok {
 		exit.Problem = batch.Record(p)
@@ -291,18 +300,18 @@ func (b *batchJob) signalled() os.Signal {
 }
 
 // otherJob returns the job the submission's job file records, where that
-// is another than job, this process's; or "" where it is this one, or
-// none is recorded yet, as before the driver has written it, or job isn't
+// is another than b.job, this process's; or "" where it is this one, or
+// none is recorded yet, as before the driver has written it, or b.job isn't
 // told. Only the job file says: started.json may be another job's.
-func (b *batchJob) otherJob(job string) string {
-	if job == "" {
+func (b *batchJob) otherJob() string {
+	if b.job == "" {
 		return ""
 	}
 	data, err := safepath.ReadFile(filepath.Join(b.dir, batch.JobFile), safepath.Private, 256)
 	if err != nil {
 		return ""
 	}
-	if recorded := strings.TrimSpace(string(data)); recorded != "" && recorded != job {
+	if recorded := strings.TrimSpace(string(data)); recorded != "" && recorded != b.job {
 		return recorded
 	}
 	return ""
@@ -364,8 +373,9 @@ func (b *batchJob) passSignals(life context.Context) {
 	}
 }
 
-// term records sig, if it is the first signal, and stops what comes before
-// the worker starts; and returns the worker, once it has started.
+// term records sig, if it is the first signal, but for another job than
+// the submission's (otherJob), and stops what comes before the worker
+// starts; and returns the worker, once it has started.
 func (b *batchJob) term(sig os.Signal) *os.Process {
 	b.mu.Lock()
 	first := b.termed == nil
@@ -379,7 +389,9 @@ func (b *batchJob) term(sig os.Signal) *os.Process {
 		if s, ok := sig.(syscall.Signal); ok {
 			n = int(s)
 		}
-		_ = batch.WriteRecord(b.dir, batch.TermFile, &batch.Term{At: time.Now(), Signal: n})
+		if b.otherJob() == "" {
+			_ = batch.WriteRecord(b.dir, batch.TermFile, &batch.Term{At: time.Now(), Signal: n})
+		}
 		b.stop()
 	}
 	return worker

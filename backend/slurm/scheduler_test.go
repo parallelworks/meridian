@@ -115,10 +115,14 @@ func TestCommands(t *testing.T) {
 	}
 }
 
+// TestPartition checks the partition named, and the default, and that one
+// whose times can't be read fails only where it is the one asked for.
 func TestPartition(t *testing.T) {
 	t.Parallel()
 	s, _ := newScheduler(t, func(st *schedtest.State) {
-		st.Partitions = append(st.Partitions, schedtest.Partition{Name: "long", State: "DRAIN", MaxTime: "2-00:00:00", DefaultTime: "01:00:00", Hidden: true})
+		st.Partitions = append(st.Partitions,
+			schedtest.Partition{Name: "long", State: "DRAIN", MaxTime: "2-00:00:00", DefaultTime: "01:00:00", Hidden: true},
+			schedtest.Partition{Name: "odd", State: "UP", MaxTime: "forever", DefaultTime: "NONE"})
 	})
 	for name, want := range map[string]batch.Partition{
 		"":     {Name: "debug", State: "UP", Up: true},
@@ -130,6 +134,9 @@ func TestPartition(t *testing.T) {
 	}
 	if _, found, err := s.Partition(t.Context(), "gpu"); err != nil || found {
 		t.Errorf("Partition(gpu): %v, %v", found, err)
+	}
+	if _, _, err := s.Partition(t.Context(), "odd"); err == nil {
+		t.Error("Partition(odd) reads a MaxTime that can't be read")
 	}
 }
 
@@ -194,24 +201,27 @@ func TestSettings(t *testing.T) {
 	}
 	for raw, want := range map[string][2]string{
 		// The first key, as they sort, is the one said.
-		`{"zzz":1,"partiton":"x"}`: {"partiton", "unknown"},
-		`{"account":"a,b"}`:        {"account", "value"},
-		`{"gpu-type":"a100:2"}`:    {"gpu-type", "value"},
-		`{"walltime":true}`:        {"walltime", "type"},
-		`{"walltime":1e30}`:        {"walltime", "value"},
-		`{"walltime":99999999999}`: {"walltime", "value"},
-		`{"nodes":"2"}`:            {"nodes", "type"},
-		`{"nodes":0}`:              {"nodes", "value"},
-		`{"account":"a\nb"}`:       {"account", "value"},
-		`{"account":""}`:           {"account", "value"},
-		`{"exclusive":"yes"}`:      {"exclusive", "type"},
-		`{"walltime":"1y"}`:        {"walltime", "value"},
-		`{"walltime":0}`:           {"walltime", "value"},
-		`["partition"]`:            {"settings", "type"},
-		`{"directives":["-N"]}`:    {"directives", "unknown"},
-		`{"relay":"10.0.0.0/8"}`:   {"relay", "type"},
-		`{"relay":{"net":"x"}}`:    {"relay.net", "unknown"},
-		`{"relay":{"network":8}}`:  {"relay.network", "type"},
+		`{"zzz":1,"partiton":"x"}`:    {"partiton", "unknown"},
+		`{"account":"a,b"}`:           {"account", "value"},
+		`{"gpu-type":"a100:2"}`:       {"gpu-type", "value"},
+		`{"walltime":true}`:           {"walltime", "type"},
+		`{"walltime":1e30}`:           {"walltime", "value"},
+		`{"walltime":99999999999}`:    {"walltime", "value"},
+		`{"nodes":"2"}`:               {"nodes", "type"},
+		`{"nodes":0}`:                 {"nodes", "value"},
+		`{"account":"a\nb"}`:          {"account", "value"},
+		`{"account":""}`:              {"account", "value"},
+		`{"host":"login 1"}`:          {"host", "value"},
+		`{"host":"-oProxyCommand=x"}`: {"host", "value"},
+		`{"host":""}`:                 {"host", "value"},
+		`{"exclusive":"yes"}`:         {"exclusive", "type"},
+		`{"walltime":"1y"}`:           {"walltime", "value"},
+		`{"walltime":0}`:              {"walltime", "value"},
+		`["partition"]`:               {"settings", "type"},
+		`{"directives":["-N"]}`:       {"directives", "unknown"},
+		`{"relay":"10.0.0.0/8"}`:      {"relay", "type"},
+		`{"relay":{"net":"x"}}`:       {"relay.net", "unknown"},
+		`{"relay":{"network":8}}`:     {"relay.network", "type"},
 		// Never a network with a public, loopback or link-local address.
 		`{"relay":{"network":"0.0.0.0/0"}}`:      {"relay.network", "value"},
 		`{"relay":{"network":"192.168.0.0/15"}}`: {"relay.network", "value"},
