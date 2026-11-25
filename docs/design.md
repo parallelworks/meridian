@@ -5348,7 +5348,10 @@ with; `pbs` isn't built yet. Today the backend runs on the cluster's
 login node: `meridian run` runs there, and runs Slurm's own commands in
 its own process. A member that names another login node (`host`), which
 a later release reaches over SSH through `meridian host`, has
-`backend_not_built`.
+`backend_not_built`. `host` names it as `clusters.yaml` names a cluster's
+host: an alias that ssh resolves, or a host's name or address, with no
+port; a port, a user, a jump host or an IPv6 address is the alias's, in
+the user's `ssh_config`.
 
 **Its settings** name each as Slurm's own option does: `partition`, or
 the cluster's default; `account`, `qos` and `reservation`; `nodes`, how

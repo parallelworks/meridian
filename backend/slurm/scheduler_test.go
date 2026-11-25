@@ -179,6 +179,12 @@ func TestConfig(t *testing.T) {
 func TestSettings(t *testing.T) {
 	t.Parallel()
 	s := new(Scheduler)
+	// A login node as clusters.yaml names a cluster's host.
+	for _, host := range []string{"hpc-login", "10.1.2.3", "gpu_1.example.com"} {
+		if got, err := s.Settings("m", jsontext.Value(`{"host":"`+host+`"}`)); err != nil || got.Host != host {
+			t.Errorf("host %q: %+v, %v", host, got, err)
+		}
+	}
 	got, err := s.Settings("m", jsontext.Value(`{"partition":"gpu","account":"proj","qos":"high","reservation":"r1","nodes":2,"exclusive":true,"gpu-type":"a100","walltime":"90m","host":"login1","relay":{"network":"10.1.2.3/16","ports":"60001-63000"}}`))
 	want := batch.Settings{
 		Host: "login1", Partition: "gpu", Account: "proj", QOS: "high", Reservation: "r1", Nodes: 2, Exclusive: true, GPUType: "a100", WalltimeSeconds: 5400,
@@ -214,6 +220,9 @@ func TestSettings(t *testing.T) {
 		`{"host":"login 1"}`:          {"host", "value"},
 		`{"host":"-oProxyCommand=x"}`: {"host", "value"},
 		`{"host":""}`:                 {"host", "value"},
+		`{"host":"alice@login1"}`:     {"host", "value"},
+		`{"host":"login1:22"}`:        {"host", "value"},
+		`{"host":"[fd00::5]"}`:        {"host", "value"},
 		`{"exclusive":"yes"}`:         {"exclusive", "type"},
 		`{"walltime":"1y"}`:           {"walltime", "value"},
 		`{"walltime":0}`:              {"walltime", "value"},

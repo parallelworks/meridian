@@ -124,15 +124,18 @@ func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.
 // fenceProblem keeps err, a check's of the self-fencing attempt id, where
 // it is a problem, and returns the last problem a check of id gave, or
 // nil: a later check that doesn't answer in time, or can't decide, doesn't
-// hide it. It keeps maxMembers attempts' at most, and an attempt's goes as
-// its check in flight does (dropCheck).
+// hide it. An attempt's goes as its check in flight does (dropCheck); and
+// at maxMembers attempts', as of attempts another replica's supervisor has
+// taken over since, they all go, as placedMember's members do, so that
+// the problem a check has just given is always kept.
 func (c *Coordinator) fenceProblem(id string, err error) *problem.Problem {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if p, ok := errors.AsType[*problem.Problem](err); ok {
-		if _, kept := c.fenceProblems[id]; kept || len(c.fenceProblems) < maxMembers {
-			c.fenceProblems[id] = p
+		if _, kept := c.fenceProblems[id]; !kept && len(c.fenceProblems) >= maxMembers {
+			clear(c.fenceProblems)
 		}
+		c.fenceProblems[id] = p
 	}
 	return c.fenceProblems[id]
 }
@@ -140,15 +143,23 @@ func (c *Coordinator) fenceProblem(id string, err error) *problem.Problem {
 // endWait is how long past its lease and the fence margin a self-fencing
 // attempt whose worker's driver is d is asked how its worker ended: the
 // time d says a check can take to see it (backend.EndWaiter), and a
-// check's own bound and a heartbeat period more, since that time counts
-// from a check, which can be the second; or none, for a driver that
-// doesn't say.
+// look's wait for a check (boundedCheck) and a heartbeat period more,
+// since that time counts from a check, which can be the second; or none,
+// for a driver that doesn't say.
 func (c *Coordinator) endWait(d backend.Driver) time.Duration {
 	w, ok := d.(backend.EndWaiter)
 	if !ok || w.EndWait() == 0 {
 		return 0
 	}
-	return w.EndWait() + c.fenceCheck + c.timing.Heartbeat
+	return w.EndWait() + c.checkWait() + c.timing.Heartbeat
+}
+
+// checkWait is how long a look waits for a self-fencing attempt's check
+// (boundedCheck): its deadline, and a fifth more, so that a driver that
+// honours its context, and answers as its deadline passes, isn't taken
+// for one that doesn't answer.
+func (c *Coordinator) checkWait() time.Duration {
+	return c.fenceCheck + c.fenceCheck/5
 }
 
 // A fenceCheck is a check of a self-fencing attempt's backend in flight
@@ -175,10 +186,9 @@ var errChecksFull = errors.New("coordinator: as many self-fencing attempts' chec
 
 // boundedCheck asks cand's driver what has become of the placement p of
 // the attempt id, for at most fenceCheck, whether or not the driver
-// honours its context, as one that reads a network filesystem may not. It
-// waits a fifth longer than that for the answer, so that a driver that
-// honours its context, and answers as its deadline passes, isn't taken for
-// one that doesn't answer. A check that hasn't answered by then gives
+// honours its context, as one that reads a network filesystem may not,
+// and waits for its answer for checkWait. A check that hasn't answered by
+// then gives
 // Unknown, with the context's error; it goes on, the attempt's one check in
 // flight, whose answer the next look takes, rather than start another
 // against a driver that is stuck. It keeps maxMembers checks at most, as
@@ -209,7 +219,7 @@ func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candida
 		}()
 	}
 	c.mu.Unlock()
-	timer := time.NewTimer(c.fenceCheck + c.fenceCheck/5)
+	timer := time.NewTimer(c.checkWait())
 	defer timer.Stop()
 	select {
 	case <-fc.done:

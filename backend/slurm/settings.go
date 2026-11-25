@@ -195,9 +195,15 @@ func PortRange(s string) (first, last int, ok bool) {
 	return first, last, true
 }
 
-// validHost reports whether host names a login node as a host's name, or
-// an ssh alias, can (plan.ValidHost), and doesn't start with a hyphen,
-// which ssh could take for an option.
+// hostPattern is a login node as clusters.yaml names a cluster's host: an
+// alias that ssh resolves, or a host's name or address, with no port, and
+// nothing ssh or a shell could read as more, a leading - among it. A login
+// node that needs a port, a user to log in as, a jump host or an IPv6
+// address is an alias the user's ssh_config defines.
+var hostPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+
+// validHost reports whether host names a login node (hostPattern), in at
+// most 256 bytes.
 func validHost(host string) bool {
-	return plan.ValidHost(host) && !strings.HasPrefix(host, "-")
+	return len(host) <= 256 && hostPattern.MatchString(host)
 }

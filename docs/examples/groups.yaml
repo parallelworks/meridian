@@ -43,7 +43,8 @@
 #                listens on each private address, those on the network of
 #                Slurm's controller first, at a port of SrunPortRange, or
 #                any.
-#   host         a login node over SSH, which isn't built yet.
+#   host         a login node over SSH, which isn't built yet: an ssh alias,
+#                or a host's name or address, as clusters.yaml's host.
 # Meridian keeps what its jobs read in your home, which the cluster's
 # nodes must share: ${XDG_STATE_HOME:-~/.local/state}/meridian/batch and
 # runs, and ${XDG_CACHE_HOME:-~/.cache}/meridian/bin. Its own state,

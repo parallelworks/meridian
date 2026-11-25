@@ -538,10 +538,10 @@ func margin(m *backend.Member) int64 {
 
 // limits returns m's Fit but for its availability: its longest walltime,
 // its margin and its default timeout, from m, its settings s and its
-// partition p; or the problem with them, a member that allows more than
-// its partition.
-func limits(m *backend.Member, s *Settings, p Partition) (backend.Fit, *problem.Problem) {
-	fit := backend.Fit{MaxWalltimeSeconds: p.MaxSeconds, MarginSeconds: margin(m), DefaultTimeoutSeconds: m.DefaultTimeoutSeconds}
+// partition p, and the unit, in seconds, its scheduler keeps walltimes in;
+// or the problem with them, a member that allows more than its partition.
+func limits(m *backend.Member, s *Settings, p Partition, unit int64) (backend.Fit, *problem.Problem) {
+	fit := backend.Fit{MaxWalltimeSeconds: p.MaxSeconds, MarginSeconds: margin(m), DefaultTimeoutSeconds: m.DefaultTimeoutSeconds, WalltimeUnitSeconds: unit}
 	over := func(key string) *problem.Problem {
 		return problems.MemberSettingInvalid.Problem(problems.Params{"member": m.Name, "key": key, "reason": "partition"})
 	}
@@ -554,10 +554,14 @@ func limits(m *backend.Member, s *Settings, p Partition) (backend.Fit, *problem.
 	if s.WalltimeSeconds > 0 && fit.MaxWalltimeSeconds > 0 && s.WalltimeSeconds > fit.MaxWalltimeSeconds {
 		return fit, over("walltime")
 	}
-	// A job asks for the fixed walltime whatever its timeout, and the
-	// scheduler stops it there.
+	// A job asks for the fixed walltime whatever its timeout, rounded up to
+	// the scheduler's unit as it is asked for, and the scheduler stops it
+	// there.
 	if s.WalltimeSeconds > 0 {
 		fit.MaxWalltimeSeconds = s.WalltimeSeconds
+		if unit > 1 {
+			fit.MaxWalltimeSeconds = (s.WalltimeSeconds + unit - 1) / unit * unit
+		}
 	}
 	// A job without a timeout: gets the allocation less the margin.
 	if alloc := cmp.Or(s.WalltimeSeconds, p.DefaultSeconds); fit.DefaultTimeoutSeconds == 0 && alloc > fit.MarginSeconds {
@@ -620,11 +624,10 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 	if err != nil {
 		return fitOf(err)
 	}
-	fit, prob := limits(m, s, p)
+	fit, prob := limits(m, s, p, d.Scheduler.WalltimeUnit())
 	if prob != nil {
 		return backend.Fit{Problem: prob}, nil //nolint:nilerr // what is wrong with the member is the Fit's, not the call's
 	}
-	fit.WalltimeUnitSeconds = d.Scheduler.WalltimeUnit()
 	for _, r := range []struct {
 		name        string
 		asks, offer int64

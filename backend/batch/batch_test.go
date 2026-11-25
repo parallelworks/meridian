@@ -357,12 +357,13 @@ func TestProbe(t *testing.T) {
 			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1800, MarginSeconds: 60, DefaultTimeoutSeconds: 100, WalltimeUnitSeconds: 60},
 		},
 		{
+			// sbatch asks for whole minutes: 17, for 1000 seconds.
 			name: "fixed walltime", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"walltime":1000}`)},
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1000, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60},
 		},
 		{
 			name: "fixed walltime under its own", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"walltime":1000}`), MaxWalltimeSeconds: 1800},
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1000, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60},
 		},
 		{name: "unknown partition", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"partition":"gpu"}`)}, want: problems.SchedulerPartitionUnknown},
 		{

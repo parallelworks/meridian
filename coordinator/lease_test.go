@@ -638,7 +638,7 @@ func TestSelfFenceCheckLate(t *testing.T) {
 	parallel(t)
 	clock := newFakeClock()
 	c, d := openLease(t, clock, []bool{true}, []bool{true})
-	c.fenceCheck = 500 * time.Millisecond
+	c.fenceCheck = time.Second
 	id, first := startJob(t, c, retryJob, store.AttemptRunning)
 	d.says(backend.Status{State: backend.Dead, End: backend.EndTimedOut}, nil)
 	d.mu.Lock()
@@ -685,6 +685,28 @@ func TestFenceChecksFull(t *testing.T) {
 	c.mu.Unlock()
 	if answered || n != maxMembers-1 {
 		t.Errorf("with a check that answered, the coordinator keeps it: %v, and %d checks", answered, n)
+	}
+}
+
+// TestFenceProblemsFull checks that a coordinator that keeps as many
+// attempts' problems as it can still keeps, and gives, the problem a
+// check has just given, rather than lose the attempt without it.
+func TestFenceProblemsFull(t *testing.T) {
+	t.Parallel()
+	c := &Coordinator{fenceProblems: map[string]*problem.Problem{}}
+	old := problems.SchedulerJobVanished.Problem(problems.Params{"id": "1"})
+	for i := range maxMembers {
+		c.fenceProblems["a"+strconv.Itoa(i)] = old
+	}
+	vanished := problems.SchedulerJobVanished.Problem(problems.Params{"id": "7"})
+	if got := c.fenceProblem("new", vanished); got != vanished {
+		t.Errorf("with as many problems kept as can be, a check's gave %v", got)
+	}
+	if got := c.fenceProblem("new", context.DeadlineExceeded); got != vanished {
+		t.Errorf("a later check that didn't answer hid the problem: %v", got)
+	}
+	if n := len(c.fenceProblems); n > maxMembers {
+		t.Errorf("the coordinator keeps %d attempts' problems", n)
 	}
 }
 
