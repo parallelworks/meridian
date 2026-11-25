@@ -578,19 +578,24 @@ func (d *Driver) member(ctx context.Context, m *backend.Member) (*Settings, Part
 	return s, p, nil
 }
 
-// Probe says whether m can run a job that asks for demand: whether the
-// job calls no workflow, whose run it would hold its allocation for; and
-// whether its scheduler's commands are there, safe to run and of a release
-// the driver supports, its partition is there and up, its walltimes fit
-// the partition's, and this machine has an address its workers can reach
-// it at. A job that fits would queue: the scheduler decides
-// when it starts. Demand.Parked is ignored: an allocation can't lend what
-// it holds.
+// Probe says whether m can run a job that asks for demand: whether its
+// scheduler's commands are there, safe to run and of a release the driver
+// supports, its partition is there and up, its walltimes fit the
+// partition's, and this machine has an address its workers can reach it
+// at. A job that fits would queue: the scheduler decides when it starts.
+// Every Fit says that m is a batch scheduler's member (backend.Fit.Batch),
+// on which the coordinator places no job that calls a workflow, whose run
+// it would hold its allocation for. Demand.Parked is ignored: an
+// allocation can't lend what it holds.
 func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.Demand) (backend.Fit, error) {
+	fit, err := d.probe(ctx, m, demand)
+	fit.Batch = true
+	return fit, err
+}
+
+// probe is Probe, but for the Fit's Batch.
+func (d *Driver) probe(ctx context.Context, m *backend.Member, demand backend.Demand) (backend.Fit, error) {
 	d.init()
-	if demand.CallsWorkflow {
-		return backend.Fit{Problem: problems.SchedulerCallerRefused.Problem(problems.Params{"member": m.Name})}, nil
-	}
 	s, p, err := d.member(ctx, m)
 	if err != nil {
 		return fitOf(err)
@@ -737,7 +742,7 @@ func shellQuote(s string) string {
 
 // environ returns the environment jobs are submitted with.
 func (d *Driver) environ() []string {
-	return jobEnviron(d.Environ, d.Withhold)
+	return Environ(d.Environ, d.Withhold)
 }
 
 // Find returns the attempt's placement: its newest submission whose job
@@ -869,8 +874,7 @@ func (d *Driver) placement(ctx context.Context, p backend.Placement) (id, sub st
 	if tag != ours {
 		// A cause that won't pass by itself, which the coordinator gives
 		// a while, and then loses the attempt with.
-		host, _ := os.Hostname()
-		return "", "", problems.SchedulerPlacementElsewhere.Problem(problems.Params{"host": host})
+		return "", "", problems.SchedulerPlacementElsewhere.Problem(problems.Params{"host": HostName()})
 	}
 	// The poller keeps a job's submission once it is known, so that a
 	// check doesn't look through the attempt's each time.

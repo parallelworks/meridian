@@ -195,9 +195,13 @@ func readRecords(sub string) records {
 // ended.
 func (r records) status(id string) backend.Status {
 	dead := backend.Status{State: backend.Dead, End: backend.EndExited}
+	var p *problem.Problem
+	if r.exit.Problem != nil {
+		p = r.exit.Problem.problem()
+	}
 	switch {
-	case r.exit.Problem != nil && r.exit.Problem.problem() != nil:
-		return backend.Status{State: backend.Dead, Problem: r.exit.Problem.problem()}
+	case p != nil:
+		return backend.Status{State: backend.Dead, Problem: p}
 	case r.withdrawn != nil:
 		return withdrawnOr(id, r, dead)
 	case r.exit.Signal == sigKill && r.exit.OOMKills > 0:
@@ -344,6 +348,15 @@ func removeToken(sub string) error {
 // maxSaid is the most bytes of what a scheduler, or a job, said that a
 // problem shows.
 const maxSaid = 512
+
+// HostName is this machine's name, for its problems.
+func HostName() string {
+	name, err := os.Hostname()
+	if err != nil {
+		return "this host"
+	}
+	return name
+}
 
 // Said returns s as a problem shows what a scheduler or a job said: on one
 // line, its control characters escaped, at most maxSaid bytes.
@@ -564,10 +577,11 @@ func (d *Driver) stale(sub string) bool {
 	return time.Since(newest) > abandonedAfter
 }
 
-// jobEnviron returns base, os.Environ() for nil, but GODEBUG, which could
+// Environ returns base, os.Environ() for nil, but GODEBUG, which could
 // turn off what the worker requires of its cryptography, every MERIDIAN_
-// variable and those withhold names.
-func jobEnviron(base, withhold []string) []string {
+// variable and those withhold names: the environment a job is submitted
+// with, and meridian batch gives its worker.
+func Environ(base, withhold []string) []string {
 	if base == nil {
 		base = os.Environ()
 	}

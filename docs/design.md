@@ -2568,13 +2568,15 @@ runs as any other; none of the known calls has an `ssh:` of its own.
     ends it. So placement leaves a `slurm` or `pbs` member out for a job
     with a step whose `uses:` names a workflow, whatever the step's `if:`
     says, as it leaves out one that can't offer the job's `resources:`
-    (`scheduler_caller_refused`): the coordinator tells the member's
-    driver that the job calls one (`backend.Demand.CallsWorkflow`), of
-    each matrix instance, and of a caller a step called. The job runs on
-    its group's next member, such as the cluster's login node through the
-    `ssh` backend; a job no member of its group can take fails as it is
-    placed, with each member's reason, before any of its code runs
-    ([Placement](#placement)). That is
+    (`scheduler_caller_refused`): the member's driver, a platform's own
+    among them, says that the member is a batch scheduler's
+    (`backend.Fit.Batch`), and the coordinator refuses it a job that calls
+    one (`backend.Demand.CallsWorkflow`), as it holds every job to the
+    walltime its member allows: each matrix instance, and a caller a step
+    called, too. The job runs on its group's next member, such as the
+    cluster's login node through the `ssh` backend; a job no member of its
+    group can take fails as it is placed, with each member's reason,
+    before any of its code runs ([Placement](#placement)). That is
     format 1's answer: none of the 267 known calling jobs waits in an
     allocation. 241 name a host with `ssh:`, in every one the `ip` of the
     cluster a `compute-clusters` or `compute-resources` input names, its
@@ -5434,12 +5436,13 @@ can use its directory, and that the job wasn't withdrawn; hardens itself;
 checks its own binary, as the `local` backend does, and that it is the
 one placed (`worker_digest_mismatch`); reads what it is to do; finds when
 the allocation ends ([Resources](#resources)); and records that the job
-started (`started.json`). Where the address file was written in the last
-three minutes, so a listener is up, it completes a TLS handshake with the
-coordinator's key at one of its addresses within a minute, or exits
-before the worker starts (`scheduler_relay_unreachable`), which places
-the job again, rather than hold the allocation; where the listener is
-down, as while the coordinator is away, the worker waits for it. Only
+started (`started.json`). Where the address file says it was written in
+the last three minutes (its `updated`), so a listener is up, it
+completes a TLS handshake with the coordinator's key at one of its
+addresses within a minute, or exits before the worker starts
+(`scheduler_relay_unreachable`), which places the job again, rather than
+hold the allocation; where the listener is down, as while the
+coordinator is away, the worker waits for it. Only
 then does it take the token, start `meridian worker` with the address
 file (`MERIDIAN_COORDINATOR_FILE`) and the deadline, and give the worker
 its token on a socket, once the worker says it is hardened, as the `local`

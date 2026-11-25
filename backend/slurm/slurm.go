@@ -78,15 +78,6 @@ func (s *Scheduler) Config() string {
 // accounting.
 var commands = []string{"sbatch", "squeue", "scancel", "scontrol"}
 
-// hostName is this machine's name, for its problems.
-func hostName() string {
-	name, err := os.Hostname()
-	if err != nil {
-		return "this host"
-	}
-	return name
-}
-
 // command returns the absolute path of the command name, without symbolic
 // links, as the PATH of s's environment finds it, once it has checked that
 // no other user can change it or the way to it: scheduler_command_unsafe
@@ -103,14 +94,14 @@ func (s *Scheduler) command(name string) (string, error) {
 		}
 		path, err := safepath.LookExecutable(candidate)
 		if p, ok := errors.AsType[*problem.Problem](err); ok {
-			return "", problems.SchedulerCommandUnsafe.Problem(problems.Params{"host": hostName(), "path": path, "code": string(p.Code)})
+			return "", problems.SchedulerCommandUnsafe.Problem(problems.Params{"host": batch.HostName(), "path": path, "code": string(p.Code)})
 		}
 		if err != nil {
 			continue
 		}
 		return path, nil
 	}
-	return "", problems.SchedulerCommandMissing.Problem(problems.Params{"host": hostName(), "command": name})
+	return "", problems.SchedulerCommandMissing.Problem(problems.Params{"host": batch.HostName(), "command": name})
 }
 
 func (s *Scheduler) environ() []string {
@@ -165,7 +156,7 @@ func otherCluster(environ []string, cluster string) error {
 	for _, name := range clusterVariables {
 		v := getenv(environ, name)
 		if v != "" && v != cluster {
-			return problems.SchedulerClusterVariable.Problem(problems.Params{"host": hostName(), "variable": name, "value": batch.Said(v), "cluster": cluster})
+			return problems.SchedulerClusterVariable.Problem(problems.Params{"host": batch.HostName(), "variable": name, "value": batch.Said(v), "cluster": cluster})
 		}
 	}
 	return nil
@@ -269,7 +260,7 @@ func (s *Scheduler) Info(ctx context.Context) (*batch.Info, error) {
 			version = "unknown"
 		}
 		return problems.SchedulerUnsupported.Problem(problems.Params{
-			"host": hostName(), "scheduler": "slurm", "version": batch.Said(version), "minimum": Minimum, "federated": federated,
+			"host": batch.HostName(), "scheduler": "slurm", "version": batch.Said(version), "minimum": Minimum, "federated": federated,
 		})
 	}
 	if !supported(info.Version) {
@@ -453,13 +444,13 @@ func duration(s string) (int64, bool) {
 // its allocation ends, or else when it started: SLURM_JOB_END_TIME and
 // SLURM_JOB_START_TIME, which 23.02 and later set, or else what squeue
 // says. Each is zero where neither says.
-func (s *Scheduler) Allocation(ctx context.Context, getenv func(string) string) (batch.Allocation, error) {
-	a := batch.Allocation{Job: getenv("SLURM_JOB_ID")}
+func (s *Scheduler) Allocation(ctx context.Context, env func(string) string) (batch.Allocation, error) {
+	a := batch.Allocation{Job: env("SLURM_JOB_ID")}
 	if !jobID(a.Job) {
 		return batch.Allocation{}, errors.New("slurm: the process isn't a Slurm job's: SLURM_JOB_ID isn't set")
 	}
-	a.Start, _ = epoch(getenv("SLURM_JOB_START_TIME"))
-	a.End, _ = epoch(getenv("SLURM_JOB_END_TIME"))
+	a.Start, _ = epoch(env("SLURM_JOB_START_TIME"))
+	a.End, _ = epoch(env("SLURM_JOB_END_TIME"))
 	// The start counts only for an end that isn't told.
 	if !a.End.IsZero() {
 		return a, nil

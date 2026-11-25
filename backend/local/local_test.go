@@ -27,6 +27,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/internal/fileid"
 	"github.com/parallelworks/meridian/internal/racetest"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
@@ -753,7 +754,7 @@ func TestDigestKept(t *testing.T) {
 	}
 	if info, err := os.Stat(exe); err != nil {
 		t.Fatal(err)
-	} else if _, ok := identity(info); !ok {
+	} else if _, ok := fileid.Of(info); !ok {
 		t.Skip("the digest is kept only on Linux")
 	}
 	write := func(content string) string {

@@ -89,8 +89,6 @@ func command(ctx context.Context, state, name string, args []string, stdin io.Re
 			code, err = s.scancel(args)
 		case "scontrol":
 			code, err = s.scontrol(args, &out, &errOut)
-		case "sinfo":
-			code, err = s.sinfo(args, &out)
 		}
 		return err
 	})
@@ -316,7 +314,7 @@ func (s *State) squeue(args []string, out, errOut io.Writer) (int, error) {
 	return 0, nil
 }
 
-// format writes j as squeue's format does, for %i, %j, %T, %r and %e.
+// format writes j as squeue's format does, for %i, %j, %T, %r, %S and %e.
 func (s *State) format(j *Job, format string) (string, error) {
 	var b strings.Builder
 	for i := 0; i < len(format); i++ {
@@ -498,10 +496,9 @@ func (s *State) scancel(args []string) (int, error) {
 	return 0, nil
 }
 
-// scontrol shows the config, the partitions, the federation and a job,
-// as scontrol show config, --all --oneliner show partition, show
-// federation and --oneliner show job do. Without --all, a hidden partition
-// isn't shown.
+// scontrol shows the config, the partitions and the federation, as
+// scontrol show config, --all --oneliner show partition and show
+// federation do. Without --all, a hidden partition isn't shown.
 func (s *State) scontrol(args []string, out, errOut io.Writer) (int, error) {
 	every := false
 	var words []string
@@ -564,27 +561,6 @@ func (s *State) scontrol(args []string, out, errOut io.Writer) (int, error) {
 		return 0, nil
 	}
 	return 0, errUsage{strings.Join(args, " ")}
-}
-
-// sinfo lists a partition, as sinfo -h -p P -o '%P|%a|%l' does.
-func (s *State) sinfo(args []string, out io.Writer) (int, error) {
-	if len(args) != 5 || args[0] != "-h" || args[1] != "-p" || args[3] != "-o" || args[4] != "%P|%a|%l" {
-		return 0, errUsage{strings.Join(args, " ")}
-	}
-	p := s.partition(args[2])
-	if p == nil {
-		return 0, nil
-	}
-	name := p.Name
-	if p.Default {
-		name += "*"
-	}
-	limit := strings.ToLower(p.MaxTime)
-	if n, err := minutes(p.MaxTime); err == nil && n > 0 {
-		limit = fmt.Sprintf("%d:00", n)
-	}
-	fmt.Fprintf(out, "%s|%s|%s\n", name, strings.ToLower(p.State), limit)
-	return 0, nil
 }
 
 // stepd runs the job id, as slurmstepd does: its script, by sh, with what

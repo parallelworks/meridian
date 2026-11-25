@@ -1,6 +1,6 @@
 // Package schedtest is a fake Slurm cluster for tests: the test binary,
 // run again under the names of Slurm's commands (sbatch, squeue, sacct,
-// scancel, scontrol and sinfo) through symbolic links in a directory a
+// scancel and scontrol) through symbolic links in a directory a
 // test puts first on the PATH it gives them, acts on a cluster kept in a
 // JSON file, under a lock. Its sbatch really runs a job's script, detached,
 // as Slurm's slurmstepd would, with SLURM_JOB_ID and the rest set; and a
@@ -38,7 +38,7 @@ const EnvState = "SCHEDTEST_STATE"
 const envStepd = "SCHEDTEST_STEPD"
 
 // Commands are the commands the fake has.
-var Commands = []string{"sbatch", "squeue", "sacct", "scancel", "scontrol", "sinfo"}
+var Commands = []string{"sbatch", "squeue", "sacct", "scancel", "scontrol"}
 
 // A State is a cluster.
 type State struct {
