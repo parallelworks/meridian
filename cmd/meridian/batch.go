@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
@@ -73,8 +72,9 @@ var systemBatch = batchSystem{
 		return string(data), err
 	},
 	cgroupRoot: "/sys/fs/cgroup",
-	// A relay touches its file every 30 seconds, and NFS can show a
-	// file's time a minute late.
+	// A relay writes its file, with the time it writes it, every 30
+	// seconds; NFS can show the file a minute late, and the relay's clock
+	// can be apart from this node's.
 	relayWait: time.Minute, relayFresh: 3 * time.Minute,
 	tokenWait: localbackend.DefaultTokenWait,
 }
@@ -203,7 +203,8 @@ func (b *batchJob) run(ctx context.Context) (int, error) {
 		alloc.End = alloc.Start.Add(time.Duration(spec.WalltimeSeconds) * time.Second)
 	}
 	node, _ := b.sys.hostname()
-	started := &batch.Started{Job: alloc.Job, Node: node, BootID: bootID(), PID: os.Getpid(), Start: time.Now(), End: alloc.End}
+	boot, _ := localbackend.BootID()
+	started := &batch.Started{Job: alloc.Job, Node: node, BootID: boot, PID: os.Getpid(), Start: time.Now(), End: alloc.End}
 	if err := batch.WriteRecord(b.dir, batch.StartedFile, started); err != nil {
 		return b.fail(err)
 	}
@@ -386,17 +387,14 @@ func (b *batchJob) term(sig os.Signal) *os.Process {
 }
 
 // workerEnviron returns the worker's environment: the job's, but GODEBUG
-// and MERIDIAN_ variables, and where the coordinator is, the token's
-// socket, and, where the allocation's end is known, the deadline, half
-// the spec's margin before it: the margin's first half started the
-// worker, so a deadline the whole margin before the end would come before
-// the job's own timeout:, and its second half is the cleanups' and the
-// reports'.
+// and MERIDIAN_ variables (batch.Environ), and where the coordinator is,
+// the token's socket, and, where the allocation's end is known, the
+// deadline, half the spec's margin before it: the margin's first half
+// started the worker, so a deadline the whole margin before the end would
+// come before the job's own timeout:, and its second half is the cleanups'
+// and the reports'.
 func workerEnviron(base []string, spec *batch.Spec, end time.Time) []string {
-	out := slices.DeleteFunc(slices.Clone(base), func(kv string) bool {
-		name, _, _ := strings.Cut(kv, "=")
-		return name == "GODEBUG" || strings.HasPrefix(name, "MERIDIAN_")
-	})
+	out := batch.Environ(base, nil)
 	co := spec.Coordinator
 	if co.AddressFile != "" {
 		out = append(out, workerapi.EnvCoordinatorFile+"="+co.AddressFile)
@@ -429,22 +427,8 @@ func (b *batchJob) relayUnreachable(ctx context.Context, file string, hash []byt
 		return nil
 	}
 	deadline := time.Now().Add(b.sys.relayWait)
-	config := &tls.Config{
-		MinVersion: tls.VersionTLS13, CurvePreferences: workerapi.TLSGroups,
-		// The coordinator is known by its key's hash, which
-		// VerifyConnection checks, as the worker does.
-		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the coordinator's public key
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return errors.New("batch: no certificate")
-			}
-			got := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
-			if subtle.ConstantTimeCompare(got[:], hash) != 1 {
-				return errors.New("batch: another key")
-			}
-			return nil
-		},
-	}
+	// The coordinator is known by its key's hash, as the worker knows it.
+	config := workerapi.PinnedTLS(hash, func() error { return errors.New("batch: another key") })
 	for {
 		// Each round's own: the name the file says, read again.
 		cfg := config.Clone()
@@ -490,27 +474,13 @@ func keyHash(s string) ([]byte, bool) {
 }
 
 // readRelay reads the address file, and reports whether it was written
-// within relayFresh.
+// within relayFresh, as the time it says it was written says.
 func (b *batchJob) readRelay(file string) (*workerapi.AddressFile, bool) {
-	data, err := safepath.ReadFile(file, safepath.Private, workerapi.MaxAddressFile)
+	f, err := workerapi.ReadAddressFile(file)
 	if err != nil {
 		return nil, false
 	}
-	f, err := workerapi.UnmarshalAddressFile(data)
-	if err != nil {
-		return nil, false
-	}
-	info, err := os.Stat(file)
-	return f, err == nil && time.Since(info.ModTime()) <= b.sys.relayFresh
-}
-
-// bootID returns the boot's ID, where the system says one, or "".
-func bootID() string {
-	data, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
+	return f, time.Since(time.Unix(f.Updated, 0)) <= b.sys.relayFresh
 }
 
 // oomKills returns how many processes of the process's cgroup, and those

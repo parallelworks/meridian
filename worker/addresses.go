@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 	"github.com/parallelworks/meridian/workerapi"
 )
@@ -84,20 +83,18 @@ func (f *addressFile) tried(address string, squatted bool) {
 // node, or a directory on the way to it that can't be opened, it tries
 // again for.
 func readAddressFile(path string) (*workerapi.AddressFile, error) {
-	data, err := safepath.ReadFile(path, safepath.Private, workerapi.MaxAddressFile)
-	switch {
-	case err == nil:
-	case problems.IsProblem(err) && problemOf(err, problems.DirectoryUnavailable) == nil:
-		return nil, &refusedError{err}
-	default:
-		return nil, err
-	}
-	f, err := workerapi.UnmarshalAddressFile(data)
+	f, err := workerapi.ReadAddressFile(path)
 	if e, ok := errors.AsType[*workerapi.AddressFileError](err); ok {
 		params := problems.Params{"path": path, "has_at": strconv.FormatBool(e.At != ""), "at": e.At}
 		return nil, &refusedError{problems.CoordinatorFileInvalid.Problem(params)}
 	}
-	return f, err
+	switch {
+	case err == nil:
+		return f, nil
+	case problems.IsProblem(err) && problemOf(err, problems.DirectoryUnavailable) == nil:
+		return nil, &refusedError{err}
+	}
+	return nil, err
 }
 
 // dialFile connects to the coordinator through the address file f: it

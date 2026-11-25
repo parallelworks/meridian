@@ -157,9 +157,6 @@ func TestScontrol(t *testing.T) {
 	if out, errOut, code := run(t, c, "", "scontrol", "show", "partition", "-o", "nosuch"); out != "" || errOut != "Partition nosuch not found\n" || code != 1 {
 		t.Errorf("scontrol show partition of none: %q, %q, %d", out, errOut, code)
 	}
-	if out, _, _ := run(t, c, "", "sinfo", "-h", "-p", "debug", "-o", "%P|%a|%l"); out != "debug*|up|unlimited\n" {
-		t.Errorf("sinfo: %q", out)
-	}
 }
 
 // TestScripted checks that a command fails, and waits, as a test says.

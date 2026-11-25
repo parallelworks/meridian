@@ -148,11 +148,7 @@ func TestForward(t *testing.T) {
 			}
 			read := func() *workerapi.AddressFile {
 				t.Helper()
-				data, err := safepath.ReadFile(e.AddressFile, safepath.Private, workerapi.MaxAddressFile)
-				if err != nil {
-					t.Fatal(err)
-				}
-				af, err := workerapi.UnmarshalAddressFile(data)
+				af, err := workerapi.ReadAddressFile(e.AddressFile)
 				if err != nil {
 					t.Fatal(err)
 				}

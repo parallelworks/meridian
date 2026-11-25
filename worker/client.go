@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
@@ -147,38 +145,13 @@ func newClient(ep endpoint, tm timing, log *slog.Logger) *client {
 }
 
 // tlsConfig is how the worker speaks TLS to the coordinator at address,
-// whose public key's hash is hash: TLS 1.3, its key exchanges, and the key
-// pinned.
+// whose public key's hash is hash (workerapi.PinnedTLS). A server that
+// shows no certificate, or another key, doesn't show the coordinator's: the
+// worker never talks to it, and doesn't try again.
 func tlsConfig(address string, hash []byte) *tls.Config {
-	return &tls.Config{
-		MinVersion:       tls.VersionTLS13,
-		CurvePreferences: workerapi.TLSGroups,
-		// The coordinator is known by its key's hash, not by a
-		// certificate authority: VerifyConnection checks the key, and
-		// TLS checks that the coordinator holds it.
-		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the coordinator's public key
-		VerifyConnection:   pinned(address, hash),
-	}
-}
-
-// pinned returns a check that a TLS connection's peer holds the public key
-// whose SHA-256 digest, of its DER SubjectPublicKeyInfo, is hash.
-func pinned(address string, hash []byte) func(tls.ConnectionState) error {
-	return func(cs tls.ConnectionState) error {
-		if cs.Version != tls.VersionTLS13 {
-			return errors.New("worker: the coordinator's connection isn't TLS 1.3") //nolint:forbidigo // can't happen: the TLS config's MinVersion refuses an older one first
-		}
-		// A server that shows no certificate doesn't show the coordinator's
-		// key. The worker never talks to it, and doesn't try again.
-		if len(cs.PeerCertificates) == 0 {
-			return problems.CoordinatorKeyMismatch.Problem(problems.Params{"address": address})
-		}
-		got := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
-		if subtle.ConstantTimeCompare(got[:], hash) != 1 {
-			return problems.CoordinatorKeyMismatch.Problem(problems.Params{"address": address})
-		}
-		return nil
-	}
+	return workerapi.PinnedTLS(hash, func() error {
+		return problems.CoordinatorKeyMismatch.Problem(problems.Params{"address": address})
+	})
 }
 
 // A refusedError is a coordinator the worker won't talk to, and doesn't

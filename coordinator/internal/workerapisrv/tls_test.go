@@ -99,42 +99,46 @@ func TestServeMemberTLS(t *testing.T) {
 	cert, hash := newCert(t)
 	address := serveMemberTLS(t, r.server, "batch-aaaa", cert)
 
-	for _, protos := range [][]string{nil, {"http/1.1"}, {"h2", "http/1.1"}} {
-		config := workerapitest.PinnedTLS(hash)
-		config.NextProtos = protos
-		c, err := dialTLS(t, address, config)
-		if err != nil {
-			t.Fatalf("a pinned client offering %v: %v", protos, err)
-		}
-		cs := c.ConnectionState()
-		switch {
-		case cs.Version != tls.VersionTLS13:
-			t.Errorf("the connection is %s", tls.VersionName(cs.Version))
-		case cs.CipherSuite != tls.TLS_AES_128_GCM_SHA256 && cs.CipherSuite != tls.TLS_AES_256_GCM_SHA384:
-			t.Errorf("the cipher suite is %s", tls.CipherSuiteName(cs.CipherSuite))
-		case cs.CurveID != tls.SecP256r1MLKEM768:
-			t.Errorf("the key exchange is %s", cs.CurveID)
-		case cs.NegotiatedProtocol != "" && cs.NegotiatedProtocol != "http/1.1":
-			t.Errorf("offered %v, the server chose %q", protos, cs.NegotiatedProtocol)
-		}
-		if pub, ok := cs.PeerCertificates[0].PublicKey.(*ecdsa.PublicKey); !ok || pub.Curve != elliptic.P256() {
-			t.Errorf("the server's key is %T", cs.PeerCertificates[0].PublicKey)
-		}
-		// A request on it is answered over HTTP/1.1.
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://coordinator"+workerapi.PathHeartbeat, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := req.Write(c); err != nil {
-			t.Fatal(err)
-		}
-		resp, err := http.ReadResponse(bufio.NewReader(c), req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.Proto != "HTTP/1.1" || resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("a heartbeat without a credential was answered %s %d", resp.Proto, resp.StatusCode)
+	// A pinned client offers the key exchanges a worker does, or, with
+	// none of its own, crypto/tls's, X25519's hybrid first.
+	for _, curves := range [][]tls.CurveID{workerapi.TLSGroups, nil} {
+		for _, protos := range [][]string{nil, {"http/1.1"}, {"h2", "http/1.1"}} {
+			config := workerapitest.PinnedTLS(hash)
+			config.CurvePreferences, config.NextProtos = curves, protos
+			c, err := dialTLS(t, address, config)
+			if err != nil {
+				t.Fatalf("a pinned client offering %v and %v: %v", curves, protos, err)
+			}
+			cs := c.ConnectionState()
+			switch {
+			case cs.Version != tls.VersionTLS13:
+				t.Errorf("the connection is %s", tls.VersionName(cs.Version))
+			case cs.CipherSuite != tls.TLS_AES_128_GCM_SHA256 && cs.CipherSuite != tls.TLS_AES_256_GCM_SHA384:
+				t.Errorf("the cipher suite is %s", tls.CipherSuiteName(cs.CipherSuite))
+			case cs.CurveID != tls.SecP256r1MLKEM768:
+				t.Errorf("offered %v, the key exchange is %s", curves, cs.CurveID)
+			case cs.NegotiatedProtocol != "" && cs.NegotiatedProtocol != "http/1.1":
+				t.Errorf("offered %v, the server chose %q", protos, cs.NegotiatedProtocol)
+			}
+			if pub, ok := cs.PeerCertificates[0].PublicKey.(*ecdsa.PublicKey); !ok || pub.Curve != elliptic.P256() {
+				t.Errorf("the server's key is %T", cs.PeerCertificates[0].PublicKey)
+			}
+			// A request on it is answered over HTTP/1.1.
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://coordinator"+workerapi.PathHeartbeat, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := req.Write(c); err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.ReadResponse(bufio.NewReader(c), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.Proto != "HTTP/1.1" || resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("a heartbeat without a credential was answered %s %d", resp.Proto, resp.StatusCode)
+			}
 		}
 	}
 

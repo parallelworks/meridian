@@ -91,7 +91,8 @@ type Driver interface {
 	// walltime, and if so how soon it would start it. Placement leaves out
 	// a member whose Fit has a Problem, and ranks the rest by their
 	// Availability, in the group's order within each. A batch scheduler's
-	// driver, a platform's own among them, refuses a job that calls a
+	// driver, a platform's own among them, says that its member is one
+	// (Fit.Batch), on which the coordinator places no job that calls a
 	// workflow (Demand.CallsWorkflow).
 	Probe(ctx context.Context, m *Member, demand Demand) (Fit, error)
 	// Connect makes m's workers able to reach the coordinator, at
@@ -205,15 +206,17 @@ type Demand struct {
 	// job, which would still hold it when the caller went on. A driver
 	// that counts what it placed against its member, as local does, leaves
 	// these out, and ignores the IDs of attempts it didn't place. A batch
-	// scheduler's driver, which refuses a job that calls a workflow
-	// (CallsWorkflow), ignores them all.
+	// scheduler's driver, on whose members the coordinator places no job
+	// that calls a workflow (Fit.Batch), ignores them all.
 	Parked []string
 	// CallsWorkflow says whether the job has a step whose uses: names a
-	// workflow, whatever its if: says. A batch scheduler's driver, a
-	// platform's own as well as Meridian's, must refuse such a job
-	// (problems.SchedulerCallerRefused): it would hold its allocation while
-	// the run it calls ran, which an allocation can't lend, nor give back
-	// and take again (docs/design.md, Workflows a step calls).
+	// workflow, whatever its if: says. The coordinator places no such job
+	// on a batch scheduler's member, as its driver, a platform's own as
+	// well as Meridian's, says one is (Fit.Batch), and refuses it there
+	// with problems.SchedulerCallerRefused: the job would hold its
+	// allocation while the run it calls ran, which an allocation can't
+	// lend, nor give back and take again (docs/design.md, Workflows a step
+	// calls).
 	CallsWorkflow bool
 	// Tries is how many times, since the job was last placed, its
 	// placement found that a member's backend couldn't answer, as the
@@ -272,6 +275,11 @@ type Fit struct {
 	// in whole of, as Slurm keeps minutes, to which the walltime a job asks
 	// for is rounded up; 0 or 1 for seconds.
 	WalltimeUnitSeconds int64
+	// Batch says that the member is a batch scheduler's, whose job holds
+	// an allocation, which can't lend part of what it holds, nor give it
+	// back and take it again: the coordinator places no job that calls a
+	// workflow there (Demand.CallsWorkflow).
+	Batch bool
 }
 
 // Availability is how soon a member would start a job, which placement

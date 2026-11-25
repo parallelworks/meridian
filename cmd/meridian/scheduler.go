@@ -23,6 +23,7 @@ import (
 	localbackend "github.com/parallelworks/meridian/backend/local"
 	"github.com/parallelworks/meridian/backend/slurm"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
+	"github.com/parallelworks/meridian/internal/fileid"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -140,17 +141,27 @@ type sharedBinary struct {
 	self func() (path, run, digest string, err error)
 
 	mu sync.Mutex
-	// digest and copied are the copy's last checked, and what it was then,
-	// which the next check of the same binary takes it to be while its
-	// file is the same, and unchanged (sameFile).
-	digest string
-	copied fs.FileInfo
+	// digests keeps the copy's digest, the last time it was hashed, which
+	// the next check of the same binary takes it to hold while its file is
+	// the same, and unchanged (fileid.Cache).
+	digests fileid.Cache
 }
 
 // settled is how long ago a copy's status must have last changed for its
-// check to be kept, as the local backend keeps its digest of the file it
+// digest to be kept, as the local backend keeps its digest of the file it
 // runs: a change within the second after could leave its time as it was.
-const settled = time.Second
+// It is a variable a test sets.
+var settled = time.Second
+
+// hashBinary returns the digest of what r holds, as sha256: and the hex of
+// its SHA-256 digest: a variable a test counts calls of.
+var hashBinary = func(r io.Reader) (string, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
 
 // get returns the copy's path and digest, once it has copied the file this
 // process runs there, if it isn't there, and checked the copy, and the way
@@ -160,11 +171,12 @@ const settled = time.Second
 // written to a new file of its own there, checked against the digest, and
 // only then linked into place, so that a copy that stops halfway leaves
 // none that isn't whole, and of two at once, the second checks the
-// first's. A copy it checked before isn't hashed again while it is the
-// same file, of the same size, its data and its status changed at the
-// same times, where the system says them: no other user can change it,
-// nor the way to it, which is checked each time, and meridian batch
-// checks its own digest before it takes a token.
+// first's. A copy it checked before isn't hashed again, nor its directory
+// made, while it is the same file, of the same size, its data and its
+// status changed at the same times, where the system says them
+// (fileid.Of): no other user can change it, nor the way to it, which is
+// checked each time, and meridian batch checks its own digest before it
+// takes a token.
 func (b *sharedBinary) get() (string, string, error) {
 	_, run, digest, err := b.self()
 	if err != nil {
@@ -178,13 +190,15 @@ func (b *sharedBinary) get() (string, string, error) {
 	path := filepath.Join(dir, "meridian")
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if info, err := checkBinary(path, nil); err == nil {
+		if id, ok := fileid.Of(info); ok {
+			if kept, ok := b.digests.Get(id); ok && kept == digest {
+				return path, digest, nil
+			}
+		}
+	}
 	if err := safepath.EnsureDir(dir, safepath.Private); err != nil {
 		return "", "", err
-	}
-	if b.digest == digest {
-		if info, err := checkBinary(path, nil); err == nil && sameFile(info, b.copied) {
-			return path, digest, nil
-		}
 	}
 	var found string
 	info, err := checkBinary(path, &found)
@@ -202,23 +216,10 @@ func (b *sharedBinary) get() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	if ctime, ok := changeTime(info); ok && time.Since(time.Unix(0, ctime)) >= settled {
-		b.digest, b.copied = digest, info
+	if id, ok := fileid.Of(info); ok {
+		b.digests.Keep(id, digest, settled)
 	}
 	return path, digest, nil
-}
-
-// sameFile reports whether a and b are the same file, of the same size,
-// its data and its status last changed at the same times; never where the
-// system doesn't say when its status changed, which a process can't set
-// back, as it can its data's.
-func sameFile(a, b fs.FileInfo) bool {
-	ac, ok := changeTime(a)
-	if !ok || b == nil {
-		return false
-	}
-	bc, _ := changeTime(b)
-	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime()) && ac == bc
 }
 
 // checkBinary checks the binary at path, and the way to it, as the local
@@ -236,11 +237,9 @@ func checkBinary(path string, digest *string) (fs.FileInfo, error) {
 	}
 	defer f.Close()
 	if digest != nil {
-		h := sha256.New()
-		if _, err := io.Copy(h, f); err != nil {
+		if *digest, err = hashBinary(f); err != nil {
 			return nil, err
 		}
-		*digest = "sha256:" + hex.EncodeToString(h.Sum(nil))
 	}
 	return info, nil
 }
@@ -315,22 +314,21 @@ func (s *schedulerDriver) of(m *backend.Member) (backend.Forwarder, error) {
 	return s.local, nil
 }
 
-// Probe refuses a job that calls a workflow, which would hold its
-// allocation while the run it calls ran, here, wherever m's login node is,
-// so that no driver it routes to can miss it; and is the Probe of m's
-// login node's driver otherwise.
+// Probe is the Probe of m's login node's driver, and gives a Fit that says
+// m is a batch scheduler's member (backend.Fit.Batch) here, wherever m's
+// login node is, so that the coordinator places no job that calls a
+// workflow on m, whatever driver it routes to.
 func (s *schedulerDriver) Probe(ctx context.Context, m *backend.Member, demand backend.Demand) (backend.Fit, error) {
-	if demand.CallsWorkflow {
-		return backend.Fit{Problem: problems.SchedulerCallerRefused.Problem(problems.Params{"member": m.Name})}, nil
-	}
 	d, err := s.of(m)
 	if p, ok := errors.AsType[*problem.Problem](err); ok {
-		return backend.Fit{Problem: p}, nil
+		return backend.Fit{Problem: p, Batch: true}, nil
 	}
 	if err != nil {
-		return backend.Fit{}, err
+		return backend.Fit{Batch: true}, err
 	}
-	return d.Probe(ctx, m, demand)
+	fit, err := d.Probe(ctx, m, demand)
+	fit.Batch = true
+	return fit, err
 }
 
 // EndWait is the local driver's: how long its checks can take to see how

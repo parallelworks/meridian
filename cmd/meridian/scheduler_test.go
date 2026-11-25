@@ -6,14 +6,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/backend/slurm"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
+	"github.com/parallelworks/meridian/internal/fileid"
 	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -41,12 +44,16 @@ func TestSchedulerRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	kindtest.Want(t, fit.Problem, problems.BackendNotBuilt)
-	// A caller is refused whatever the member's login node.
+	// A member is a batch scheduler's, on which the coordinator places no
+	// caller, whatever its login node: the driver says so, and leaves the
+	// refusal to the coordinator.
 	fit, err = d.Probe(t.Context(), remote, backend.Demand{CallsWorkflow: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	kindtest.Want(t, fit.Problem, problems.SchedulerCallerRefused)
+	if kindtest.Want(t, fit.Problem, problems.BackendNotBuilt); !fit.Batch {
+		t.Errorf("the fit of a caller on a member of another login node is %+v", fit)
+	}
 	_, err = d.Place(t.Context(), remote, backend.PlaceRequest{Attempt: "a1"})
 	kindtest.Want(t, err, problems.BackendNotBuilt)
 	_, err = d.MemberKey(remote)
@@ -212,6 +219,83 @@ func TestSharedBinary(t *testing.T) {
 	if _, err := copyBinary(self, other, digest); err == nil {
 		t.Error("a copy over another binary was taken")
 	}
+}
+
+// TestSharedBinaryKept checks that a copy checked before isn't hashed
+// again while it is the same file, unchanged, and is once its size, the
+// time its data last changed, or its inode, changed.
+func TestSharedBinaryKept(t *testing.T) {
+	var hashed int
+	hash := hashBinary
+	hashBinary = func(r io.Reader) (string, error) {
+		hashed++
+		return hash(r)
+	}
+	t.Cleanup(func() { hashBinary, settled = hash, time.Second })
+	settled = 0
+	dir := t.TempDir()
+	self := filepath.Join(dir, "self")
+	content := []byte("#!/bin/sh\necho meridian\n")
+	if err := os.WriteFile(self, content, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(self); err != nil {
+		t.Fatal(err)
+	} else if _, ok := fileid.Of(info); !ok {
+		t.Skip("the digest is kept only on Linux")
+	}
+	sum := sha256.Sum256(content)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	b := &sharedBinary{dir: filepath.Join(dir, "cache", "bin"), self: func() (string, string, string, error) { return self, self, digest, nil }}
+	path := filepath.Join(b.dir, hex.EncodeToString(sum[:]), "meridian")
+	// check checks the copy, and that it hashed it, or didn't, as hashes
+	// says.
+	check := func(what string, hashes bool) {
+		t.Helper()
+		before := hashed
+		if got, _, err := b.get(); err != nil || got != path {
+			t.Fatalf("%s: the shared binary is %s, %v", what, got, err)
+		}
+		if data, err := os.ReadFile(path); err != nil || string(data) != string(content) {
+			t.Errorf("%s: the copy holds %q, %v", what, data, err)
+		}
+		if got := hashed > before; got != hashes {
+			t.Errorf("%s: the copy was hashed: %v, want %v", what, got, hashes)
+		}
+	}
+	// A copy made: its status changes as its temporary name goes, after it
+	// was checked, so the check after takes it as it is then.
+	copied := func(what string) {
+		t.Helper()
+		check(what, true)
+		if _, _, err := b.get(); err != nil {
+			t.Fatal(err)
+		}
+		check(what+", again", false)
+	}
+	copied("the first check")
+
+	// Its size: another binary, replaced by a copy of this one.
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho other\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	copied("a copy of another size")
+	// The time its data last changed, set back.
+	if err := os.Chtimes(path, time.Unix(1, 0), time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	check("a copy whose data's time changed", true)
+	check("a copy whose data's time changed, again", false)
+	// Its inode: the same bytes, in another file, renamed into place.
+	moved := filepath.Join(filepath.Dir(path), "moved")
+	if err := os.WriteFile(moved, content, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(moved, path); err != nil {
+		t.Fatal(err)
+	}
+	check("another file of the same bytes", true)
+	check("another file of the same bytes, again", false)
 }
 
 // TestSchedulerSettings checks the settings the slurm backend's members

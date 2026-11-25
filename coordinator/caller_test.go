@@ -20,10 +20,9 @@ import (
 // batch-only (testGroups).
 const schedBackend = "sched"
 
-// callerDriver is a workerDriver whose members of schedBackend refuse a
-// job that calls a workflow, as a batch scheduler's driver does, and start
-// any other now, as its other members do; and which records the member
-// each attempt was placed on.
+// callerDriver is a workerDriver whose members of schedBackend say they
+// are a batch scheduler's (backend.Fit.Batch), as a batch scheduler's
+// driver does, and which records the member each attempt was placed on.
 type callerDriver struct {
 	*workerDriver
 
@@ -32,10 +31,9 @@ type callerDriver struct {
 }
 
 func (d *callerDriver) Probe(ctx context.Context, m *backend.Member, demand backend.Demand) (backend.Fit, error) {
-	if m.Backend == schedBackend && demand.CallsWorkflow {
-		return backend.Fit{Problem: problems.SchedulerCallerRefused.Problem(problems.Params{"member": m.Name})}, nil
-	}
-	return d.workerDriver.Probe(ctx, m, demand)
+	fit, err := d.workerDriver.Probe(ctx, m, demand)
+	fit.Batch = m.Backend == schedBackend
+	return fit, err
 }
 
 func (d *callerDriver) Place(ctx context.Context, m *backend.Member, req backend.PlaceRequest) (backend.Placement, error) {
@@ -54,14 +52,14 @@ var callerSources = childSources(map[string]string{
 
 // TestCallerOffScheduler checks that a job that calls a workflow is never
 // placed on a batch scheduler's member, which would hold its allocation
-// while the run it calls ran: the coordinator tells the member's driver
-// that the job calls one, which refuses it, so placement leaves the
-// member out, and puts the job on its group's next member, while the
-// called run's jobs, which call none, go to the scheduler's member, the
-// group's first. So it is with a calling step that its if: skips, with
-// each instance of a matrix job, and with a caller that a step called; and
-// a caller whose group has only the scheduler's member fails as it is
-// placed, with the member's reason, before any of its code runs.
+// while the run it calls ran: the member's driver says it is a batch
+// scheduler's, and the coordinator refuses the job there, so placement
+// leaves the member out, and puts the job on its group's next member,
+// while the called run's jobs, which call none, go to the scheduler's
+// member, the group's first. So it is with a calling step that its if:
+// skips, with each instance of a matrix job, and with a caller that a step
+// called; and a caller whose group has only the scheduler's member fails
+// as it is placed, with the member's reason, before any of its code runs.
 func TestCallerOffScheduler(t *testing.T) {
 	t.Parallel()
 	const call = "      - uses: github/t/leaf@main\n        with: {$yaml: w.yaml}\n"
@@ -147,5 +145,39 @@ func TestCallerOffScheduler(t *testing.T) {
 				t.Errorf("the jobs ran on %v, want %v", on, tc.on)
 			}
 		})
+	}
+}
+
+// TestFitProblem checks the rules the coordinator holds a member's fit to:
+// a job that calls a workflow is refused a batch scheduler's member, with
+// scheduler_caller_refused, and not another's, nor is a job that calls
+// none; the fit's own problem comes first, and the walltime rule after.
+func TestFitProblem(t *testing.T) {
+	t.Parallel()
+	m := &backend.Member{Name: "m1"}
+	unhealthy := problems.BackendNotBuilt.Problem(problems.Params{"member": "m1", "backend": "slurm"})
+	short := backend.Fit{MaxWalltimeSeconds: 60}
+	for _, tc := range []struct {
+		name  string
+		calls bool
+		fit   backend.Fit
+		want  *problems.Kind
+	}{
+		{name: "a caller on a batch scheduler's member", calls: true, fit: backend.Fit{Batch: true}, want: problems.SchedulerCallerRefused},
+		{name: "a caller on another member", calls: true, fit: backend.Fit{}},
+		{name: "no caller on a batch scheduler's member", fit: backend.Fit{Batch: true}},
+		{name: "the fit's problem first", calls: true, fit: backend.Fit{Batch: true, Problem: unhealthy}, want: problems.BackendNotBuilt},
+		{name: "the walltime after", calls: true, fit: backend.Fit{Batch: true, MaxWalltimeSeconds: short.MaxWalltimeSeconds}, want: problems.SchedulerCallerRefused},
+		{name: "the walltime of another member's caller", calls: true, fit: short, want: problems.WalltimeExceedsMember},
+	} {
+		got := fitProblem(m, backend.Demand{CallsWorkflow: tc.calls, TimeoutSeconds: 600}, tc.fit)
+		switch {
+		case tc.want == nil && got != nil:
+			t.Errorf("%s: %v", tc.name, got)
+		case tc.want != nil && (got == nil || got.Code != tc.want.Code()):
+			t.Errorf("%s: %v, want %s", tc.name, got, tc.want.Code())
+		case tc.want == problems.SchedulerCallerRefused && got.Params["member"] != "m1":
+			t.Errorf("%s: the problem's params are %v", tc.name, got.Params)
+		}
 	}
 }

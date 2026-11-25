@@ -476,8 +476,10 @@ func TestBatchRelay(t *testing.T) {
 			parallel(t)
 			b := newBatchTest(t, "")
 			file := filepath.Join(filepath.Dir(b.dir), "relay.json")
-			write := func(address string) {
-				data, err := (&workerapi.AddressFile{Addresses: []string{address}, Name: "r.meridian", Updated: time.Now().Unix()}).Marshal()
+			// The file says when it was written, as a relay writes it.
+			write := func(address string, age time.Duration) {
+				f := &workerapi.AddressFile{Addresses: []string{address}, Name: "r.meridian", Updated: time.Now().Add(-age).Unix()}
+				data, err := f.Marshal()
 				if err == nil {
 					err = safepath.WriteFile(file, data)
 				}
@@ -485,15 +487,11 @@ func TestBatchRelay(t *testing.T) {
 					t.Error(err)
 				}
 			}
-			write(tc.address)
-			old := time.Now().Add(-tc.age)
-			if err := os.Chtimes(file, old, old); err != nil {
-				t.Fatal(err)
-			}
+			write(tc.address, tc.age)
 			last := tc.address
 			if tc.moveTo != "" {
 				b.sys.relayWait, last = 3*time.Second, tc.moveTo
-				time.AfterFunc(300*time.Millisecond, func() { write(tc.moveTo) })
+				time.AfterFunc(300*time.Millisecond, func() { write(tc.moveTo, 0) })
 			}
 			b.spec.Coordinator = batch.Coordinator{AddressFile: file, KeyHash: hash}
 			r := endedWithin(t, b.start(t))

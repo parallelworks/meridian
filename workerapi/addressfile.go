@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+
+	"github.com/parallelworks/meridian/internal/safepath"
 )
 
 // An AddressFile is what the file EnvCoordinatorFile names holds: where a
@@ -112,6 +114,19 @@ func UnmarshalAddressFile(data []byte) (*AddressFile, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// ReadAddressFile reads the address file at path, as its readers do: a
+// file of the user's that only the user can read, not through a symbolic
+// link, on a path no other user can change, of MaxAddressFile bytes at
+// most (safepath.ReadFile), which UnmarshalAddressFile decodes. It
+// returns either's error as it is.
+func ReadAddressFile(path string) (*AddressFile, error) {
+	data, err := safepath.ReadFile(path, safepath.Private, MaxAddressFile)
+	if err != nil {
+		return nil, err
+	}
+	return UnmarshalAddressFile(data)
 }
 
 // check returns an *AddressFileError for the first value of f that an
