@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -338,6 +339,69 @@ func TestBatchStoppedInHandoff(t *testing.T) {
 	_, term, exit := b.records(t)
 	if r.code != 128+int(syscall.SIGTERM) || term == nil || exit == nil || exit.Problem != nil {
 		t.Errorf("%+v: term.json %+v, exit.json %+v", r, term, exit)
+	}
+}
+
+// TestBatchStoppedBeforeCaught checks that a signal that came before
+// meridian batch caught its own, which only the command's context saw,
+// stops the job, as the scheduler's SIGTERM, rather than start the worker.
+func TestBatchStoppedBeforeCaught(t *testing.T) {
+	parallel(t)
+	b := newBatchTest(t, "")
+	if err := batch.WriteRecord(b.dir, batch.SpecFile, b.spec); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	c := &cli{
+		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
+		lookupEnv: func(name string) (string, bool) { v, ok := b.vars[name]; return v, ok },
+	}
+	c.batch, c.signals = &b.sys, b.signals
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	code := run(ctx, c, []string{"batch", b.dir})
+	_, term, exit := b.records(t)
+	if code != 128+int(syscall.SIGTERM) || term == nil || term.Signal != int(syscall.SIGTERM) || exit == nil {
+		t.Errorf("exited %d (%s): term.json %+v, exit.json %+v", code, stderr.String(), term, exit)
+	}
+	if _, err := os.Lstat(filepath.Join(b.dir, batch.TokenFile)); err == nil {
+		t.Error("the token's file is there")
+	}
+	if _, err := os.Lstat(b.report); err == nil {
+		t.Error("a worker started")
+	}
+}
+
+// TestBatchOtherJob checks that meridian batch of a job the submission
+// doesn't record, as a duplicate of the one it does, ends without taking
+// the token, writing a record, or starting a worker: they are the
+// placement's own job's.
+func TestBatchOtherJob(t *testing.T) {
+	parallel(t)
+	b := newBatchTest(t, "")
+	if err := os.WriteFile(filepath.Join(b.dir, batch.JobFile), []byte("13\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := endedWithin(t, b.start(t)); r.code != exitError || !strings.Contains(r.stderr, "13") {
+		t.Errorf("%+v", r)
+	}
+	if token, err := os.ReadFile(filepath.Join(b.dir, batch.TokenFile)); err != nil || string(token) != "the-token" {
+		t.Errorf("the token's file: %q, %v", token, err)
+	}
+	for _, name := range []string{batch.StartedFile, batch.TermFile, batch.ExitFile} {
+		if _, err := os.Lstat(filepath.Join(b.dir, name)); err == nil {
+			t.Errorf("%s was written", name)
+		}
+	}
+	if _, err := os.Lstat(b.report); err == nil {
+		t.Error("a worker started")
+	}
+	// The job the submission records runs.
+	if err := os.WriteFile(filepath.Join(b.dir, batch.JobFile), []byte("12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := endedWithin(t, b.start(t)); r.code != 0 {
+		t.Errorf("the submission's own job: %+v", r)
 	}
 }
 

@@ -52,6 +52,7 @@ func waitState(t *testing.T, c *Cluster, id int, state string) *Job {
 			t.Fatalf("job %d is %+v, not %s", id, j, state)
 		}
 		_, _, _ = run(t, c, "", "squeue", "-h", "-t", "all", "-j", strconv.Itoa(id), "-o", "%T")
+		<-time.After(10 * time.Millisecond)
 	}
 }
 

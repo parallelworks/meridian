@@ -222,7 +222,7 @@ func (r records) timedOut() bool {
 // regular file of the user's that other users can use no more than
 // access allows. root keeps it from being one outside it.
 func readIn(root *os.Root, name string, access safepath.Access, limit int64) ([]byte, error) {
-	f, err := root.Open(name)
+	f, err := root.OpenFile(name, os.O_RDONLY|openFlags, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +367,7 @@ func lastLine(sub string) string {
 		return ""
 	}
 	defer root.Close()
-	f, err := root.Open(OutFile)
+	f, err := root.OpenFile(OutFile, os.O_RDONLY|openFlags, 0)
 	if err != nil {
 		return ""
 	}

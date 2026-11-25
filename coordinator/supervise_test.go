@@ -375,6 +375,45 @@ func TestWalltimeExceedsMember(t *testing.T) {
 	}
 }
 
+// TestWalltimeExceedsAtPlace checks that the walltime rule holds where a
+// member is asked again as an attempt is placed, as resumePlace asks the
+// member a supervisor chose before it ended: one whose longest walltime
+// the job's would now exceed fails the attempt before its first step,
+// saying why, and isn't placed on.
+func TestWalltimeExceedsAtPlace(t *testing.T) {
+	parallel(t)
+	c := open(t, Options{})
+	d := driverOf(c)
+	d.set(func(d *testDriver) {
+		d.probe = func(*backend.Member) (backend.Fit, error) {
+			return backend.Fit{Availability: backend.StartsNow, MaxWalltimeSeconds: 600, MarginSeconds: 60}, nil
+		}
+	})
+	id, _ := create(t, c, "jobs:\n  main:\n    timeout: 10m\n    steps:\n      - run: echo\n", nil, nil)
+	if _, err := c.startRun(t.Context(), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	var a *store.Attempt
+	if err := c.store.Tx(t.Context(), func(tx *store.Tx) error {
+		var err error
+		if a, _, err = tx.NewAttempt(c.newAttempt(id, "main", false)); err != nil {
+			return err
+		}
+		return tx.ChoosePlace(a.ID, store.Place{Group: "local", Member: "m1", Backend: testBackend})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.resumePlace(t.Context(), storedRun(t, c, id), storedJob(t, c, id, "main"), a); !errors.Is(err, errAgain) {
+		t.Fatalf("resumePlace = %v, want errAgain", err)
+	}
+	if reqs, _ := d.requests(); len(reqs) != 0 {
+		t.Errorf("the attempt was placed: %+v", reqs)
+	}
+	if got := latestAttempt(t, c, id, "main"); got.End.Problem == nil || got.End.Problem.Code != problems.WalltimeExceedsMember.Code() {
+		t.Errorf("the attempt ended %+v", got.End)
+	}
+}
+
 // setupProblems are problems a worker can fail with before its first step,
 // each of a kind of its own.
 var setupProblems = []*problem.Problem{

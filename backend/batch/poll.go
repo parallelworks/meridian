@@ -25,6 +25,11 @@ type poller struct {
 	snap snapshot
 	// running is closed once the refresh in flight ends, or nil.
 	running chan struct{}
+	// gen counts the snapshots made.
+	gen uint64
+	// waiting counts, by job, the callers waiting for its status, while
+	// which a check that found it ended doesn't stop watching it (forget).
+	waiting map[string]int
 }
 
 // A watch is a job the driver watches.
@@ -41,7 +46,9 @@ type watch struct {
 
 // A snapshot is what the scheduler said of the jobs it covers, at at.
 type snapshot struct {
-	at      time.Time
+	at time.Time
+	// gen is which of the poller's snapshots it is.
+	gen     uint64
 	covered map[string]bool
 	// jobs are those the queue, or accounting, lists.
 	jobs map[string]JobStatus
@@ -63,11 +70,15 @@ func (p *poller) watch(id, sub string) {
 	w.asked = time.Now()
 }
 
-// forget stops watching the job id.
+// forget stops watching the job id, unless a caller is waiting for its
+// status, as Forget waits for a snapshot made since it asked: the refresh
+// it waits for covers only the jobs watched.
 func (p *poller) forget(id string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.live, id)
+	if p.waiting[id] == 0 {
+		delete(p.live, id)
+	}
 }
 
 // stuckFor reports whether the job id, which a check finds stuck or not,
@@ -129,14 +140,35 @@ func (p *poller) subOf(id string) string {
 // share one.
 func (p *poller) status(ctx context.Context, id, sub string, newer time.Time) (JobStatus, bool, error) {
 	asked := time.Now()
-	p.watch(id, sub)
+	// joined is the snapshot of the refresh this caller waited for, which
+	// it takes however long the refresh took, where it needn't be newer:
+	// starting another as one ends would have a slow scheduler asked
+	// without a pause.
+	var joined uint64
+	p.mu.Lock()
+	if p.waiting == nil {
+		p.waiting = map[string]int{}
+	}
+	p.waiting[id]++
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		if p.waiting[id]--; p.waiting[id] <= 0 {
+			delete(p.waiting, id)
+		}
+		p.mu.Unlock()
+	}()
 	for {
+		// Each pass watches the job again: one that a check stopped
+		// watching before this caller came is watched once more, and one
+		// that waits long isn't let go as idle.
+		p.watch(id, sub)
 		p.mu.Lock()
 		s := p.snap
 		fresh := !s.at.IsZero() && time.Since(s.at) < p.d.timing.poll && !s.at.Before(newer)
 		// A refresh slower than timing.poll gives a snapshot that is old
 		// already: it is the newest there is.
-		if s.covered[id] && (fresh || !s.at.Before(asked)) {
+		if s.covered[id] && (fresh || !s.at.Before(asked) || newer.IsZero() && joined != 0 && s.gen >= joined) {
 			p.mu.Unlock()
 			if s.err != nil {
 				return JobStatus{}, false, s.err
@@ -145,6 +177,9 @@ func (p *poller) status(ctx context.Context, id, sub string, newer time.Time) (J
 			return st, ok, nil
 		}
 		wait, next := p.running, s.at.Add(p.d.timing.poll)
+		if wait != nil {
+			joined = p.gen + 1
+		}
 		switch {
 		case wait != nil || fresh:
 		case !newer.IsZero() && !s.at.IsZero() && time.Since(s.at) < p.d.timing.forced:
@@ -205,6 +240,8 @@ func (p *poller) refresh(ctx context.Context, done chan struct{}) {
 	}
 	s.err = p.collect(ctx, ids, subs, s.jobs)
 	p.mu.Lock()
+	p.gen++
+	s.gen = p.gen
 	p.snap = s
 	p.running = nil
 	p.mu.Unlock()

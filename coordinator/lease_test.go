@@ -883,6 +883,38 @@ func TestMemberGone(t *testing.T) {
 	}
 }
 
+// TestSelfFenceMemberGone checks that a self-fencing attempt whose member
+// its group no longer has is lost at once, past its lease and the fence
+// margin, saying why: member_gone, as for an attempt that doesn't fence
+// itself.
+func TestSelfFenceMemberGone(t *testing.T) {
+	parallel(t)
+	clock := newFakeClock()
+	group := &backend.Group{Name: "local", Members: []backend.Member{{Name: "m1", Backend: testBackend}, {Name: "m2", Backend: testBackend}}}
+	c, d := openLeaseWith(t, Options{now: clock.Now, Groups: groupsOf{"local": group}}, []bool{true}, []bool{true})
+	id, first := startJob(t, c, retryJob, store.AttemptRunning)
+	group.Members = group.Members[1:]
+	c.mu.Lock()
+	clear(c.members)
+	c.mu.Unlock()
+	clock.Advance(c.timing.Lease + c.timing.FenceMargin + time.Second)
+	look(t, c, id)
+	var a *store.Attempt
+	if err := c.store.View(t.Context(), func(tx *store.Tx) error {
+		var err error
+		a, err = tx.Attempt(first.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if a.End.Kind != store.EndLost || a.End.Reason != plan.ReasonWorkerLost || a.End.Problem == nil || a.End.Problem.Code != problems.MemberGone.Code() {
+		t.Fatalf("the attempt ended %+v", a.End)
+	}
+	if n := d.checked(); n != 0 {
+		t.Errorf("the backend was asked %d times about a member its group no longer has", n)
+	}
+}
+
 // TestLostBeforeStep checks that a worker that ended before the job's
 // first step, claimed or not, fails the attempt before its first step,
 // which places the job again, whatever ended it: one its scheduler ended

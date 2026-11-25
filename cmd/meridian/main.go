@@ -58,8 +58,9 @@ func main() {
 	// scheduler signals every process of a job, so its worker gets the
 	// scheduler's SIGTERM and then meridian batch's, and a backend that
 	// must have it end sends SIGKILL, as the local backend does a minute
-	// after its SIGTERM.
-	if len(os.Args) < 2 || os.Args[1] != "worker" {
+	// after its SIGTERM. meridian batch goes on catching them too, as it
+	// passes each on to the worker.
+	if len(os.Args) < 2 || os.Args[1] != "worker" && os.Args[1] != "batch" {
 		context.AfterFunc(ctx, stop)
 	}
 	code := run(ctx, &cli{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, lookupEnv: os.LookupEnv}, os.Args[1:])

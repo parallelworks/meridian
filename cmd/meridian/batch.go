@@ -146,10 +146,17 @@ func (b *batchJob) run(ctx context.Context) (int, error) {
 	}
 	life, end := context.WithCancel(context.WithoutCancel(ctx))
 	defer end()
-	stop, cancel := context.WithCancel(ctx)
+	// Only a signal of the job's stops it, which passSignals records
+	// first: a stop is always one that signalled says.
+	stop, cancel := context.WithCancel(life)
 	defer cancel()
 	b.stop = cancel
 	go b.passSignals(life)
+	// A signal that came before this process caught its own was caught by
+	// the command's, which ends ctx: it is the scheduler's.
+	if ctx.Err() != nil {
+		b.term(syscall.SIGTERM)
+	}
 	// A job its driver withdrew doesn't start, whose token is gone.
 	if _, err := os.Lstat(filepath.Join(b.dir, batch.WithdrawnFile)); err == nil {
 		return b.fail(errors.New("batch: the job was withdrawn"))
@@ -183,6 +190,12 @@ func (b *batchJob) run(ctx context.Context) (int, error) {
 	alloc, err := sched.Allocation(stop, b.c.getenv)
 	if err != nil {
 		fmt.Fprintf(b.c.stderr, "meridian batch: when the allocation ends can't be told: %v\n", err)
+	}
+	// Another job of the submission, as a duplicate the scheduler made,
+	// isn't the placement, whose ID the submission records: it leaves the
+	// token, and the records, to the placement's own job, and ends.
+	if other := b.otherJob(alloc.Job); other != "" {
+		return exitError, fmt.Errorf("batch: this job, %s, isn't the submission's, %s", alloc.Job, other)
 	}
 	// The job's own start and its walltime, where the scheduler doesn't say
 	// its end; or nothing, rather than a guess a check would read.
@@ -277,6 +290,24 @@ func (b *batchJob) signalled() os.Signal {
 	return b.termed
 }
 
+// otherJob returns the job the submission's job file records, where that
+// is another than job, this process's; or "" where it is this one, or
+// none is recorded yet, as before the driver has written it, or job isn't
+// told. Only the job file says: started.json may be another job's.
+func (b *batchJob) otherJob(job string) string {
+	if job == "" {
+		return ""
+	}
+	data, err := safepath.ReadFile(filepath.Join(b.dir, batch.JobFile), safepath.Private, 256)
+	if err != nil {
+		return ""
+	}
+	if recorded := strings.TrimSpace(string(data)); recorded != "" && recorded != job {
+		return recorded
+	}
+	return ""
+}
+
 // startWorker starts meridian worker, from the file this process runs,
 // with the job's environment and what tells it where the coordinator is,
 // and when to stop, and hands it its token once it says it is hardened.
@@ -327,25 +358,31 @@ func (b *batchJob) passSignals(life context.Context) {
 		case <-life.Done():
 			return
 		}
-		b.mu.Lock()
-		first := b.termed == nil
-		if first {
-			b.termed = sig
-		}
-		worker := b.worker
-		b.mu.Unlock()
-		if first {
-			n := 0
-			if s, ok := sig.(syscall.Signal); ok {
-				n = int(s)
-			}
-			_ = batch.WriteRecord(b.dir, batch.TermFile, &batch.Term{At: time.Now(), Signal: n})
-			b.stop()
-		}
-		if worker != nil {
+		if worker := b.term(sig); worker != nil {
 			_ = worker.Signal(sig)
 		}
 	}
+}
+
+// term records sig, if it is the first signal, and stops what comes before
+// the worker starts; and returns the worker, once it has started.
+func (b *batchJob) term(sig os.Signal) *os.Process {
+	b.mu.Lock()
+	first := b.termed == nil
+	if first {
+		b.termed = sig
+	}
+	worker := b.worker
+	b.mu.Unlock()
+	if first {
+		n := 0
+		if s, ok := sig.(syscall.Signal); ok {
+			n = int(s)
+		}
+		_ = batch.WriteRecord(b.dir, batch.TermFile, &batch.Term{At: time.Now(), Signal: n})
+		b.stop()
+	}
+	return worker
 }
 
 // workerEnviron returns the worker's environment: the job's, but GODEBUG

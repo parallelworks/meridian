@@ -74,9 +74,19 @@ func status(state, reason string, accounting bool) batch.JobStatus {
 	return st
 }
 
+// jobIDs returns those of ids that are a job's ID: another, as one a
+// damaged record gave, would be an option of the command's, or have it
+// refuse every job asked about with it. A job it leaves out is missing.
+func jobIDs(ids []string) []string {
+	return slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return !jobID(id) })
+}
+
 // Statuses asks squeue about the jobs ids, in every state. A job it no
 // longer lists is missing.
 func (s *Scheduler) Statuses(ctx context.Context, ids []string, accounting bool) (map[string]batch.JobStatus, error) {
+	if ids = jobIDs(ids); len(ids) == 0 {
+		return map[string]batch.JobStatus{}, nil
+	}
 	out, err := s.query(ctx, "squeue", []string{"--noheader", "--states=all", "--jobs=" + strings.Join(ids, ","), "--format=%i|%T|%r"})
 	if ee, ok := errors.AsType[*exitError](err); ok && notListed(ee) {
 		// One job it doesn't know is an error; of several, it lists those
@@ -112,6 +122,9 @@ func parseStatuses(out string, ids []string, accounting bool) map[string]batch.J
 // is a record a controller that stopped never closed, a runaway, and
 // missing.
 func (s *Scheduler) Accounting(ctx context.Context, ids []string) (map[string]batch.JobStatus, error) {
+	if ids = jobIDs(ids); len(ids) == 0 {
+		return map[string]batch.JobStatus{}, nil
+	}
 	out, err := s.query(ctx, "sacct", []string{"--allocations", "--noheader", "--parsable2", "--jobs=" + strings.Join(ids, ","), "--format=JobIDRaw,State"})
 	if err != nil {
 		return nil, err

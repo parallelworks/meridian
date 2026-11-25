@@ -230,11 +230,13 @@ type limited struct {
 }
 
 func (l *limited) Write(p []byte) (int, error) {
-	if room := maxOutput - l.buf.Len(); len(p) > room {
-		l.over = true
-		p = p[:max(room, 0)]
+	room := max(maxOutput-l.buf.Len(), 0)
+	if len(p) <= room {
+		return l.buf.Write(p)
 	}
-	return l.buf.Write(p)
+	l.over = true
+	n, _ := l.buf.Write(p[:room])
+	return n, errTruncated
 }
 
 func (l *limited) String() string { return l.buf.String() }
@@ -490,6 +492,12 @@ func epoch(s string) (time.Time, bool) {
 // then SIGKILL. scancel says nothing, and exits 0, of a job that has
 // ended, or that the cluster doesn't know (testdata's 14a, 14b and 14c).
 func (s *Scheduler) Cancel(ctx context.Context, id string) error {
+	// An ID that isn't one, as a damaged record gives, would be an option
+	// of scancel's, as --user: no job of the scheduler's has it, so there
+	// is none to cancel, as Statuses takes it for missing.
+	if !jobID(id) {
+		return nil
+	}
 	_, err := s.query(ctx, "scancel", []string{id})
 	return err
 }
