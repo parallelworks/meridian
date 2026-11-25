@@ -278,7 +278,9 @@ type Fit struct {
 	// Batch says that the member is a batch scheduler's, whose job holds
 	// an allocation, which can't lend part of what it holds, nor give it
 	// back and take it again: the coordinator places no job that calls a
-	// workflow there (Demand.CallsWorkflow).
+	// workflow there (Demand.CallsWorkflow). It counts in the Fit a Probe
+	// gives with an error too, so that such a job is refused at once, not
+	// asked about again while the scheduler doesn't answer.
 	Batch bool
 }
 

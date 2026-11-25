@@ -429,13 +429,10 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	}
 	demand.Tries = job.PlaceTries
 	// The member is asked again as the job is placed, and held to the
-	// coordinator's rules as rank holds it (fitProblem): either may have
+	// coordinator's rules as rank holds it (probeProblem): either may have
 	// changed since.
-	if cand.fit, err = cand.driver.Probe(ctx, m, demand); err == nil {
-		if p := fitProblem(m, demand, cand.fit); p != nil {
-			err = p
-		}
-	}
+	cand.fit, err = cand.driver.Probe(ctx, m, demand)
+	err = probeProblem(m, demand, cand.fit, err)
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
 		c.forgetSeen(run.ID, job.Key)
 		return 0, c.attemptSetupFailed(ctx, a.ID, prob)
@@ -860,11 +857,7 @@ func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend
 		m := &g.Members[i]
 		d := c.driver(m)
 		fit, err := d.Probe(ctx, m, demand)
-		if err == nil {
-			if p := fitProblem(m, demand, fit); p != nil {
-				err = p
-			}
-		}
+		err = probeProblem(m, demand, fit, err)
 		if p, ok := errors.AsType[*problem.Problem](err); ok {
 			reasons = append(reasons, maskedIf(private, problemDiagnostic(p)))
 			continue
@@ -881,6 +874,24 @@ func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend
 	}
 	slices.SortStableFunc(fits, func(a, b candidate) int { return cmp.Compare(a.fit.Availability, b.fit.Availability) })
 	return fits, reasons, look
+}
+
+// probeProblem returns the error with which m, whose driver's Probe gave
+// fit and err, can't run a job that asks for demand, or nil where it can:
+// err, where Probe couldn't answer, but for a job that calls a workflow
+// on a batch scheduler's member, which is refused whatever the member
+// says, as it is where Probe answers; and else fitProblem's.
+func probeProblem(m *backend.Member, demand backend.Demand, fit backend.Fit, err error) error {
+	if err != nil {
+		if fit.Batch && demand.CallsWorkflow {
+			return problems.SchedulerCallerRefused.Problem(problems.Params{"member": m.Name})
+		}
+		return err
+	}
+	if p := fitProblem(m, demand, fit); p != nil {
+		return p
+	}
+	return nil
 }
 
 // fitProblem returns why m, whose driver's Probe gave fit, can't run a job

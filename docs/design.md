@@ -5437,11 +5437,12 @@ checks its own binary, as the `local` backend does, and that it is the
 one placed (`worker_digest_mismatch`); reads what it is to do; finds when
 the allocation ends ([Resources](#resources)); and records that the job
 started (`started.json`). Where the address file says it was written in
-the last three minutes (its `updated`), so a listener is up, it completes a TLS handshake with the
-coordinator's key at one of its addresses within a minute, or exits
-before the worker starts (`scheduler_relay_unreachable`), which places
-the job again, rather than hold the allocation; where the listener is
-down, as while the coordinator is away, the worker waits for it. Only
+the last three minutes (its `updated`), so a listener is up, it
+completes a TLS handshake with the coordinator's key at one of its
+addresses within a minute, or exits before the worker starts
+(`scheduler_relay_unreachable`), which places the job again, rather than
+hold the allocation; where the listener is down, as while the
+coordinator is away, the worker waits for it. Only
 then does it take the token, start `meridian worker` with the address
 file (`MERIDIAN_COORDINATOR_FILE`) and the deadline, and give the worker
 its token on a socket, once the worker says it is hardened, as the `local`

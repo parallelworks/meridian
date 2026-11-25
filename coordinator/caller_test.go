@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/parallelworks/meridian/backend"
 	"github.com/parallelworks/meridian/compile"
 	"github.com/parallelworks/meridian/coordinator/internal/store"
+	"github.com/parallelworks/meridian/internal/kindtest"
 	"github.com/parallelworks/meridian/plan"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -179,5 +181,30 @@ func TestFitProblem(t *testing.T) {
 		case tc.want == problems.SchedulerCallerRefused && got.Params["member"] != "m1":
 			t.Errorf("%s: the problem's params are %v", tc.name, got.Params)
 		}
+	}
+}
+
+// TestProbeProblem checks that a job that calls a workflow is refused a
+// batch scheduler's member whose Probe couldn't answer, at once, rather
+// than asked about again; that another job keeps the Probe's error; and
+// that a Probe that answers is held to fitProblem's rules.
+func TestProbeProblem(t *testing.T) {
+	t.Parallel()
+	m := &backend.Member{Name: "m1"}
+	busy := errors.New("test: the controller is busy")
+	caller := backend.Demand{CallsWorkflow: true}
+	err := probeProblem(m, caller, backend.Fit{Batch: true}, busy)
+	if p := kindtest.Want(t, err, problems.SchedulerCallerRefused); p.Params["member"] != "m1" {
+		t.Errorf("the problem's params are %v", p.Params)
+	}
+	if err := probeProblem(m, backend.Demand{}, backend.Fit{Batch: true}, busy); !errors.Is(err, busy) {
+		t.Errorf("a job that calls no workflow: %v", err)
+	}
+	if err := probeProblem(m, caller, backend.Fit{}, busy); !errors.Is(err, busy) {
+		t.Errorf("a caller on another member: %v", err)
+	}
+	kindtest.Want(t, probeProblem(m, caller, backend.Fit{Batch: true}, nil), problems.SchedulerCallerRefused)
+	if err := probeProblem(m, backend.Demand{}, backend.Fit{}, nil); err != nil {
+		t.Errorf("a member that can run the job: %v", err)
 	}
 }

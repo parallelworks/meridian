@@ -190,6 +190,10 @@ func (b *sharedBinary) get() (string, string, error) {
 	path := filepath.Join(dir, "meridian")
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// A copy it keeps the digest of is checked, and the way to it, but its
+	// directory, which only its maker made private, is made, and checked
+	// to be private, only where the copy isn't kept: no other user can
+	// change either way.
 	if info, err := checkBinary(path, nil); err == nil {
 		if id, ok := fileid.Of(info); ok {
 			if kept, ok := b.digests.Get(id); ok && kept == digest {

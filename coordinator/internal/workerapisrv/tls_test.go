@@ -147,6 +147,9 @@ func TestServeMemberTLS(t *testing.T) {
 	refused["HTTP/2 alone"].NextProtos = []string{"h2"}
 	refused["X25519's hybrid alone"].CurvePreferences = []tls.CurveID{tls.X25519MLKEM768}
 	for name, config := range refused {
+		// The client takes any server here, TLS 1.2's among them, so that
+		// only the server's refusal fails the dial.
+		config.VerifyConnection = nil
 		if _, err := dialTLS(t, address, config); err == nil {
 			t.Errorf("a client of %s was served", name)
 		}
