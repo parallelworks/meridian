@@ -391,8 +391,13 @@ func (d *Driver) Probe(ctx context.Context, m *backend.Member, demand backend.De
 // for a child run by its root's, with the child's path in it; and
 // hands the worker its bootstrap token, written on the session's standard
 // input once meridian host has hardened itself, never in an argument or
-// the environment, before it returns the placement.
+// the environment, before it returns the placement. An endpoint of an
+// address file, which only a scheduler's listener gives, it refuses:
+// meridian host takes an address.
 func (d *Driver) Place(ctx context.Context, m *backend.Member, req backend.PlaceRequest) (backend.Placement, error) {
+	if req.Coordinator.AddressFile != "" {
+		return backend.Placement{}, errors.New("ssh: a worker on a host reaches the coordinator at an address, not through an address file")
+	}
 	t, err := targetOf(m)
 	if err != nil {
 		return backend.Placement{}, err

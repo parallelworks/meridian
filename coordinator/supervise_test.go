@@ -337,6 +337,9 @@ func TestWalltimeExceedsMember(t *testing.T) {
 		{"no other", fmt.Sprintf(timed, "10m"), backend.Fit{MaxWalltimeSeconds: 600, MarginSeconds: 60}, ""},
 		// A scheduler that keeps minutes asks for 600 seconds, rounded up.
 		{"rounded up", fmt.Sprintf(timed, "539s"), backend.Fit{MaxWalltimeSeconds: 599, MarginSeconds: 60, WalltimeUnitSeconds: 60}, "m2"},
+		// A member's fixed walltime of 1000 seconds, which a job with no
+		// timeout asks for all of, rounded up to the minutes it is asked in.
+		{"a fixed walltime's own default", oneJob, backend.Fit{MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60}, "m1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			parallel(t)

@@ -440,6 +440,26 @@ func TestPlace(t *testing.T) {
 	}
 }
 
+// TestPlaceAddressFile checks that Place refuses an endpoint of an address
+// file, which meridian host doesn't take, before it runs anything on the
+// host.
+func TestPlaceAddressFile(t *testing.T) {
+	r := newRig(t)
+	r.probe()
+	before := len(r.server.Commands())
+	_, err := r.d.Place(ctx(t, time.Minute), r.m, backend.PlaceRequest{
+		Attempt: "attempt-1", Run: "run1", Name: "meridian-run1-job",
+		Coordinator:    backend.Endpoint{AddressFile: filepath.Join(r.home, "relay.json"), KeyHash: "sha256:" + strings.Repeat("0", 64)},
+		BootstrapToken: "token-attempt-1", TimeoutSeconds: 600,
+	})
+	if err == nil || problems.IsProblem(err) {
+		t.Errorf("Place of an address file's endpoint: %v, want an error", err)
+	}
+	if after := len(r.server.Commands()); after != before {
+		t.Errorf("Place ran %d commands on the host", after-before)
+	}
+}
+
 // TestProbeParked checks that the attempts a Probe says are parked reach
 // the host's local backend, which leaves what they asked for out of what
 // its member runs: a member full only of a parked attempt starts a job

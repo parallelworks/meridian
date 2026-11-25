@@ -277,7 +277,7 @@ func TestPlace(t *testing.T) {
 		t.Errorf("the placement is %+v", p)
 	}
 	job := f.submitted[0]
-	if job.Name != "meridian-a1-1" || job.Dir != sub || job.WalltimeSeconds != 600+DefaultMarginSeconds {
+	if job.Name != "meridian-a1-1" || job.Dir != sub || job.WalltimeSeconds != 600+defaultMarginSeconds {
 		t.Errorf("the job is %+v", job)
 	}
 	want := "#!/bin/sh\nexec '/opt/meridian'\\''s/bin/meridian' batch '" + sub + "'\n"
@@ -297,7 +297,7 @@ func TestPlace(t *testing.T) {
 		t.Errorf("the token's file holds %q, %v", token, err)
 	}
 	spec, err := ReadSpec(sub)
-	if err != nil || spec.Attempt != "a1" || spec.Submission != 1 || spec.Coordinator.Address != "/run/meridian.sock" || spec.MarginSeconds != DefaultMarginSeconds || spec.Digest != testDigest {
+	if err != nil || spec.Attempt != "a1" || spec.Submission != 1 || spec.Coordinator.Address != "/run/meridian.sock" || spec.MarginSeconds != defaultMarginSeconds || spec.Digest != testDigest {
 		t.Errorf("the spec is %+v, %v", spec, err)
 	}
 	if strings.Contains(string(job.Script), "token-a1") || slices.ContainsFunc(job.Environ, func(kv string) bool { return strings.Contains(kv, "token-a1") }) {
@@ -357,8 +357,13 @@ func TestProbe(t *testing.T) {
 			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1800, MarginSeconds: 60, DefaultTimeoutSeconds: 100, WalltimeUnitSeconds: 60, Batch: true},
 		},
 		{
+			// sbatch asks for whole minutes: 17, for 1000 seconds.
 			name: "fixed walltime", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"walltime":1000}`)},
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 3600, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60, Batch: true},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60, Batch: true},
+		},
+		{
+			name: "fixed walltime under its own", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"walltime":1000}`), MaxWalltimeSeconds: 1800},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60, Batch: true},
 		},
 		{name: "unknown partition", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"partition":"gpu"}`)}, want: problems.SchedulerPartitionUnknown},
 		{
@@ -984,6 +989,32 @@ func TestSweep(t *testing.T) {
 		if _, err := os.Lstat(kept); err != nil {
 			t.Errorf("the attempt whose job may run: %v", err)
 		}
+	}
+}
+
+// TestSweepAgain checks that a driver that runs on sweeps again as it
+// places a job once a day has passed since it last swept, and not before.
+func TestSweepAgain(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	d, _ := newDriver(t, f)
+	place(t, d, "a1")
+	_, ended := place(t, d, "a2")
+	writeRecords(t, ended, records{exit: &Exit{At: time.Now()}})
+	old := time.Now().Add(-25 * time.Hour)
+	if err := os.Chtimes(filepath.Join(ended, ExitFile), old, old); err != nil {
+		t.Fatal(err)
+	}
+	place(t, d, "a3")
+	if _, err := os.Lstat(ended); err != nil {
+		t.Errorf("within a day of the last sweep, the stale attempt: %v", err)
+	}
+	d.sweepMu.Lock()
+	d.swept = d.swept.Add(-sweepEvery)
+	d.sweepMu.Unlock()
+	place(t, d, "a4")
+	if _, err := os.Lstat(filepath.Join(d.Dir, "a2")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a day after the last sweep, the stale attempt: %v", err)
 	}
 }
 

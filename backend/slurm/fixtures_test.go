@@ -98,10 +98,7 @@ func TestFixturePartitions(t *testing.T) {
 	t.Parallel()
 	for _, release := range releases {
 		out, _, _ := captured(t, release, "03-scontrol-show-partition")
-		ps, err := parsePartitions(out)
-		if err != nil {
-			t.Fatal(err)
-		}
+		ps := parsePartitions(out)
 		want := []batch.Partition{
 			{Name: "debug", State: "UP", Up: true, MaxSeconds: 600, DefaultSeconds: 300},
 			{Name: "down", State: "DOWN"},
@@ -111,12 +108,12 @@ func TestFixturePartitions(t *testing.T) {
 		for _, p := range ps {
 			got = append(got, p.Partition)
 		}
-		if !slices.Equal(got, want) || !ps[0].isDefault || ps[1].isDefault {
+		if !slices.Equal(got, want) || !ps[0].isDefault || ps[1].isDefault || slices.ContainsFunc(ps, func(p partition) bool { return p.err != nil }) {
 			t.Errorf("%s: %+v", release, ps)
 		}
 		// Without --all, a hidden partition isn't shown.
 		out, _, _ = captured(t, release, "03b-scontrol-show-partition-not-all")
-		if ps, _ := parsePartitions(out); len(ps) != 2 {
+		if ps := parsePartitions(out); len(ps) != 2 {
 			t.Errorf("%s: without --all, %+v", release, ps)
 		}
 	}
@@ -130,7 +127,7 @@ func TestFixturePartitions(t *testing.T) {
 			t.Errorf("duration(%q) reads", s)
 		}
 	}
-	if _, err := parsePartitions("PartitionName=p MaxTime=forever DefaultTime=NONE State=UP\n"); err == nil {
+	if ps := parsePartitions("PartitionName=p MaxTime=forever DefaultTime=NONE State=UP\n"); len(ps) != 1 || ps[0].err == nil {
 		t.Error("a MaxTime that can't be read is taken for none")
 	}
 }
@@ -408,6 +405,9 @@ func TestFixtureRefusals(t *testing.T) {
 		"sbatch: error: site policy: try again tomorrow\nsbatch: error: Batch job submission failed: Invalid qos specification\n":                                                           "Invalid qos specification (site policy: try again tomorrow)",
 		// A job_submit plugin's refusal says why only in its own line.
 		"sbatch: error: GPU jobs go to the gpu partition\nsbatch: error: Batch job submission failed: Unspecified error\n": "Unspecified error (GPU jobs go to the gpu partition)",
+		// Only a reason's own line is a submit limit, not a plugin's that
+		// names one.
+		"sbatch: error: no GPU jobs here, whatever QOSMaxSubmitJobPerUserLimit allows\nsbatch: error: Batch job submission failed: Job violates accounting/QOS policy (job submit limit, user's size and/or time limits)\n": "Job violates accounting/QOS policy (job submit limit, user's size and/or time limits) (no GPU jobs here, whatever QOSMaxSubmitJobPerUserLimit allows)",
 	} {
 		err := classify(&exitError{command: "sbatch", code: 1, stderr: stderr}, false)
 		if r, ok := errors.AsType[*batch.Rejected](err); !ok || r.Said != want {

@@ -60,10 +60,10 @@ import (
 	"github.com/parallelworks/meridian/problems"
 )
 
-// DefaultMarginSeconds is a scheduler member's margin unless it sets one:
+// defaultMarginSeconds is a scheduler member's margin unless it sets one:
 // time to start the worker, run cleanups and report, before the
 // allocation ends.
-const DefaultMarginSeconds = 300
+const defaultMarginSeconds = 300
 
 // MinKeyLen is the shortest Driver.Key, in bytes.
 const MinKeyLen = 32
@@ -260,8 +260,14 @@ type Driver struct {
 	infos   cached[*Info]
 	partsMu sync.Mutex
 	parts   map[string]*cached[partitionFact]
+	// tags are the clusters' tags (tag), by the cluster's name, which
+	// tagsMu guards.
+	tagsMu  sync.Mutex
+	tags    map[string]string
 	submits chan struct{}
-	swept   sync.Once
+	// swept is when the driver last swept (sweep), which sweepMu guards.
+	sweepMu sync.Mutex
+	swept   time.Time
 }
 
 var _ backend.Driver = (*Driver)(nil)
@@ -362,9 +368,22 @@ func parseID(s string) (tag, id string, ok bool) {
 
 // tag returns the keyed hash that names the cluster info describes in a
 // placement's ID, so that a placement's ID says which cluster it is on
-// without naming it.
+// without naming it. It is computed once for each cluster's name.
 func (d *Driver) tag(info *Info) (string, error) {
-	return d.hash("cluster\x00" + d.Scheduler.Name() + "\x00" + info.Cluster)
+	d.tagsMu.Lock()
+	defer d.tagsMu.Unlock()
+	if t, ok := d.tags[info.Cluster]; ok {
+		return t, nil
+	}
+	t, err := d.hash("cluster\x00" + d.Scheduler.Name() + "\x00" + info.Cluster)
+	if err != nil {
+		return "", err
+	}
+	if d.tags == nil {
+		d.tags = map[string]string{}
+	}
+	d.tags[info.Cluster] = t
+	return t, nil
 }
 
 // hash returns the keyed hash of what, which names it without saying it.
@@ -514,14 +533,15 @@ func margin(m *backend.Member) int64 {
 	if m.MarginSeconds > 0 {
 		return m.MarginSeconds
 	}
-	return DefaultMarginSeconds
+	return defaultMarginSeconds
 }
 
 // limits returns m's Fit but for its availability: its longest walltime,
-// its margin and its default timeout, from m and from its partition p; or
-// the problem with them, a member that allows more than its partition.
-func limits(m *backend.Member, s *Settings, p Partition) (backend.Fit, *problem.Problem) {
-	fit := backend.Fit{MaxWalltimeSeconds: p.MaxSeconds, MarginSeconds: margin(m), DefaultTimeoutSeconds: m.DefaultTimeoutSeconds}
+// its margin and its default timeout, from m, its settings s and its
+// partition p, and the unit, in seconds, its scheduler keeps walltimes in;
+// or the problem with them, a member that allows more than its partition.
+func limits(m *backend.Member, s *Settings, p Partition, unit int64) (backend.Fit, *problem.Problem) {
+	fit := backend.Fit{MaxWalltimeSeconds: p.MaxSeconds, MarginSeconds: margin(m), DefaultTimeoutSeconds: m.DefaultTimeoutSeconds, WalltimeUnitSeconds: unit}
 	over := func(key string) *problem.Problem {
 		return problems.MemberSettingInvalid.Problem(problems.Params{"member": m.Name, "key": key, "reason": "partition"})
 	}
@@ -533,6 +553,15 @@ func limits(m *backend.Member, s *Settings, p Partition) (backend.Fit, *problem.
 	}
 	if s.WalltimeSeconds > 0 && fit.MaxWalltimeSeconds > 0 && s.WalltimeSeconds > fit.MaxWalltimeSeconds {
 		return fit, over("walltime")
+	}
+	// A job asks for the fixed walltime whatever its timeout, rounded up to
+	// the scheduler's unit as it is asked for, and the scheduler stops it
+	// there.
+	if s.WalltimeSeconds > 0 {
+		fit.MaxWalltimeSeconds = s.WalltimeSeconds
+		if unit > 1 {
+			fit.MaxWalltimeSeconds = (s.WalltimeSeconds + unit - 1) / unit * unit
+		}
 	}
 	// A job without a timeout: gets the allocation less the margin.
 	if alloc := cmp.Or(s.WalltimeSeconds, p.DefaultSeconds); fit.DefaultTimeoutSeconds == 0 && alloc > fit.MarginSeconds {
@@ -600,11 +629,10 @@ func (d *Driver) probe(ctx context.Context, m *backend.Member, demand backend.De
 	if err != nil {
 		return fitOf(err)
 	}
-	fit, prob := limits(m, s, p)
+	fit, prob := limits(m, s, p, d.Scheduler.WalltimeUnit())
 	if prob != nil {
 		return backend.Fit{Problem: prob}, nil //nolint:nilerr // what is wrong with the member is the Fit's, not the call's
 	}
-	fit.WalltimeUnitSeconds = d.Scheduler.WalltimeUnit()
 	for _, r := range []struct {
 		name        string
 		asks, offer int64

@@ -2132,7 +2132,7 @@
   },
   "coordinator_key_invalid": {
     "title": "Archivo de clave del coordinador que no es su clave",
-    "why": "El archivo de clave del coordinador guarda la clave ECDSA P-256 con la que el coordinador sirve TLS a los workers que llegan a él desde una red, como a través de un relay en un nodo de acceso, y que lo reconocen por el hash de su clave. Meridian lo crea, y nada más debería cambiarlo.",
+    "why": "El archivo de clave del coordinador guarda la clave ECDSA P-256 con la que el coordinador sirve TLS a los workers que llegan a él desde una red, como desde los nodos de cómputo de un planificador, y que lo reconocen por el hash de su clave. Meridian lo crea, y nada más debería cambiarlo.",
     "fix": [
       "Si tienes una copia del archivo de clave, restáurala.",
       "Si no, quítalo: Meridian crea otro, y los workers ya iniciados con el hash de la clave anterior rechazan al coordinador (coordinator_key_mismatch)."
@@ -3193,7 +3193,7 @@
   },
   "scheduler_placement_elsewhere": {
     "title": "Trabajo en otro clúster que aquel al que llegan los comandos del planificador",
-    "why": "Una asignación al miembro de un planificador nombra el clúster al que se envió su trabajo, por un hash con clave del nombre del clúster, porque el ID de un trabajo solo significa un trabajo en su propio clúster. Los comandos del planificador que Meridian ejecuta llegan ahora a otro clúster, como tras cambiar SLURM_CONF, así que Meridian no puede preguntar por el trabajo, ni cancelarlo. Da por hecho que el worker del trabajo sigue en marcha durante cinco minutos, tiempo para volver a dejarlo como estaba, y luego da el intento por perdido con este problema.",
+    "why": "Una asignación al miembro de un planificador nombra el clúster al que se envió su trabajo, por un hash con clave del nombre del clúster, porque el ID de un trabajo solo significa un trabajo en su propio clúster. Los comandos del planificador que Meridian ejecuta llegan ahora a otro clúster, como tras cambiar SLURM_CONF, así que Meridian no puede preguntar por el trabajo, ni cancelarlo. Da por hecho que el worker del trabajo sigue en marcha durante cinco minutos, tiempo para volver a dejarlo como estaba, y luego da el intento por perdido con este problema, o, en un trabajo cuyo retry: incluye worker-lost, unos tres minutos después de pasar la concesión del intento y un margen después.",
     "fix": [
       "Ejecuta Meridian donde los comandos del planificador lleguen al clúster al que se envió el trabajo, como con el SLURM_CONF con el que se ejecutó."
     ]

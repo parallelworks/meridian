@@ -10,8 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/parallelworks/meridian/backend/batch"
 	"github.com/parallelworks/meridian/plan"
@@ -28,13 +26,13 @@ var namePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,256}$`)
 const maxWalltime = 366 * 24 * 60 * 60
 
 // Settings decodes a member's settings: partition, account, qos,
-// reservation and gpu-type, names as Slurm's are; host, as text; nodes, a
-// whole number of at least 1; exclusive, true or false; walltime, a
-// duration as a job's timeout: is written; and relay, a mapping of network,
-// a private network in CIDR notation, and ports, a port or a range of
-// them, as 60001-63000. A key it doesn't take, a value of another type, or
-// one it can't use is member_setting_invalid, of the first such key, as
-// they sort, relay's as relay.network and relay.ports.
+// reservation and gpu-type, names as Slurm's are; host, a host's name
+// (validHost); nodes, a whole number of at least 1; exclusive, true or
+// false; walltime, a duration as a job's timeout: is written; and relay, a
+// mapping of network, a private network in CIDR notation, and ports, a port
+// or a range of them, as 60001-63000. A key it doesn't take, a value of
+// another type, or one it can't use is member_setting_invalid, of the
+// first such key, as they sort, relay's as relay.network and relay.ports.
 func (*Scheduler) Settings(member string, raw jsontext.Value) (*batch.Settings, error) {
 	s := new(batch.Settings)
 	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
@@ -61,7 +59,7 @@ func (*Scheduler) Settings(member string, raw jsontext.Value) (*batch.Settings, 
 		var err error
 		switch key {
 		case "host":
-			err = text(&s.Host, plain)
+			err = text(&s.Host, validHost)
 		case "partition":
 			err = text(&s.Partition, namePattern.MatchString)
 		case "account":
@@ -197,8 +195,15 @@ func PortRange(s string) (first, last int, ok bool) {
 	return first, last, true
 }
 
-// plain reports whether s is text a setting can be: UTF-8, without
-// control characters, at most 256 bytes, and not empty.
-func plain(s string) bool {
-	return s != "" && len(s) <= 256 && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
+// hostPattern is a login node as clusters.yaml names a cluster's host: an
+// alias that ssh resolves, or a host's name or address, with no port, and
+// nothing ssh or a shell could read as more, a leading - among it. A login
+// node that needs a port, a user to log in as, a jump host or an IPv6
+// address is an alias the user's ssh_config defines.
+var hostPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+
+// validHost reports whether host names a login node (hostPattern), in at
+// most 256 bytes.
+func validHost(host string) bool {
+	return len(host) <= 256 && hostPattern.MatchString(host)
 }

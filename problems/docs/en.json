@@ -1835,7 +1835,7 @@
     ]
   },
   "coordinator_key_invalid": {
-    "why": "The coordinator's key file holds the ECDSA P-256 key with which the coordinator serves TLS to the workers that reach it from a network, as through a relay on a login node, and which know it by its key's hash. Meridian creates it, and nothing else should change it.",
+    "why": "The coordinator's key file holds the ECDSA P-256 key with which the coordinator serves TLS to the workers that reach it from a network, as from a scheduler's compute nodes, and which know it by its key's hash. Meridian creates it, and nothing else should change it.",
     "fix": [
       "If you have a copy of the key file, put it back.",
       "Otherwise remove it: Meridian creates another, and the workers already started with the old key's hash refuse the coordinator (coordinator_key_mismatch)."
@@ -2752,7 +2752,7 @@
     ]
   },
   "scheduler_placement_elsewhere": {
-    "why": "A placement on a scheduler's member names the cluster its job was submitted to, by a keyed hash of the cluster's name, since a job's ID means a job only on its own cluster. The scheduler's commands Meridian runs now reach another cluster, as after SLURM_CONF changed, so Meridian can't ask about the job, nor cancel it. It takes the job's worker to be running for five minutes, time to set it back, and then loses the attempt with this problem.",
+    "why": "A placement on a scheduler's member names the cluster its job was submitted to, by a keyed hash of the cluster's name, since a job's ID means a job only on its own cluster. The scheduler's commands Meridian runs now reach another cluster, as after SLURM_CONF changed, so Meridian can't ask about the job, nor cancel it. It takes the job's worker to be running for five minutes, time to set it back, and then loses the attempt with this problem, or, for a job whose retry: lists worker-lost, about three minutes after the attempt's lease and a margin after it have passed.",
     "fix": [
       "Run Meridian where the scheduler's commands reach the cluster the job was submitted to, as with the SLURM_CONF it ran with."
     ]

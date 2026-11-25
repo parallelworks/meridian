@@ -3685,24 +3685,26 @@ attempt ends, however long ago its lease lapsed.
 A worker is lost only when its backend says it is, or, for a job that
 fences itself, once its lease has lapsed and the margin passed. Then the
 coordinator asks the attempt's backend how the worker ended, each time
-for at most 10 seconds, whether or not the backend's driver honours that,
-with one check in flight at a time, so that a scheduler that ended it at
-its time limit, or for its memory, or a backend that says why it was
-lost, as a scheduler's job that ended without a record of how, gives the
-attempt its reason, and a `retry:` that lists `worker-lost` doesn't run
-a job its scheduler timed out again; the job's `timeout:`, whose
-backstop would end the attempt, waits for it. Any other end loses it with
-`worker-lost` at once. A worker that runs, as far as its backend knows, a
-check that can't decide, and one that doesn't answer in time, it asks
+for at most 10 seconds, whether or not the backend's driver honours
+that, waiting two seconds more for the answer of one that does, with one
+check in flight at a time, so that a scheduler that ended it at its time
+limit, or for its memory, or a backend that says why it was lost, as a
+scheduler's job that ended without a record of how, gives the attempt
+its reason, and a `retry:` that lists `worker-lost` doesn't run a job
+its scheduler timed out again; the job's `timeout:`, whose backstop
+would end the attempt, waits for it. Any other end loses it with
+`worker-lost` at once. A worker that runs, as far as its backend knows,
+a check that can't decide, and one that doesn't answer in time, it asks
 again, each heartbeat period, for as long as the backend says a check
 can take to see how a worker ended: a batch scheduler's, whose snapshot
 of its queue can be 15 seconds old, and which waits two minutes for a
-gone job's records, about three minutes; the `local` and `ssh` backends',
-whose checks see a process's end at once, none, so that their attempts
-are lost at the first such check. Then the attempt is lost with
-`worker-lost`, and the problem a check gave as its error, if one did, as
-for an attempt whose check gave one for five minutes. Waiting is safe:
-the worker has stopped the job, and the store refuses what it reports.
+gone job's records, about three minutes; the `local` and `ssh`
+backends', whose checks see a process's end at once, none, so that their
+attempts are lost at the first such check. Then the attempt is lost with
+`worker-lost`, and the last problem a check gave as its error, if one
+did, as for an attempt whose check gave one for five minutes. Waiting is
+safe: the worker has stopped the job, and the store refuses what it
+reports.
 An attempt whose member its group no longer has can't be asked, and is
 lost at once; one whose member can't be told now, as while the Groups
 resolver doesn't answer, is looked at again only for as long as the
@@ -4461,7 +4463,7 @@ there, takes its compute nodes' connections.
 | --- | --- |
 | `local` | A Unix socket in a directory only the user can open. |
 | `ssh` | A Unix socket on the host that the coordinator forwards over its SSH connection, so no port opens on either side. |
-| `slurm`, `pbs` | TLS 1.3 to the coordinator, checked against its key's hash: through a relay that `meridian host` keeps on the login node while the coordinator's SSH connection to it lasts, or, where the coordinator runs on the login node, at a port it listens on there. |
+| `slurm`, `pbs` | TLS 1.3 to the coordinator, checked against its key's hash, at a port the coordinator listens on on the login node, where it runs. A relay that `meridian host` would keep there, for a coordinator elsewhere, isn't built yet. |
 | `kubernetes` | TLS 1.3 to the coordinator's address, checked the same way. |
 
 A coordinator outside a cluster drives Slurm or PBS over SSH, on its login
@@ -5348,7 +5350,10 @@ with; `pbs` isn't built yet. Today the backend runs on the cluster's
 login node: `meridian run` runs there, and runs Slurm's own commands in
 its own process. A member that names another login node (`host`), which
 a later release reaches over SSH through `meridian host`, has
-`backend_not_built`.
+`backend_not_built`. `host` names it as `clusters.yaml` names a cluster's
+host: an alias that ssh resolves, or a host's name or address, with no
+port; a port, a user, a jump host or an IPv6 address is the alias's, in
+the user's `ssh_config`.
 
 **Its settings** name each as Slurm's own option does: `partition`, or
 the cluster's default; `account`, `qos` and `reservation`; `nodes`, how
@@ -5451,7 +5456,13 @@ signals only a job's first process, and records the first (`term.json`);
 and records how the worker ended, with how many processes the kernel
 killed for their memory in the job's cgroup meanwhile (`exit.json`), so
 that how a job ended is known where the site keeps no accounting. Every
-way it ends before the worker starts it records, and removes the token.
+way it ends before the worker starts it records, and removes the token,
+but where its argument isn't a directory's absolute path, or the
+directory is one it can't use, as one another user could change, in
+which it writes nothing; and where the job isn't the one its submission
+records, as a duplicate Slurm made of it, which leaves the token and the
+records to that one. There the driver's Forget, or its withdrawal of the
+job, removes the token.
 A job that a signal from outside ends, as a cancel, a preemption or a
 node's shutdown, stops as a worker stopped from outside does: its steps
 get `SIGTERM` and their grace, what they wrote is sent, and the worker
@@ -5472,9 +5483,9 @@ how they ended. It maps what it learns so:
 
 | Slurm, or the records | The placement |
 | --- | --- |
-| `PENDING`, `CONFIGURING`, `REQUEUE_HOLD`, `RESV_DEL_HOLD` | Queued |
+| `PENDING`, `CONFIGURING`, `REQUEUE_HOLD`, `RESV_DEL_HOLD`, `REQUEUED`, `REQUEUE_FED` | Queued |
 | … for a reason that can't clear, two minutes on | Withdrawn, and dead, `scheduler_job_cannot_start` |
-| `RUNNING`, `COMPLETING`, `SUSPENDED`, `STAGE_OUT`, `SIGNALING`, `RESIZING` | Running |
+| `RUNNING`, `COMPLETING`, `SUSPENDED`, `STAGE_OUT`, `SIGNALING`, `RESIZING`, `STOPPED` | Running |
 | `COMPLETED`, `FAILED`, `SPECIAL_EXIT` | Dead, exited; out of memory where `exit.json` says the kernel killed the worker with kills counted, timed out where `term.json` came within a minute of the allocation's end |
 | `TIMEOUT`, `DEADLINE` | Dead, timed out |
 | `OUT_OF_MEMORY` | Dead, out of memory |
@@ -5483,29 +5494,33 @@ how they ended. It maps what it learns so:
 | `CANCELLED`, which the backend withdrew | Dead, withdrawn |
 | `CANCELLED` otherwise | Dead, exited |
 | Gone, by `exit.json`, a withdrawal or accounting | As those say |
+| Gone, `started.json` and a `term.json` that came within a minute of the allocation's end, two minutes on | Dead, timed out |
 | Gone, `started.json` alone, two minutes on | Dead, `scheduler_job_vanished` |
 | Gone or ended, no records, two minutes on | Dead, `scheduler_worker_not_started`, with the last line the job printed |
 
 `REVOKED`, a federation's job that a sibling runs, is Unknown. A job
 `squeue` no longer lists, whose end neither accounting nor its records
-say, is Unknown for two minutes after it was last seen, so that a record
-a network filesystem doesn't show yet is waited for: NFS holds what it
-knows of a directory for up to a minute by default. A job pending for a
-reason that can't clear by itself, as a time limit longer than its
-partition's, a per-job limit of its QoS or its association, a constraint
-no node has, an account or a QoS it may not use, or a dependency that
-can never be met, is withdrawn once it has been so for two minutes since
-a check last found it otherwise, since Slurm can give such a reason for
-a while of a job it then runs: its attempt fails before its first step,
-and is placed again (`scheduler_job_cannot_start`). A job its
-administrator holds (`JobHeldAdmin`) is never withdrawn, nor is one that
-waits on a partition's node limit (`PartitionNodeLimit`), as a node that
-is down can have it do. A placement whose job is on another cluster
-than the commands reach now, as after `SLURM_CONF` changed, can't be
-asked about (`scheduler_placement_elsewhere`): it counts as running for
-five minutes, as any check that gives a problem does, and is then lost
-with it. How a job ended becomes its attempt's reason as [Leases and
-fencing](#leases-and-fencing) says.
+say, is Unknown for two minutes from the first check that found it so,
+so that a record a network filesystem doesn't show yet is waited for:
+NFS holds what it knows of a directory for up to a minute by default. A
+job pending for a reason that can't clear by itself, as a time limit
+longer than its partition's, a per-job limit of its QoS or its
+association, a constraint no node has, an account or a QoS it may not
+use, or a dependency that can never be met, is withdrawn once it has
+been so for two minutes since a check last found it otherwise, since
+Slurm can give such a reason for a while of a job it then runs: its
+attempt fails before its first step, and is placed again
+(`scheduler_job_cannot_start`). A job its administrator holds
+(`JobHeldAdmin`) is never withdrawn, nor is one that waits on a
+partition's node limit (`PartitionNodeLimit`), as a node that is down
+can have it do. A placement whose job is on another cluster than the
+commands reach now, as after `SLURM_CONF` changed, can't be asked about
+(`scheduler_placement_elsewhere`): it counts as running for five
+minutes, as any check that gives a problem does, and is then lost with
+it, or, for a job whose `retry:` lists `worker-lost`, once its backend's
+while to say how a worker ended has passed, about three minutes past its
+lease and the margin. How a job ended becomes its attempt's reason as
+[Leases and fencing](#leases-and-fencing) says.
 
 **Forgetting.** Cancel records the job as withdrawn, removes its token,
 and then cancels it (`scancel`); Forget removes the attempt's
@@ -5517,10 +5532,11 @@ predate. A withdrawal isn't an end: Slurm signals a cancelled job and
 kills it only its KillWait later, as it may still write its records and
 output. Such snapshots are made no sooner than five seconds apart, so
 that many attempts that end at once, as a matrix's, share them. A
-submission no coordinator had the backend forget, the next to place a
-job removes once its exit record or its withdrawal is a day old, or its
-allocation ended a day ago, or, where its end isn't told, once nothing in
-it has changed for 30 days.
+submission no coordinator had the backend forget, a coordinator removes
+as it places its first job, and then as it places one at most once a
+day, once its exit record or its withdrawal is a day old, or its
+allocation ended a day ago, or, where its end isn't told, once nothing
+in it has changed for 30 days.
 
 **Placement** leaves out a member whose commands, release or cluster
 can't be used, whose settings can't, or whose partition isn't there, or
@@ -5628,8 +5644,10 @@ A job's time limit is its `timeout:`. There is no separate walltime:
   Slurm (`walltime_exceeds_member`). The coordinator does, not each
   backend, so the rule holds for every member that says a longest
   walltime: its own `max-walltime`, or, for a scheduler's member, its
-  partition's limit, whichever is shorter. A member that allows more than
-  its partition does is refused (`member_setting_invalid`).
+  partition's limit, whichever is shorter, or its fixed `walltime`, which
+  a job asks for whatever its timeout, so that a job whose time and margin
+  exceed it goes to another member. A member that allows more than its
+  partition does is refused (`member_setting_invalid`).
 - **A format 1 job that sets its time limit through `runs-on:`** keeps it.
   The compiler warns when that limit is shorter than the job's `timeout:`
   and the margin.

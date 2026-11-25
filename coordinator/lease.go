@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -80,14 +81,15 @@ func (c *Coordinator) watchFenced(ctx context.Context, run *store.Run, job *stor
 // asks again a heartbeat period later, for as long as the backend can take
 // to see how a worker ended (endWait), as a scheduler's whose snapshot of
 // its queue, or the records it waits for, don't show the job's end yet:
-// then it loses the attempt with worker-lost, and the problem the last
-// check gave as its error, if it gave one, as checkWorker does once
-// CheckGrace has passed. A backend that needs no while, as one whose
-// workers are processes, decides at the first check. Waiting is safe: the
-// worker has stopped the job, and the store refuses what it reports. A
-// member its group no longer has can't be asked, and is worker-lost at
-// once; one that can't be told now, as while Groups doesn't answer, is
-// asked again only while its place's driver's endWait lasts.
+// then it loses the attempt with worker-lost, and the last problem a check
+// gave as its error since lost, if one did (fenceProblem), as checkWorker
+// does once CheckGrace has passed. A backend that needs no while, as one
+// whose workers are processes, decides at the first check. Waiting is
+// safe: the worker has stopped the job, and the store refuses what it
+// reports. A member its group no longer has can't be asked, and is
+// worker-lost at once; one that can't be told now, as while Groups
+// doesn't answer, is asked again only while its place's driver's endWait
+// lasts.
 func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.Job, a *store.Attempt, now, lost time.Time) (time.Duration, error) {
 	cand, p, err := c.placedMember(ctx, run, job, a)
 	switch {
@@ -104,6 +106,7 @@ func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.
 		// Stopped as it asked, as a coordinator that shuts down is.
 		return 0, ctx.Err()
 	}
+	why := c.fenceProblem(a.ID, err)
 	if err == nil && st.State == backend.Dead {
 		return 0, c.lose(ctx, a, st, st.Problem)
 	}
@@ -115,22 +118,48 @@ func (c *Coordinator) fencedEnd(ctx context.Context, run *store.Run, job *store.
 	} else {
 		c.log.InfoContext(ctx, "coordinator: a self-fencing attempt's backend didn't say how its worker ended, which is lost", "attempt", a.ID, "error", err)
 	}
-	why, _ := errors.AsType[*problem.Problem](err)
 	return 0, c.lose(ctx, a, backend.Status{State: backend.Dead}, why)
+}
+
+// fenceProblem keeps err, a check's of the self-fencing attempt id, where
+// it is a problem, and returns the last problem a check of id gave, or
+// nil: a later check that doesn't answer in time, or can't decide, doesn't
+// hide it. An attempt's goes as its check in flight does (dropCheck); and
+// at maxMembers attempts', as of attempts another replica's supervisor has
+// taken over since, they all go, as placedMember's members do, so that
+// the problem a check has just given is always kept.
+func (c *Coordinator) fenceProblem(id string, err error) *problem.Problem {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if p, ok := errors.AsType[*problem.Problem](err); ok {
+		if _, kept := c.fenceProblems[id]; !kept && len(c.fenceProblems) >= maxMembers {
+			clear(c.fenceProblems)
+		}
+		c.fenceProblems[id] = p
+	}
+	return c.fenceProblems[id]
 }
 
 // endWait is how long past its lease and the fence margin a self-fencing
 // attempt whose worker's driver is d is asked how its worker ended: the
 // time d says a check can take to see it (backend.EndWaiter), and a
-// check's own bound and a heartbeat period more, since that time counts
-// from a check, which can be the second; or none, for a driver that
-// doesn't say.
+// look's wait for a check (boundedCheck) and a heartbeat period more,
+// since that time counts from a check, which can be the second; or none,
+// for a driver that doesn't say.
 func (c *Coordinator) endWait(d backend.Driver) time.Duration {
 	w, ok := d.(backend.EndWaiter)
 	if !ok || w.EndWait() == 0 {
 		return 0
 	}
-	return w.EndWait() + c.fenceCheck + c.timing.Heartbeat
+	return w.EndWait() + c.checkWait() + c.timing.Heartbeat
+}
+
+// checkWait is how long a look waits for a self-fencing attempt's check
+// (boundedCheck): its deadline, and a fifth more, so that a driver that
+// honours its context, and answers as its deadline passes, isn't taken
+// for one that doesn't answer.
+func (c *Coordinator) checkWait() time.Duration {
+	return c.fenceCheck + c.fenceCheck/5
 }
 
 // A fenceCheck is a check of a self-fencing attempt's backend in flight
@@ -141,19 +170,44 @@ type fenceCheck struct {
 	err  error
 }
 
+// answered reports whether the check has answered.
+func (fc *fenceCheck) answered() bool {
+	select {
+	case <-fc.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// errChecksFull is a check boundedCheck didn't start, as it has as many in
+// flight as it keeps, none of which has answered.
+var errChecksFull = errors.New("coordinator: as many self-fencing attempts' checks are in flight as it keeps")
+
 // boundedCheck asks cand's driver what has become of the placement p of
 // the attempt id, for at most fenceCheck, whether or not the driver
-// honours its context, as one that reads a network filesystem may not. A
-// check that hasn't answered by then gives Unknown, with the context's
-// error; it goes on, the attempt's one check in flight, whose answer the
-// next look takes, rather than start another against a driver that is
-// stuck. It keeps maxMembers checks at most, as placedMember does members.
+// honours its context, as one that reads a network filesystem may not,
+// and waits for its answer for checkWait. A check that hasn't answered by
+// then gives
+// Unknown, with the context's error; it goes on, the attempt's one check in
+// flight, whose answer the next look takes, rather than start another
+// against a driver that is stuck. It keeps maxMembers checks at most, as
+// placedMember does members: at that many, those that have answered go,
+// and where none has, it starts none, and gives Unknown, with
+// errChecksFull, which the attempt's next look asks again after. A check
+// it didn't keep would go on unseen, and one more each look, against
+// drivers that are stuck; and one in flight that it let go of would leave
+// its attempt with two.
 func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candidate, p backend.Placement) (backend.Status, error) {
 	c.mu.Lock()
 	fc := c.fenceChecks[id]
 	if fc == nil {
 		if len(c.fenceChecks) >= maxMembers {
-			clear(c.fenceChecks)
+			maps.DeleteFunc(c.fenceChecks, func(_ string, fc *fenceCheck) bool { return fc.answered() })
+		}
+		if len(c.fenceChecks) >= maxMembers {
+			c.mu.Unlock()
+			return backend.Status{State: backend.Unknown}, errChecksFull
 		}
 		fc = &fenceCheck{done: make(chan struct{})}
 		c.fenceChecks[id] = fc
@@ -165,7 +219,7 @@ func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candida
 		}()
 	}
 	c.mu.Unlock()
-	timer := time.NewTimer(c.fenceCheck)
+	timer := time.NewTimer(c.checkWait())
 	defer timer.Stop()
 	select {
 	case <-fc.done:
@@ -182,11 +236,13 @@ func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candida
 	}
 }
 
-// dropCheck lets go of the attempt id's check in flight (boundedCheck), as
-// of an attempt that has ended, whose answer nothing will take.
+// dropCheck lets go of the attempt id's check in flight (boundedCheck), and
+// the problem its checks gave (fenceProblem), as of an attempt that has
+// ended, whose answer nothing will take.
 func (c *Coordinator) dropCheck(id string) {
 	c.mu.Lock()
 	delete(c.fenceChecks, id)
+	delete(c.fenceProblems, id)
 	c.mu.Unlock()
 }
 

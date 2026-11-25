@@ -405,6 +405,69 @@ func TestBatchOtherJob(t *testing.T) {
 	}
 }
 
+// TestBatchOtherJobEarly checks that meridian batch of a job the
+// submission doesn't record leaves the token and the records as they were
+// where it ends before it reaches the check of its job, as one that can't
+// harden itself, or one signalled before it caught its own signals does.
+func TestBatchOtherJobEarly(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		run  func(*testing.T, *batchTest)
+	}{
+		{
+			name: "no hardening",
+			run: func(t *testing.T, b *batchTest) {
+				t.Helper()
+				b.sys.harden = func() error { return syscall.EPERM }
+				if r := endedWithin(t, b.start(t)); r.code != exitError {
+					t.Errorf("%+v", r)
+				}
+			},
+		},
+		{
+			name: "signalled",
+			run: func(t *testing.T, b *batchTest) {
+				t.Helper()
+				if err := batch.WriteRecord(b.dir, batch.SpecFile, b.spec); err != nil {
+					t.Fatal(err)
+				}
+				var stdout, stderr strings.Builder
+				c := &cli{
+					stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
+					lookupEnv: func(name string) (string, bool) { v, ok := b.vars[name]; return v, ok },
+				}
+				c.batch, c.signals = &b.sys, b.signals
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				if code := run(ctx, c, []string{"batch", b.dir}); code != exitError {
+					t.Errorf("exited %d (%s)", code, stderr.String())
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parallel(t)
+			b := newBatchTest(t, "")
+			if err := os.WriteFile(filepath.Join(b.dir, batch.JobFile), []byte("13\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			tc.run(t, b)
+			if token, err := os.ReadFile(filepath.Join(b.dir, batch.TokenFile)); err != nil || string(token) != "the-token" {
+				t.Errorf("the token's file: %q, %v", token, err)
+			}
+			for _, name := range []string{batch.StartedFile, batch.TermFile, batch.ExitFile} {
+				if _, err := os.Lstat(filepath.Join(b.dir, name)); err == nil {
+					t.Errorf("%s was written", name)
+				}
+			}
+			if _, err := os.Lstat(b.report); err == nil {
+				t.Error("a worker started")
+			}
+		})
+	}
+}
+
 // TestBatchAllocationEnd checks the deadline where the scheduler says when
 // the job started, but not when it ends: its start and its walltime; and
 // that there is none, nor an end in started.json, where it says neither.

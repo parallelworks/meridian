@@ -389,6 +389,49 @@ func TestForwardPortsTaken(t *testing.T) {
 	}
 }
 
+// TestListenInvalidPorts checks that ports that aren't a range of them
+// are an error of listenIn's, and, kept as the scheduler last said them,
+// as by a file edited by hand, count as nothing kept.
+func TestListenInvalidPorts(t *testing.T) {
+	t.Parallel()
+	own := machineAddress(t)
+	listen := func(a netip.Addr, port int) (net.Listener, error) {
+		return net.Listen("tcp", netip.AddrPortFrom(a, uint16(port)).String()) //nolint:gosec // a test's port
+	}
+	for _, ports := range [][2]int{{9, 8}, {65535, 65536}, {-1, 8}} {
+		if l, err := listenIn(own.Addr(), ports[0], ports[1], listen); err == nil {
+			l.Close()
+			t.Errorf("ports %v were listened in", ports)
+		}
+	}
+	f := newFake()
+	d, _ := newDriver(t, f)
+	d.interfaces = func() ([]netip.Prefix, error) { return []netip.Prefix{own}, nil }
+	l, err := d.Forward(t.Context(), testMember)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+	file, err := d.factsFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.infoErr = errors.New("slurmctld isn't answering")
+	f.mu.Unlock()
+	for _, ports := range [][2]int{{9, 8}, {1, 65536}, {0, 8}} {
+		if err := writeJSON(filepath.Dir(file), filepath.Base(file), &Info{FirstPort: ports[0], LastPort: ports[1]}); err != nil {
+			t.Fatal(err)
+		}
+		again, _ := newDriver(t, f)
+		again.Dir, again.Key, again.interfaces = d.Dir, d.Key, d.interfaces
+		if l, err := again.Forward(t.Context(), testMember); err == nil {
+			l.Close()
+			t.Errorf("a listener listened as kept ports %v say", ports)
+		}
+	}
+}
+
 // TestProbeNoAddress checks that a member whose login node, this machine,
 // has no private address its workers could reach, or none in its relay
 // network, can't run a job.
