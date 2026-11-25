@@ -49,6 +49,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/internal/fileid"
 	"github.com/parallelworks/meridian/internal/flock"
 	"github.com/parallelworks/meridian/internal/safepath"
 	"github.com/parallelworks/meridian/problems"
@@ -132,6 +133,11 @@ const staleAfter = 24 * time.Hour
 
 // bootID returns the boot's ID, which a process reads once.
 var bootID = sync.OnceValues(readBootID)
+
+// BootID returns the ID of this boot of the system, which it makes at
+// random each boot, where the system says one: Linux's, macOS's and
+// FreeBSD's do.
+func BootID() (string, error) { return bootID() }
 
 // attemptPattern is an attempt's ID, which names its files.
 var attemptPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -629,22 +635,10 @@ func executable() (path, run, digest string, err error) {
 	return path, run, digest, err
 }
 
-// A fileIdentity is which file a file is, and what it holds, as far as
-// fstat says: its device and inode, its size, and when its data and its
-// status last changed, in nanoseconds.
-type fileIdentity struct {
-	dev, ino           uint64
-	size, mtime, ctime int64
-}
-
 // digests keeps the digest of the file this process runs, the last time
-// checkExecutable hashed it, by the file's identity, so that a placement
-// doesn't hash the binary, tens of megabytes, again unless it changed.
-var digests struct {
-	sync.Mutex
-	id     fileIdentity
-	digest string
-}
+// checkExecutable hashed it, by the file's ID, so that a placement doesn't
+// hash the binary, tens of megabytes, again unless it changed.
+var digests fileid.Cache
 
 // settled is how long ago a file's status must have last changed for its
 // digest to be kept (digests): a variable a test sets.
@@ -675,7 +669,7 @@ var hashFile = func(r io.Reader) (string, error) {
 // digest is kept only once its file's status last changed a second or more
 // before it was hashed, so a change after it gives a status time that
 // differs. Elsewhere the file at path is hashed at each placement
-// (identity).
+// (fileid.Of).
 func checkExecutable(path, open string) (string, error) {
 	f, info, err := safepath.OpenExecutable(path, open)
 	if p, ok := errors.AsType[*problem.Problem](err); ok {
@@ -685,13 +679,9 @@ func checkExecutable(path, open string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	id, known := identity(info)
+	id, known := fileid.Of(info)
 	if known {
-		digests.Lock()
-		digest := digests.digest
-		hit := digest != "" && digests.id == id
-		digests.Unlock()
-		if hit {
+		if digest, ok := digests.Get(id); ok {
 			return digest, nil
 		}
 	}
@@ -699,10 +689,8 @@ func checkExecutable(path, open string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if known && time.Since(time.Unix(0, id.ctime)) >= settled {
-		digests.Lock()
-		digests.id, digests.digest = id, digest
-		digests.Unlock()
+	if known {
+		digests.Keep(id, digest, settled)
 	}
 	return digest, nil
 }

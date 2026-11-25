@@ -23,6 +23,7 @@ import (
 	"github.com/parallelworks/foundation/problem"
 
 	"github.com/parallelworks/meridian/backend"
+	"github.com/parallelworks/meridian/backend/batch"
 	"github.com/parallelworks/meridian/backend/hostproto"
 	localbackend "github.com/parallelworks/meridian/backend/local"
 	"github.com/parallelworks/meridian/cmd/meridian/internal/local"
@@ -114,7 +115,7 @@ var systemHost = hostSystem{
 func hostCommand(name string) (string, error) {
 	path, err := safepath.LookExecutable(name)
 	if p, ok := errors.AsType[*problem.Problem](err); ok {
-		return "", problems.SSHHostCommandUnsafe.Problem(problems.Params{"host": hostName(), "path": path, "code": string(p.Code)})
+		return "", problems.SSHHostCommandUnsafe.Problem(problems.Params{"host": batch.HostName(), "path": path, "code": string(p.Code)})
 	}
 	return path, err
 }
@@ -272,15 +273,6 @@ func (h *hostOp) do(ctx context.Context, op string, req *hostproto.Request) host
 	return hostproto.Message{}
 }
 
-// hostName is the host's name, as it says it, for its problems.
-func hostName() string {
-	name, err := os.Hostname()
-	if err != nil {
-		return "this host"
-	}
-	return name
-}
-
 // hello says what the host is: its system, its user's home, its ID, how a
 // worker is started detached, the binary that runs, and the directories,
 // which it makes the user's own, if they aren't there, and checks.
@@ -307,7 +299,7 @@ func (h *hostOp) hello(ctx context.Context) (*hostproto.Hello, error) {
 	}
 	version, _ := buildVersion()
 	return &hostproto.Hello{
-		Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH, Host: hostName(), Home: home, MachineID: id,
+		Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH, Host: batch.HostName(), Home: home, MachineID: id,
 		Detach: detach, Binary: hostproto.Binary{Path: exe, Digest: digest}, Paths: paths,
 	}, nil
 }
@@ -347,7 +339,7 @@ func (h *hostOp) paths(ctx context.Context) (hostproto.Paths, string, string, er
 // own, in which it doesn't find the workers it placed before. A host
 // without an ID, or a name, is ssh_host_id_unknown.
 func (h *hostOp) hostKey(ctx context.Context) (id, key string, err error) {
-	unknown := problems.SSHHostIDUnknown.Problem(problems.Params{"host": hostName()})
+	unknown := problems.SSHHostIDUnknown.Problem(problems.Params{"host": batch.HostName()})
 	if id, err = h.sys.machineID(ctx); err != nil {
 		if _, ok := errors.AsType[*problem.Problem](err); ok {
 			return "", "", err
@@ -503,7 +495,7 @@ func hostDirUnusable(dir string, err error) error {
 			}
 		}
 	}
-	return problems.SSHHostDirUnusable.Problem(problems.Params{"host": hostName(), "path": dir, "at": at, "reason": reason})
+	return problems.SSHHostDirUnusable.Problem(problems.Params{"host": batch.HostName(), "path": dir, "at": at, "reason": reason})
 }
 
 // driver returns the local backend's Driver of the host's own state

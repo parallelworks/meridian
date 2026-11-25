@@ -350,20 +350,20 @@ func TestProbe(t *testing.T) {
 	}{
 		{
 			name: "fits", member: *testMember,
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 3600, MarginSeconds: 300, DefaultTimeoutSeconds: 900, WalltimeUnitSeconds: 60},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 3600, MarginSeconds: 300, DefaultTimeoutSeconds: 900, WalltimeUnitSeconds: 60, Batch: true},
 		},
 		{
 			name: "own limits", member: backend.Member{Name: "m", Settings: jsontext.Value(`{}`), MaxWalltimeSeconds: 1800, MarginSeconds: 60, DefaultTimeoutSeconds: 100},
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1800, MarginSeconds: 60, DefaultTimeoutSeconds: 100, WalltimeUnitSeconds: 60},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1800, MarginSeconds: 60, DefaultTimeoutSeconds: 100, WalltimeUnitSeconds: 60, Batch: true},
 		},
 		{
 			// sbatch asks for whole minutes: 17, for 1000 seconds.
 			name: "fixed walltime", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"walltime":1000}`)},
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60, Batch: true},
 		},
 		{
 			name: "fixed walltime under its own", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"walltime":1000}`), MaxWalltimeSeconds: 1800},
-			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60},
+			fit: backend.Fit{Availability: backend.WouldQueue, MaxWalltimeSeconds: 1020, MarginSeconds: 300, DefaultTimeoutSeconds: 700, WalltimeUnitSeconds: 60, Batch: true},
 		},
 		{name: "unknown partition", member: backend.Member{Name: "m", Settings: jsontext.Value(`{"partition":"gpu"}`)}, want: problems.SchedulerPartitionUnknown},
 		{
@@ -399,23 +399,23 @@ func TestProbe(t *testing.T) {
 	}
 }
 
-// TestProbeCaller checks that a job that calls a workflow, whose run it
-// would hold its allocation for, can't run on a member, whatever the
-// member is, and that the scheduler isn't asked.
-func TestProbeCaller(t *testing.T) {
+// TestProbeBatch checks that every Fit Probe gives says that the member
+// is a batch scheduler's, a member's that can't run the job as well as
+// one's that can, for a job that calls a workflow or not, and that Probe
+// doesn't refuse a caller itself: the coordinator does (backend.Fit.Batch).
+func TestProbeBatch(t *testing.T) {
 	t.Parallel()
-	f := newFake()
-	f.infoErr = errors.New("the controller isn't asked")
-	d, _ := newDriver(t, f)
-	fit, err := d.Probe(t.Context(), testMember, backend.Demand{CallsWorkflow: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := kindtest.Want(t, fit.Problem, problems.SchedulerCallerRefused); got.Params["member"] != "m" {
-		t.Errorf("the problem's params are %v", got.Params)
-	}
-	if f.infos != 0 || f.calls() != 0 {
-		t.Errorf("the scheduler was asked %d and %d times", f.infos, f.calls())
+	for _, member := range []*backend.Member{testMember, {Name: "m", Settings: jsontext.Value(`{"partition":"gpu"}`)}} {
+		for _, calls := range []bool{false, true} {
+			d, _ := newDriver(t, newFake())
+			fit, err := d.Probe(t.Context(), member, backend.Demand{CallsWorkflow: calls})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !fit.Batch || member == testMember && fit.Problem != nil {
+				t.Errorf("the fit of %s for a caller, %v, is %+v", member.Settings, calls, fit)
+			}
+		}
 	}
 }
 

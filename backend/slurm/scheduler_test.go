@@ -406,12 +406,11 @@ func TestSubmitFailed(t *testing.T) {
 		t.Errorf("a busy controller: %v", err)
 	}
 	// A command that doesn't answer in time.
-	s, c = newScheduler(t, func(st *schedtest.State) { st.Delay = map[string]float64{"squeue": 5} })
+	s, _ = newScheduler(t, func(st *schedtest.State) { st.Delay = map[string]float64{"squeue": 5} })
 	s.Timeout = 200 * time.Millisecond
 	if _, err := s.Statuses(t.Context(), []string{"2"}, false); err == nil || problems.IsProblem(err) {
 		t.Errorf("a slow squeue: %v", err)
 	}
-	_ = c
 }
 
 func TestStatuses(t *testing.T) {

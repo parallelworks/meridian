@@ -12,6 +12,7 @@ import (
 
 	"github.com/parallelworks/foundation/problem"
 
+	"github.com/parallelworks/meridian/backend/batch"
 	"github.com/parallelworks/meridian/backend/hostproto"
 	"github.com/parallelworks/meridian/problems"
 )
@@ -55,7 +56,7 @@ func decideDetach(ctx context.Context, sys hostSystem) (mode, systemdRun string,
 	out, err := sys.loginctl(ctx, "show-session", "-p", "KillUserProcesses")
 	switch {
 	case errors.Is(err, exec.ErrNotFound):
-		return "", "", problems.SSHLoginctlMissing.Problem(problems.Params{"host": hostName()})
+		return "", "", problems.SSHLoginctlMissing.Problem(problems.Params{"host": batch.HostName()})
 	case err != nil:
 		return "", "", loginctlFailed(err)
 	case property(out, "KillUserProcesses") != "yes":
@@ -78,7 +79,7 @@ func decideDetach(ctx context.Context, sys hostSystem) (mode, systemdRun string,
 			return hostproto.DetachScope, path, checkSystemd(ctx, sys, path)
 		}
 	}
-	return "", "", problems.SSHWorkerWouldBeKilled.Problem(problems.Params{"host": hostName()})
+	return "", "", problems.SSHWorkerWouldBeKilled.Problem(problems.Params{"host": batch.HostName()})
 }
 
 // systemdCollect is the first systemd whose systemd-run takes --collect,
@@ -102,7 +103,7 @@ func checkSystemd(ctx context.Context, sys hostSystem, path string) error {
 		return fmt.Errorf("host: %s --version says no systemd version", path)
 	}
 	if v, err := strconv.Atoi(m[1]); err != nil || v < systemdCollect {
-		return problems.SSHSystemdTooOld.Problem(problems.Params{"host": hostName(), "version": m[1], "minimum": systemdCollect})
+		return problems.SSHSystemdTooOld.Problem(problems.Params{"host": batch.HostName(), "version": m[1], "minimum": systemdCollect})
 	}
 	return nil
 }

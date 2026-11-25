@@ -429,14 +429,10 @@ func (c *Coordinator) resumePlace(ctx context.Context, run *store.Run, job *stor
 	}
 	demand.Tries = job.PlaceTries
 	// The member is asked again as the job is placed, and held to the
-	// walltime rule as rank holds it: either may have changed since.
-	if cand.fit, err = cand.driver.Probe(ctx, m, demand); err == nil {
-		if cand.fit.Problem != nil {
-			err = cand.fit.Problem
-		} else if p := walltimeExceeds(m, demand, cand.fit); p != nil {
-			err = p
-		}
-	}
+	// coordinator's rules as rank holds it (probeProblem): either may have
+	// changed since.
+	cand.fit, err = cand.driver.Probe(ctx, m, demand)
+	err = probeProblem(m, demand, cand.fit, err)
 	if prob, ok := errors.AsType[*problem.Problem](err); ok {
 		c.forgetSeen(run.ID, job.Key)
 		return 0, c.attemptSetupFailed(ctx, a.ID, prob)
@@ -849,8 +845,8 @@ func callsWorkflow(steps []plan.Step) bool {
 }
 
 // rank returns the members of g that can run a job that asks for demand,
-// as their drivers' Probe say, within the longest walltime each allows
-// (walltimeExceeds), the soonest to start it first, and in the group's
+// as their drivers' Probe say, and as the coordinator's rules allow
+// (fitProblem), the soonest to start it first, and in the group's
 // order among those as soon; for each member that can't, the
 // problem its Probe gave, masked when where the job runs is private; and,
 // of those whose Probe couldn't answer, what the look counts for the job
@@ -861,9 +857,7 @@ func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend
 		m := &g.Members[i]
 		d := c.driver(m)
 		fit, err := d.Probe(ctx, m, demand)
-		if err == nil && fit.Problem != nil {
-			err = fit.Problem
-		}
+		err = probeProblem(m, demand, fit, err)
 		if p, ok := errors.AsType[*problem.Problem](err); ok {
 			reasons = append(reasons, maskedIf(private, problemDiagnostic(p)))
 			continue
@@ -876,14 +870,46 @@ func (c *Coordinator) rank(ctx context.Context, g *backend.Group, demand backend
 			look.add(counted, notYet, retryAt)
 			continue
 		}
-		if p := walltimeExceeds(m, demand, fit); p != nil {
-			reasons = append(reasons, maskedIf(private, problemDiagnostic(p)))
-			continue
-		}
 		fits = append(fits, candidate{group: g.Name, member: m, driver: d, fit: fit})
 	}
 	slices.SortStableFunc(fits, func(a, b candidate) int { return cmp.Compare(a.fit.Availability, b.fit.Availability) })
 	return fits, reasons, look
+}
+
+// probeProblem returns the error with which m, whose driver's Probe gave
+// fit and err, can't run a job that asks for demand, or nil where it can:
+// err, where Probe couldn't answer, but for a job that calls a workflow
+// on a batch scheduler's member, which is refused whatever the member
+// says, as it is where Probe answers; and else fitProblem's.
+func probeProblem(m *backend.Member, demand backend.Demand, fit backend.Fit, err error) error {
+	if err != nil {
+		if fit.Batch && demand.CallsWorkflow {
+			return problems.SchedulerCallerRefused.Problem(problems.Params{"member": m.Name})
+		}
+		return err
+	}
+	if p := fitProblem(m, demand, fit); p != nil {
+		return p
+	}
+	return nil
+}
+
+// fitProblem returns why m, whose driver's Probe gave fit, can't run a job
+// that asks for demand: the fit's problem, where it has one; else
+// scheduler_caller_refused, where the job calls a workflow and m is a
+// batch scheduler's member (backend.Fit.Batch), whose allocation the job
+// would hold while the run it calls ran; else walltime_exceeds_member
+// (walltimeExceeds); and nil where it can. The coordinator, not each
+// driver, holds a job to these rules, so that they hold for every backend,
+// a platform's own among them.
+func fitProblem(m *backend.Member, demand backend.Demand, fit backend.Fit) *problem.Problem {
+	switch {
+	case fit.Problem != nil:
+		return fit.Problem
+	case fit.Batch && demand.CallsWorkflow:
+		return problems.SchedulerCallerRefused.Problem(problems.Params{"member": m.Name})
+	}
+	return walltimeExceeds(m, demand, fit)
 }
 
 // walltimeExceeds returns walltime_exceeds_member where a job that asks

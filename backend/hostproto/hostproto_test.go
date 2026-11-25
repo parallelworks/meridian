@@ -42,7 +42,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	fit := backend.Fit{
 		Problem:      problems.ResourcesExceedMember.Problem(problems.Params{"member": "m", "resource": "cpu", "asks": int64(2), "offers": int64(1)}),
-		Availability: backend.HasCapacity, MaxWalltimeSeconds: 3600, MarginSeconds: 60, DefaultTimeoutSeconds: 600,
+		Availability: backend.HasCapacity, MaxWalltimeSeconds: 3600, MarginSeconds: 60, DefaultTimeoutSeconds: 600, Batch: true,
 	}
 	data, err := jsonv2.Marshal(FitOf(fit))
 	if err != nil {
@@ -54,7 +54,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	got := wire.Fit()
 	if got.Problem == nil || got.Problem.Code != fit.Problem.Code || got.Availability != fit.Availability ||
-		got.MaxWalltimeSeconds != fit.MaxWalltimeSeconds || got.MarginSeconds != fit.MarginSeconds || got.DefaultTimeoutSeconds != fit.DefaultTimeoutSeconds {
+		got.MaxWalltimeSeconds != fit.MaxWalltimeSeconds || got.MarginSeconds != fit.MarginSeconds || got.DefaultTimeoutSeconds != fit.DefaultTimeoutSeconds || got.Batch != fit.Batch {
 		t.Errorf("%+v came back %+v", fit, got)
 	}
 	p := Place{Attempt: "a", Name: "n", Coordinator: Endpoint{Address: "/s", KeyHash: "sha256:00"}, BootstrapToken: "t", TimeoutSeconds: 5, Resources: backend.Resources{GPU: 1}, TraceParent: "tp", Run: "1", Store: "s"}

@@ -511,11 +511,7 @@ func (l *addressListener) touch(period time.Duration) {
 
 // read reads the address file, and reports whether it is one.
 func (l *addressListener) read() (*workerapi.AddressFile, bool) {
-	data, err := safepath.ReadFile(l.file, safepath.Private, workerapi.MaxAddressFile)
-	if err != nil {
-		return nil, false
-	}
-	f, err := workerapi.UnmarshalAddressFile(data)
+	f, err := workerapi.ReadAddressFile(l.file)
 	return f, err == nil
 }
 

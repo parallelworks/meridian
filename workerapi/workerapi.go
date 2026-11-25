@@ -163,9 +163,12 @@
 package workerapi
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"reflect"
 	"time"
 
@@ -470,6 +473,38 @@ const (
 // isn't an algorithm FIPS 140-3 approves, and a worker that offered it
 // first would pay a HelloRetryRequest's round trip on each connection.
 var TLSGroups = []tls.CurveID{tls.SecP256r1MLKEM768, tls.SecP384r1MLKEM1024, tls.CurveP256, tls.CurveP384}
+
+// PinnedTLS returns the TLS config of a client that talks only to a
+// coordinator whose public key's hash is hash, the SHA-256 digest of its
+// DER SubjectPublicKeyInfo, as a worker does: TLS 1.3, with TLSGroups, and
+// the key pinned, not checked against a certificate authority. A
+// connection whose peer shows no certificate, or another key, fails with
+// mismatch's error.
+func PinnedTLS(hash []byte, mismatch func() error) *tls.Config {
+	return &tls.Config{
+		MinVersion:       tls.VersionTLS13,
+		CurvePreferences: TLSGroups,
+		// The coordinator is known by its key's hash, not by a certificate
+		// authority: VerifyConnection checks the key, and TLS checks that
+		// the coordinator holds it.
+		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the coordinator's public key
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			// MinVersion refuses an older version first: this can't
+			// happen.
+			if cs.Version != tls.VersionTLS13 {
+				return errors.New("workerapi: the coordinator's connection isn't TLS 1.3")
+			}
+			if len(cs.PeerCertificates) == 0 {
+				return mismatch()
+			}
+			got := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
+			if subtle.ConstantTimeCompare(got[:], hash) != 1 {
+				return mismatch()
+			}
+			return nil
+		},
+	}
+}
 
 // The codes of the API's own problems: each is a kind of package problems,
 // in its registry named worker (problems.WorkerRegistry), whose type URI

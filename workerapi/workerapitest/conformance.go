@@ -203,19 +203,13 @@ func dialer(t *testing.T, target Target, address string) func(context.Context, s
 }
 
 // PinnedTLS returns the TLS config of a client that talks only to a server
-// whose public key has hash, as a worker does: TLS 1.3, checked against
-// the key's hash, not a certificate authority.
+// whose public key has hash, as a worker does (workerapi.PinnedTLS): TLS
+// 1.3, with the key exchanges a worker offers, checked against the key's
+// hash, not a certificate authority.
 func PinnedTLS(hash [sha256.Size]byte) *tls.Config {
-	return &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the server's public key
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 || sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo) != hash {
-				return errors.New("workerapitest: the server doesn't hold the target's key")
-			}
-			return nil
-		},
-	}
+	return workerapi.PinnedTLS(hash[:], func() error {
+		return errors.New("workerapitest: the server doesn't hold the target's key")
+	})
 }
 
 // newCredential returns a credential as a worker makes one: 32 bytes from

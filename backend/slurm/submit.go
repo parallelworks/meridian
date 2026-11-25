@@ -162,7 +162,7 @@ func classify(e *exitError, withheld bool) error {
 	}
 	switch {
 	case failed == authFailed && withheld:
-		return problems.SchedulerTokenRequired.Problem(problems.Params{"host": hostName()})
+		return problems.SchedulerTokenRequired.Problem(problems.Params{"host": batch.HostName()})
 	case failed != "":
 		if slices.Contains(transient, failed) || strings.HasPrefix(failed, policy) && submitLimit ||
 			slices.ContainsFunc(transientPrefixes, func(p string) bool { return strings.HasPrefix(failed, p) }) {
