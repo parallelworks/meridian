@@ -654,7 +654,8 @@ func TestSelfFenceCheckLate(t *testing.T) {
 
 // TestFenceChecksFull checks that a coordinator that keeps as many checks
 // as it can lets go only of those that have answered, and, where none has,
-// doesn't keep a new one, rather than let go of one in flight.
+// starts no new one, rather than let go of one in flight, or start one it
+// can't see.
 func TestFenceChecksFull(t *testing.T) {
 	t.Parallel()
 	c := &Coordinator{fenceCheck: time.Second, fenceChecks: map[string]*fenceCheck{}}
@@ -662,9 +663,11 @@ func TestFenceChecksFull(t *testing.T) {
 		c.fenceChecks["a"+strconv.Itoa(i)] = &fenceCheck{done: make(chan struct{})}
 	}
 	a0 := c.fenceChecks["a0"]
-	cand := &candidate{driver: newTestDriver(), member: &backend.Member{Name: "m1", Backend: testBackend}}
-	if _, err := c.boundedCheck(t.Context(), "new", cand, backend.Placement{}); err != nil {
-		t.Fatal(err)
+	d := &leaseDriver{testDriver: newTestDriver()}
+	cand := &candidate{driver: d, member: &backend.Member{Name: "m1", Backend: testBackend}}
+	st, err := c.boundedCheck(t.Context(), "new", cand, backend.Placement{})
+	if !errors.Is(err, errChecksFull) || st.State != backend.Unknown || d.checked() != 0 {
+		t.Errorf("with every check in flight, a new one gave %+v, %v, and asked the backend %d times", st, err, d.checked())
 	}
 	c.mu.Lock()
 	n, kept := len(c.fenceChecks), c.fenceChecks["new"] != nil

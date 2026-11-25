@@ -169,6 +169,10 @@ func (fc *fenceCheck) answered() bool {
 	}
 }
 
+// errChecksFull is a check boundedCheck didn't start, as it has as many in
+// flight as it keeps, none of which has answered.
+var errChecksFull = errors.New("coordinator: as many self-fencing attempts' checks are in flight as it keeps")
+
 // boundedCheck asks cand's driver what has become of the placement p of
 // the attempt id, for at most fenceCheck, whether or not the driver
 // honours its context, as one that reads a network filesystem may not. It
@@ -179,8 +183,11 @@ func (fc *fenceCheck) answered() bool {
 // flight, whose answer the next look takes, rather than start another
 // against a driver that is stuck. It keeps maxMembers checks at most, as
 // placedMember does members: at that many, those that have answered go,
-// and where none has, a new check isn't kept, so that the next look of its
-// attempt asks again, rather than one in flight be let go.
+// and where none has, it starts none, and gives Unknown, with
+// errChecksFull, which the attempt's next look asks again after. A check
+// it didn't keep would go on unseen, and one more each look, against
+// drivers that are stuck; and one in flight that it let go of would leave
+// its attempt with two.
 func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candidate, p backend.Placement) (backend.Status, error) {
 	c.mu.Lock()
 	fc := c.fenceChecks[id]
@@ -188,10 +195,12 @@ func (c *Coordinator) boundedCheck(ctx context.Context, id string, cand *candida
 		if len(c.fenceChecks) >= maxMembers {
 			maps.DeleteFunc(c.fenceChecks, func(_ string, fc *fenceCheck) bool { return fc.answered() })
 		}
-		fc = &fenceCheck{done: make(chan struct{})}
-		if len(c.fenceChecks) < maxMembers {
-			c.fenceChecks[id] = fc
+		if len(c.fenceChecks) >= maxMembers {
+			c.mu.Unlock()
+			return backend.Status{State: backend.Unknown}, errChecksFull
 		}
+		fc = &fenceCheck{done: make(chan struct{})}
+		c.fenceChecks[id] = fc
 		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.fenceCheck)
 		go func() {
 			defer cancel()
